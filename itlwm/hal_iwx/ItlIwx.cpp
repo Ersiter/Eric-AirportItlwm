@@ -7284,6 +7284,22 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                 sc->sc_ic.ic_awdl_tx_fail++;
                 sc->sc_ic.ic_awdl_tx_last_status = st;
             }
+            if (!sc->sc_use_mld_api && (le16toh(tx_resp->frame_ctrl) & 0x0c) == 0x08) {
+                if (st == IWX_TX_STATUS_SUCCESS) {
+                    if (++sc->sc_awdl_rate_ok >= 48) {
+                        if (sc->sc_awdl_rate_step < 2)
+                            sc->sc_awdl_rate_step++;
+                        sc->sc_awdl_rate_ok = sc->sc_awdl_rate_fail = 0;
+                    }
+                } else {
+                    sc->sc_awdl_rate_ok = 0;
+                    if (++sc->sc_awdl_rate_fail >= 3) {
+                        if (sc->sc_awdl_rate_step)
+                            sc->sc_awdl_rate_step--;
+                        sc->sc_awdl_rate_fail = 0;
+                    }
+                }
+            }
         }
         iwx_rx_tx_cmd_single(sc, pkt, txd);
         DPRINTFN(3, ("%s tid=%d ssn=%d idx=%d\n", __FUNCTION__, tid, ssn, idx));
@@ -10811,6 +10827,25 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     return err;
 }
 
+/*
+ * Data frames to a phone climb from 54 Mbit/s OFDM to HT20 or, on an 80 MHz listener, VHT80 two streams, one step
+ * after 48 acknowledged frames in a row and one back after 3 failures (iwx_rx_tx_cmd counts them). The step ladder
+ * and its two upper rates are AirportIntel's (kaixi2004, GPL-2.0); without a station there is no rate scaling.
+ * Only the rate format of cmd version 9 and up is written here.
+ */
+static uint32_t
+iwx_awdl_data_rate(struct iwx_softc *sc, uint32_t antenna, uint32_t legacy, bool twoAntennas)
+{
+    const unsigned step = sc->sc_awdl_rate_step;
+
+    if (!step || sc->sc_use_mld_api || !sc->sc_listener_width)
+        return legacy;
+    if (sc->sc_listener_width == 80 && twoAntennas)
+        return IWX_RATE_MCS_VHT_MSK | IWX_RATE_MCS_CHAN_WIDTH_80 | IWX_RATE_MCS_NSS_MSK |
+            IWX_RATE_MCS_ANT_AB_MSK | (step == 1 ? 4 : 7);
+    return IWX_RATE_MCS_HT_MSK | antenna | (step == 1 ? 5 : 7);
+}
+
 /* Same descriptor layout as iwx_tx, for a frame that net80211 never saw. */
 int ItlIwx::
 iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len)
@@ -10864,9 +10899,11 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len)
     const bool dataFrame = (frame[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA;
     uint32_t rate_n_flags = (1 << sc->sc_mgmt_last_antenna_idx) << IWX_RATE_MCS_ANT_POS;
     uint8_t cmdver = iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_TX_CMD);
-    if (cmdver > 8 && cmdver != IWX_FW_CMD_VER_UNKNOWN)
-        rate_n_flags |= IWX_RATE_MCS_LEGACY_OFDM_MSK | (dataFrame ? iwx_rate2idx(108) : 0);
-    else
+    if (cmdver > 8 && cmdver != IWX_FW_CMD_VER_UNKNOWN) {
+        const uint32_t legacy = rate_n_flags | IWX_RATE_MCS_LEGACY_OFDM_MSK | (dataFrame ? iwx_rate2idx(108) : 0);
+        rate_n_flags = dataFrame ? iwx_awdl_data_rate(sc, rate_n_flags, legacy,
+            iwx_num_of_ant(iwx_fw_valid_tx_ant(sc)) >= 2) : legacy;
+    } else
         rate_n_flags |= dataFrame ? IWX_RATE_54M_PLCP : IWX_RATE_6M_PLCP;
 
 
@@ -11437,6 +11474,29 @@ iwx_awdl_listener_pick(struct iwx_softc *sc)
 }
 
 /*
+ * The listener's width on pre-MLD firmware: VHT80 on 149 (centre 155) when 149, 153, 157 and 161 may all be used,
+ * where AirDrop peers meet at 80 MHz (AirportIntel, kaixi2004, GPL-2.0, does the same). Anything else stays at
+ * 20 MHz, as do MLD listeners.
+ */
+static uint8_t
+iwx_awdl_listener_width(struct iwx_softc *sc, uint8_t chan)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    static const uint8_t kBlock[] = { 149, 153, 157, 161 };
+
+    if (sc->sc_use_mld_api || chan != 149 || !(ic->ic_channels[149].ic_flags & IEEE80211_CHAN_VHT80))
+        return 20;
+    for (unsigned i = 0; i < nitems(kBlock); i++) {
+        const struct ieee80211_channel &ch = ic->ic_channels[kBlock[i]];
+        if (!ch.ic_flags || !isset(ic->ic_chan_active, kBlock[i]) ||
+            (ch.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)) ||
+            ((ch.ic_flags & IEEE80211_CHAN_PASSIVE) && !isset(ic->ic_beacon_hint, kBlock[i])))
+            return 20;
+    }
+    return 80;
+}
+
+/*
  * -itlawdllistener: what Linux iwl-mld does for a monitor interface, kept for as long as AWDL
  * runs instead of the short ROC listens that never delivered a broadcast frame:
  * MAC_CONFIG (LISTENER, promiscuous, awdl0's address), LINK_CONFIG ADD, PHY_CONTEXT ADD, LINK_CONFIG
@@ -11700,6 +11760,40 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
     if (!sc->sc_listener_up || !ic->ic_bss || ic->ic_bss->ni_chan == IEEE80211_CHAN_ANYC)
         return;
     if (!sc->sc_use_mld_api) {
+        /*
+         * The country the firmware learned after the listener was placed can open 149 (or the station can
+         * move off the 160 MHz group the listener sat in): move within the band while its queue is empty,
+         * as AirportIntel's awdlCoexRetarget does. Across bands the PHY would have to be removed and
+         * added again, which waits for the next firmware start.
+         */
+        struct iwx_phy_ctxt *phy = &sc->sc_phyctxt[IWX_NUM_PHY_CTX - 1];
+        const uint8_t want = iwx_awdl_listener_pick(sc);
+        const uint8_t width = want ? iwx_awdl_listener_width(sc, want) : 0;
+        if (want && phy->channel && (want != sc->sc_listener_chan || width != sc->sc_listener_width) &&
+            IEEE80211_IS_CHAN_2GHZ(phy->channel) == IEEE80211_IS_CHAN_2GHZ(&ic->ic_channels[want]) &&
+            sc->sc_aux_roc_qid > 0 && !sc->txq[sc->sc_aux_roc_qid].queued) {
+            struct ieee80211_channel *oldChan = phy->channel;
+            const int oldWidth = phy->mld_width;
+            const uint16_t oldCenter = phy->mld_center_freq;
+            phy->channel = &ic->ic_channels[want];
+            phy->mld_config_valid = 1;
+            phy->mld_width = width == 80 ? IEEE80211_CHAN_WIDTH_80 : IEEE80211_CHAN_WIDTH_20;
+            phy->mld_center_freq = width == 80 ? 5775 : 0;
+            if ((err = iwx_phy_ctxt_cmd(sc, phy, 1, 1, IWX_FW_CTXT_ACTION_MODIFY, 0)) != 0) {
+                phy->channel = oldChan;
+                phy->mld_width = oldWidth;
+                phy->mld_center_freq = oldCenter;
+                ic->ic_awdl_listener_code = err;
+            } else if (generation == sc->sc_generation) {
+                sc->sc_listener_chan = want;
+                sc->sc_listener_width = width;
+                sc->sc_awdl_rate_step = 0;
+                sc->sc_awdl_rate_ok = sc->sc_awdl_rate_fail = 0;
+                ic->ic_awdl_listener_chan = want;
+            }
+            if (generation != sc->sc_generation)
+                return;
+        }
         const bool sameChannel = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan) == sc->sc_listener_chan;
         if ((err = iwx_legacy_listener_mac(sc, IWX_FW_CTXT_ACTION_MODIFY, sc->sc_listener_chan,
             sameChannel)) != 0)
@@ -11759,6 +11853,7 @@ iwx_legacy_listener_setup(struct iwx_softc *sc)
     uint32_t stage = 0, status;
     int err = 0, queue;
     bool sameChannel;
+    uint8_t width = 20;
     const uint8_t chan = iwx_awdl_listener_pick(sc);
 
     if (!in || !in->in_phyctxt || !chan || sc->sc_capa_num_stations <= IWX_LISTENER_STA_ID ||
@@ -11773,8 +11868,9 @@ iwx_legacy_listener_setup(struct iwx_softc *sc)
         const bool sameBand = phy->channel &&
             IEEE80211_IS_CHAN_2GHZ(phy->channel) == IEEE80211_IS_CHAN_2GHZ(c);
         phy->mld_config_valid = 1;
-        phy->mld_width = IEEE80211_CHAN_WIDTH_20;
-        phy->mld_center_freq = 0;
+        width = iwx_awdl_listener_width(sc, chan);
+        phy->mld_width = width == 80 ? IEEE80211_CHAN_WIDTH_80 : IEEE80211_CHAN_WIDTH_20;
+        phy->mld_center_freq = width == 80 ? 5775 : 0;
         if (!sameBand && (err = iwx_phy_ctxt_cmd(sc, phy, 1, 1, IWX_FW_CTXT_ACTION_REMOVE, 0)) != 0)
             goto fail;
         phy->channel = c;
@@ -11848,6 +11944,9 @@ iwx_legacy_listener_setup(struct iwx_softc *sc)
     ic->ic_awdl_roc_qid = queue;
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
+    sc->sc_listener_width = width;
+    sc->sc_awdl_rate_step = 0;
+    sc->sc_awdl_rate_ok = sc->sc_awdl_rate_fail = 0;
     sc->sc_listener_up = 1;
     ic->ic_awdl_listener_stage = 0;
     ic->ic_awdl_listener_code = 0;
@@ -14747,6 +14846,8 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
         const bool channelUsable = iwx_mld_associated_channel_usable(sc);
         bool disconnect = ic->ic_state == IEEE80211_S_RUN && !channelUsable;
         sc->sc_mcc_profile_synced = 1;
+        if (sc->sc_listener_up && !sc->sc_use_mld_api)
+            iwx_awdl_listener_refit(sc);
         /*
          * A scan asked for while the domain was still unknown was refused, not
          * failed. Now that the domain is in, that request is due - which is the

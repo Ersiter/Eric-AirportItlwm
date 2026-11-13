@@ -903,6 +903,9 @@ struct iwx_softc {
 	uint32_t sc_aux_roc_started;
 	uint8_t sc_listener_up;	/* the LISTENER MAC, link, station and queue exist and are active */
 	uint8_t sc_listener_chan;
+	uint8_t sc_listener_width;     /* MHz, 20 or 80 (legacy listener only) */
+	uint8_t sc_awdl_rate_step;     /* data-frame rate ladder on the legacy listener, 0 = 54 Mbit/s OFDM */
+	uint16_t sc_awdl_rate_ok, sc_awdl_rate_fail;
 	uint8_t sc_listener_tries;
 	struct iwx_phy_ctxt sc_listener_phy;
 	uint8_t sc_awdl_mc_variant;	/* multicast filter variant active during this listen (0 = station's) */
