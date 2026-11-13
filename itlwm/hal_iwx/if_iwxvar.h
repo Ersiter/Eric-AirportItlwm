@@ -775,6 +775,9 @@ struct iwx_softc {
     uint8_t sc_mcc_last_source;
     int sc_mcc_last_valid;
     int sc_mcc_profile_synced;
+    char sc_mcc_echo[2];           /* last country a firmware notice was answered for while associated */
+    long sc_mcc_echo_sec;
+    int sc_mcc_echo_valid;
     char sc_mcc_request[3];
     uint8_t sc_mcc_source;
     int sc_mcc_request_pending;

@@ -317,6 +317,7 @@ bool ItlIwx::attach(IOPCIDevice *device)
     com.qfullmsk.reset();
     com.sc_mcc_last_valid = 0;
     com.sc_mcc_profile_synced = 0;
+    com.sc_mcc_echo_valid = 0;
     pci.pa_tag = device;
     pci.workloop = getMainWorkLoop();
 #ifdef AIRPORT_VTD
@@ -14849,9 +14850,24 @@ iwx_process_mcc_request(struct iwx_softc *sc, const char *alpha2,
         return 0;
     }
 
-    if (sourceId == IWX_MCC_SOURCE_WIFI &&
-        sc->sc_ic.ic_state == IEEE80211_S_RUN)
-        return 0;
+    /*
+     * The firmware learns a country from the access points around it, also while the station is up, and only
+     * the answer to MCC_UPDATE_CMD hands the host the channel table that goes with it (Linux does the same in
+     * iwl_mvm_rx_chub_update_mcc). Dropping the notice left 149-161 passive for as long as the link stayed up,
+     * and the AWDL listener with it on 44 or 6. The answer only narrows or opens channels; the link ends
+     * only if its own channel is gone (see iwx_send_update_mcc_cmd). The same country is not asked twice
+     * within half a minute.
+     */
+    if (sourceId == IWX_MCC_SOURCE_WIFI && sc->sc_ic.ic_state == IEEE80211_S_RUN) {
+        struct timeval now;
+        getmicrouptime(&now);
+        if (sc->sc_mcc_echo_valid && memcmp(sc->sc_mcc_echo, alpha2, 2) == 0 &&
+            now.tv_sec - sc->sc_mcc_echo_sec < 30)
+            return 0;
+        memcpy(sc->sc_mcc_echo, alpha2, 2);
+        sc->sc_mcc_echo_sec = now.tv_sec;
+        sc->sc_mcc_echo_valid = 1;
+    }
 
     return iwx_send_update_mcc_cmd(sc, alpha2, sourceId);
 }
@@ -14890,6 +14906,7 @@ iwx_init_hw(struct iwx_softc *sc)
     struct ieee80211com *ic = &sc->sc_ic;
     int err, i, generation = sc->sc_generation;
     sc->sc_mcc_profile_synced = 0;
+    sc->sc_mcc_echo_valid = 0;
 
     err = iwx_preinit(sc);
     if (err) {
