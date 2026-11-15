@@ -6433,7 +6433,7 @@ struct iwx_compressed_ba_notif {
     __le16 ra_tid_cnt;
     struct iwx_compressed_ba_ratid ra_tid[0];
     struct iwx_compressed_ba_tfd tfd[];
-} __packed; /* COMPRESSED_BA_RES_API_S_VER_4 */
+} __packed; /* COMPRESSED_BA_RES_API_S_VER_4, _VER_5 */
 
 struct iwx_beacon_notif {
     struct iwx_tx_resp_v3 beacon_notify_hdr;
