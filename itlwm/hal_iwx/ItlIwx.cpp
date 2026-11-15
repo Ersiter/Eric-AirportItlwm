@@ -11305,11 +11305,11 @@ iwx_awdl_peer_task(void *arg)
             goto failed;
         sc->sc_awdl_peer_tlc_configured = 0;
         sc->sc_awdl_peer_tx_seq = 0;
-        if (that->iwx_lookup_cmd_ver(sc, IWX_DATA_PATH_GROUP,
-            IWX_TLC_MNG_CONFIG_CMD) == 6) {
-            struct iwx_tlc_config_cmd_v6 tlc = {};
-            tlc.sta_mask = htole32(1U << IWX_AWDL_PEER_STA_ID);
-            tlc.phy_id = htole32(sc->sc_listener_phy.id);
+        const int tlc_version = that->iwx_lookup_cmd_ver(sc,
+            IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD);
+        if (tlc_version == 4 || tlc_version == 6) {
+            struct iwx_tlc_config_cmd_v4 tlc = {};
+            tlc.sta_id = IWX_AWDL_PEER_STA_ID;
             tlc.max_ch_width = IWX_TLC_MNG_CH_WIDTH_20MHZ;
             tlc.mode = IWX_TLC_MNG_MODE_HT;
             const uint8_t tx_ant = iwx_fw_valid_tx_ant(sc);
@@ -11318,11 +11318,33 @@ iwx_awdl_peer_task(void *arg)
             tlc.non_ht_rates = htole16(IEEE80211_IS_CHAN_2GHZ(
                 sc->sc_listener_phy.channel) ? 0x0fff : 0x0ff0);
             tlc.ht_rates[IWX_TLC_NSS_1][IWX_TLC_MCS_PER_BW_80] =
-                htole32(0x00ff);
+                htole16(0x00ff);
             tlc.max_mpdu_len = htole16(3839);
-            const int tlc_err = that->iwx_send_cmd_pdu(sc,
-                IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD),
-                IWX_CMD_ASYNC, sizeof(tlc), &tlc);
+            int tlc_err;
+            if (tlc_version == 4) {
+                tlc_err = that->iwx_send_cmd_pdu(sc,
+                    IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD),
+                    IWX_CMD_ASYNC, sizeof(tlc), &tlc);
+            } else {
+                struct iwx_tlc_config_cmd_v6 mld_tlc = {};
+                mld_tlc.sta_mask = htole32(1U << IWX_AWDL_PEER_STA_ID);
+                mld_tlc.phy_id = htole32(sc->sc_listener_phy.id);
+                mld_tlc.max_ch_width = tlc.max_ch_width;
+                mld_tlc.mode = tlc.mode;
+                mld_tlc.chains = tlc.chains;
+                mld_tlc.sgi_ch_width_supp = tlc.sgi_ch_width_supp;
+                mld_tlc.flags = tlc.flags;
+                mld_tlc.non_ht_rates = tlc.non_ht_rates;
+                mld_tlc.max_mpdu_len = tlc.max_mpdu_len;
+                mld_tlc.max_tx_op = tlc.max_tx_op;
+                for (unsigned nss = 0; nss < IWX_TLC_NSS_MAX; nss++)
+                    for (unsigned bw = 0; bw < IWX_TLC_MCS_PER_BW_NUM_V4; bw++)
+                        mld_tlc.ht_rates[nss][bw] =
+                            htole32(le16toh(tlc.ht_rates[nss][bw]));
+                tlc_err = that->iwx_send_cmd_pdu(sc,
+                    IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD),
+                    IWX_CMD_ASYNC, sizeof(mld_tlc), &mld_tlc);
+            }
             if (generation != sc->sc_generation)
                 return;
             if (!tlc_err)
