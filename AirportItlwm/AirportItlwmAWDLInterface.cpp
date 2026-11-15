@@ -2854,7 +2854,7 @@ getLLW_PARAMS(apple80211_llw_params *d)
     return _fCommandGate->runAction([](OSObject *, void *owner, void *arg, void *, void *) -> IOReturn {
         auto *that = static_cast<AirportItlwmAWDLInterface *>(owner);
         auto *params = reinterpret_cast<uint8_t *>(arg);
-        params[0x0b] = that->fAwdlTrafficMask != 0;
+        params[0x0b] = (that->fAwdlTrafficMask & AirportItlwmAWDLInterface::kAwdlTrafficLLWParams) != 0;
         return kIOReturnSuccess;
     }, this, d);
 }
@@ -2875,11 +2875,14 @@ setAwdlTrafficReason(uint8_t reason, bool active)
     if (!ic || !ic->ic_awdl_set_low_latency)
         return kIOReturnUnsupported;
     const uint8_t previous = fAwdlTrafficMask;
+    const bool previousLowLatency = previous != 0;
     if (active)
         fAwdlTrafficMask |= reason;
     else
         fAwdlTrafficMask &= static_cast<uint8_t>(~reason);
     const bool lowLatency = fAwdlTrafficMask != 0;
+    if (lowLatency == previousLowLatency)
+        return kIOReturnSuccess;
     int err = ic->ic_awdl_set_low_latency(ic, lowLatency);
     if (err) {
         fAwdlTrafficMask = previous;
