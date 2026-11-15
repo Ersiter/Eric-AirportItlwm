@@ -920,12 +920,14 @@ struct iwx_softc {
 	uint8_t sc_awdl_low_latency;
 	uint8_t sc_awdl_peer_addr[IEEE80211_ADDR_LEN];
 	uint8_t sc_awdl_peer_target[IEEE80211_ADDR_LEN];
-	int sc_awdl_peer_qid;       /* non-QoS data, TID 0 */
+	int sc_awdl_peer_qid;       /* QoS unicast data, TID 0 */
 	int sc_awdl_peer_mgmt_qid;  /* management/action frames, TID 15 */
 	int sc_awdl_listener_data_qid; /* group data, listener STA TID 0 */
 	int sc_awdl_peer_error;
 	uint8_t sc_awdl_peer_added;
 	uint8_t sc_awdl_peer_busy;
+	uint8_t sc_awdl_peer_tlc_configured;
+	uint16_t sc_awdl_peer_tx_seq;
 	uint8_t sc_awdl_ba_pending;
 	uint8_t sc_awdl_ba_tid;
 	uint8_t sc_awdl_ba_start;

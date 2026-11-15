@@ -11277,6 +11277,8 @@ iwx_awdl_peer_task(void *arg)
         if (err)
             goto failed;
         sc->sc_awdl_peer_added = 0;
+        sc->sc_awdl_peer_tlc_configured = 0;
+        sc->sc_awdl_peer_tx_seq = 0;
         memset(sc->sc_awdl_peer_addr, 0, sizeof(sc->sc_awdl_peer_addr));
     }
 
@@ -11301,6 +11303,31 @@ iwx_awdl_peer_task(void *arg)
             return;
         if (err)
             goto failed;
+        sc->sc_awdl_peer_tlc_configured = 0;
+        sc->sc_awdl_peer_tx_seq = 0;
+        if (that->iwx_lookup_cmd_ver(sc, IWX_DATA_PATH_GROUP,
+            IWX_TLC_MNG_CONFIG_CMD) == 6) {
+            struct iwx_tlc_config_cmd_v6 tlc = {};
+            tlc.sta_mask = htole32(1U << IWX_AWDL_PEER_STA_ID);
+            tlc.phy_id = htole32(sc->sc_listener_phy.id);
+            tlc.max_ch_width = IWX_TLC_MNG_CH_WIDTH_20MHZ;
+            tlc.mode = IWX_TLC_MNG_MODE_HT;
+            const uint8_t tx_ant = iwx_fw_valid_tx_ant(sc);
+            tlc.chains = ((tx_ant & IWX_ANT_A) ? IWX_TLC_MNG_CHAIN_A_MSK : 0) |
+                ((tx_ant & IWX_ANT_B) ? IWX_TLC_MNG_CHAIN_B_MSK : 0);
+            tlc.non_ht_rates = htole16(IEEE80211_IS_CHAN_2GHZ(
+                sc->sc_listener_phy.channel) ? 0x0fff : 0x0ff0);
+            tlc.ht_rates[IWX_TLC_NSS_1][IWX_TLC_MCS_PER_BW_80] =
+                htole32(0x00ff);
+            tlc.max_mpdu_len = htole16(3839);
+            const int tlc_err = that->iwx_send_cmd_pdu(sc,
+                IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD),
+                IWX_CMD_ASYNC, sizeof(tlc), &tlc);
+            if (generation != sc->sc_generation)
+                return;
+            if (!tlc_err)
+                sc->sc_awdl_peer_tlc_configured = 1;
+        }
         sc->sc_awdl_peer_added = 1;
         IEEE80211_ADDR_COPY(sc->sc_awdl_peer_addr, target);
     }
@@ -11434,9 +11461,8 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
 /*
  * Data frames to a phone climb from 54 Mbit/s OFDM to HT20 or, on an 80 MHz listener, VHT80 two streams, one step
  * after 48 acknowledged frames in a row and one back after 3 failures (iwx_rx_tx_cmd counts them). The step ladder
- * and its two upper rates are AirportIntel's (kaixi2004, GPL-2.0). MLD AWDL currently stays at a fixed legacy rate;
- * the ladder is enabled only for legacy listener mode.
- * Only the rate format of cmd version 9 and up is written here.
+ * and its two upper rates are AirportIntel's (kaixi2004, GPL-2.0). MLD QoS unicast uses the peer's TLC profile;
+ * the ladder is enabled only for legacy listener mode. Only TX_CMD v9+ uses this rate format.
  */
 static uint32_t
 iwx_awdl_data_rate(struct iwx_softc *sc, uint32_t antenna, uint32_t legacy, bool twoAntennas)
@@ -11477,18 +11503,44 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
     struct iwx_tx_data *data = &ring->data[idx];
     if (data->m)
         return ENOBUFS;
-    
+
+    const bool dataFrame = (frame[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA;
+    const uint8_t subtype = frame[0] & IEEE80211_FC0_SUBTYPE_MASK;
+    /* MLD firmware negotiates TX BA on QoS TID 0; AWDL supplies non-QoS data frames. */
+    const bool qosPeerData = dataFrame && sc->sc_awdl_peer_tlc_configured &&
+        sc->sc_awdl_peer_added && qid == sc->sc_awdl_peer_qid &&
+        IEEE80211_ADDR_EQ(frame + 4, sc->sc_awdl_peer_addr) &&
+        (subtype == IEEE80211_FC0_SUBTYPE_DATA ||
+         subtype == IEEE80211_FC0_SUBTYPE_QOS);
+    const size_t qosExtra = qosPeerData && subtype == IEEE80211_FC0_SUBTYPE_DATA ? 2 : 0;
+    if (len > MCLBYTES - qosExtra)
+        return EINVAL;
+
     if (mbuf_gethdr(MBUF_DONTWAIT, MBUF_TYPE_DATA, &m) != 0 || !m)
         return ENOMEM;
-    if (len > mbuf_get_mhlen() &&
+    if (len + qosExtra > mbuf_get_mhlen() &&
         (mbuf_mclget(MBUF_DONTWAIT, MBUF_TYPE_DATA, &m) != 0 || !(mbuf_flags(m) & MBUF_EXT))) {
         mbuf_freem(m);
         return ENOMEM;
     }
     memcpy(mbuf_data(m), frame, len);
+    uint16_t qosSequence = sc->sc_awdl_peer_tx_seq;
+    if (qosPeerData) {
+        uint8_t *bytes = static_cast<uint8_t *>(mbuf_data(m));
+        if (qosExtra) {
+            memmove(bytes + hdrlen + 2, bytes + hdrlen, len - hdrlen);
+            bytes[0] |= IEEE80211_FC0_SUBTYPE_QOS;
+            len += 2;
+            hdrlen += 2;
+        }
+        uint8_t *qos = bytes + hdrlen - 2;
+        qos[0] = 0;
+        qos[1] = 0;
+        uint16_t sequenceControl = htole16((qosSequence & 0x0fff) << 4);
+        memcpy(bytes + 22, &sequenceControl, sizeof(sequenceControl));
+    }
     mbuf_setlen(m, len);
     mbuf_pkthdr_setlen(m, len);
-    const bool dataFrame = (frame[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA;
     if (dataFrame && sc->sc_ic.ic_awdl_crypto) {
         int crypto_err = sc->sc_ic.ic_awdl_crypto(&sc->sc_ic, &m, 1);
         if (crypto_err) {
@@ -11513,24 +11565,21 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
     cmd->hdr.qid = ring->qid;
     cmd->hdr.idx = idx;
     
-    /*
-     * Management frames (PSF, MIF) go at the 6 Mbps basic rate. Data frames
-     * carry the transfer. This manual path has no per-peer rate update yet, so
-     * use 54 Mbps rather than 6 Mbps.
-     */
+    /* Management frames use 6 Mbps; configured MLD peer data uses its TLC rate profile. */
     uint32_t rate_n_flags = (1 << sc->sc_mgmt_last_antenna_idx) << IWX_RATE_MCS_ANT_POS;
     uint8_t cmdver = iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_TX_CMD);
-    if (cmdver > 8 && cmdver != IWX_FW_CMD_VER_UNKNOWN) {
+    if (qosPeerData) {
+        rate_n_flags = 0;
+    } else if (cmdver > 8 && cmdver != IWX_FW_CMD_VER_UNKNOWN) {
         const uint32_t legacy = rate_n_flags | IWX_RATE_MCS_LEGACY_OFDM_MSK | (dataFrame ? iwx_rate2idx(108) : 0);
         rate_n_flags = dataFrame ? iwx_awdl_data_rate(sc, rate_n_flags, legacy,
             iwx_num_of_ant(iwx_fw_valid_tx_ant(sc)) >= 2) : legacy;
     } else
         rate_n_flags |= dataFrame ? IWX_RATE_54M_PLCP : IWX_RATE_6M_PLCP;
 
-
-
     // Gen3 derives ACK handling from the station/TID queue; the legacy ACK bit is not in this API.
-    uint32_t flags = IWX_TX_FLAGS_CMD_RATE | IWX_TX_FLAGS_ENCRYPT_DIS;
+    uint32_t flags = IWX_TX_FLAGS_ENCRYPT_DIS |
+        (qosPeerData ? 0 : IWX_TX_FLAGS_CMD_RATE);
     uint16_t offload_assist = itlTxOffloadHeader(hdrlen, false);
     uint16_t cmd_size;
     if (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210) {
@@ -11583,6 +11632,8 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
     ring->cur = (ring->cur + 1) % getTxQueueSize();
     IWX_WRITE(sc, IWX_HBUS_TARG_WRPTR, ring->qid << 16 | ring->cur);
     ring->queued++;
+    if (qosPeerData)
+        sc->sc_awdl_peer_tx_seq = (qosSequence + 1) & 0x0fff;
     if ((ic->ic_if.if_flags & IFF_UP) && !sc->sc_tx_timer[ring->qid]) {
         sc->sc_tx_timer[ring->qid] = 15;
         ic->ic_if.if_timer = 1;
@@ -16295,6 +16346,8 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_p2p_queue = 0;
     sc->sc_listener_up = 0;
     sc->sc_awdl_peer_added = sc->sc_awdl_peer_busy = 0;
+    sc->sc_awdl_peer_tlc_configured = 0;
+    sc->sc_awdl_peer_tx_seq = 0;
     sc->sc_awdl_peer_qid = -1;
     sc->sc_awdl_peer_mgmt_qid = -1;
     sc->sc_awdl_listener_data_qid = -1;
