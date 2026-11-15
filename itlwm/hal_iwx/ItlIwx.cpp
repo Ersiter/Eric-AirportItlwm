@@ -11312,7 +11312,7 @@ iwx_awdl_peer_task(void *arg)
             tlc.sta_id = IWX_AWDL_PEER_STA_ID;
             tlc.max_ch_width = IWX_TLC_MNG_CH_WIDTH_20MHZ;
             tlc.mode = IWX_TLC_MNG_MODE_HT;
-            const uint8_t tx_ant = iwx_fw_valid_tx_ant(sc);
+            const uint8_t tx_ant = that->iwx_fw_valid_tx_ant(sc);
             tlc.chains = ((tx_ant & IWX_ANT_A) ? IWX_TLC_MNG_CHAIN_A_MSK : 0) |
                 ((tx_ant & IWX_ANT_B) ? IWX_TLC_MNG_CHAIN_B_MSK : 0);
             tlc.non_ht_rates = htole16(IEEE80211_IS_CHAN_2GHZ(
