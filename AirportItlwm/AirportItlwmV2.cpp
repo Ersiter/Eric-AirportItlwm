@@ -634,7 +634,7 @@ bool AirportItlwm::configureInterface(IONetworkInterface *netif)
         return false;
     }
 #ifdef AIRPORT_WCL
-    // llw0 uses the associated Wi-Fi TX path; awdl0 keeps its separate P2P queue.
+    // llw0 uses the P2P peer path; awdl0 keeps its TID 0 AWDL data queue.
     if (AirportItlwmLowLatencyEthernetInterface *llw =
             OSDynamicCast(AirportItlwmLowLatencyEthernetInterface, netif))
         return llw->registerOutputHandler(llw,

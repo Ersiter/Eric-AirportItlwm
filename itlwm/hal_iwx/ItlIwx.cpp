@@ -5768,6 +5768,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
 
     sc->sc_use_mld_api = sc->sc_device_family >= IWX_DEVICE_FAMILY_BZ &&
         isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_MLD_API_SUPPORT);
+    sc->sc_ic.ic_awdl_llw_tx = sc->sc_use_mld_api ? iwx_awdl_tx : NULL;
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api ? iwx_awdl_rx_ba : NULL;
     sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api ? iwx_awdl_peer_cache : NULL;
 #ifdef AIRPORT_VTD
@@ -7173,7 +7174,8 @@ iwx_ampdu_txq_advance(struct iwx_softc *sc, struct iwx_tx_ring *ring, int idx)
         sc->sc_tx_timer[ring->qid] = ring->queued ? 15 : 0;
         getMainCommandGate()->commandWakeup(&ring->queued);
         if (!ring->queued && !sc->sc_awdl_peer_busy &&
-            (ring->qid == sc->sc_awdl_peer_qid || ring->qid == sc->sc_awdl_peer_mgmt_qid) &&
+            (ring->qid == sc->sc_awdl_peer_qid || ring->qid == sc->sc_awdl_peer_llw_qid ||
+             ring->qid == sc->sc_awdl_peer_mgmt_qid) &&
             (sc->sc_awdl_ba_pending || sc->sc_awdl_ba_reply_pending ||
              !IEEE80211_ADDR_EQ(sc->sc_awdl_peer_target, sc->sc_awdl_peer_addr)))
             task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
@@ -7300,10 +7302,10 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
             }
         }
         if (sc->sc_p2p_queue && (qid == sc->sc_aux_roc_qid ||
-            qid == sc->sc_awdl_listener_data_qid ||
+            qid == sc->sc_awdl_listener_data_qid || qid == sc->sc_awdl_listener_llw_qid ||
             (sc->sc_awdl_peer_added && (qid == sc->sc_awdl_peer_qid ||
-             qid == sc->sc_awdl_peer_mgmt_qid)))) {
-            /* AWDL frames sent during a P2P listen dwell (iwx_awdl_tx). */
+             qid == sc->sc_awdl_peer_llw_qid || qid == sc->sc_awdl_peer_mgmt_qid)))) {
+            /* AWDL/LLW frames sent through P2P listener and peer queues. */
             const uint16_t txStatus = le16toh(tx_resp->status.status);
             int st = txStatus & IWX_TX_STATUS_MSK;
             if (iwx_tx_status_is_acked(txStatus)) {
@@ -10980,9 +10982,13 @@ void ItlIwx::
 iwx_awdl_ba_reply(struct iwx_softc *sc)
 {
     struct ieee80211com *ic = &sc->sc_ic;
+    const int lowLatency = sc->sc_awdl_low_latency && sc->sc_listener_up &&
+        sc->sc_awdl_ba_tid == 6;
     if (!sc->sc_awdl_ba_reply_pending || sc->sc_awdl_ba_pending || sc->sc_awdl_peer_busy ||
-        !sc->sc_awdl_peer_added || sc->sc_awdl_peer_mgmt_qid < 0 || !sc->sc_aux_roc_running ||
-        ic->ic_awdl_listen_chan != sc->sc_awdl_ba_reply_chan ||
+        !sc->sc_awdl_peer_added || sc->sc_awdl_peer_mgmt_qid < 0 ||
+        (!lowLatency && (!sc->sc_aux_roc_running ||
+         ic->ic_awdl_listen_chan != sc->sc_awdl_ba_reply_chan)) ||
+        (lowLatency && sc->sc_listener_chan != sc->sc_awdl_ba_reply_chan) ||
         !IEEE80211_ADDR_EQ(sc->sc_awdl_ba_peer, sc->sc_awdl_peer_addr))
         return;
     int err = iwx_awdl_tx_frame(sc, sc->sc_awdl_ba_reply,
@@ -11151,7 +11157,7 @@ iwx_awdl_set_encryption(struct ieee80211com *ic, uint32_t type)
 int ItlIwx::
 iwx_awdl_update_low_latency(struct iwx_softc *sc)
 {
-    if (!sc->sc_use_mld_api || !sc->sc_listener_up || !iwx_awdl_client_enabled())
+    if (!sc->sc_use_mld_api || !sc->sc_listener_up)
         return 0;
     struct iwx_mac_low_latency_cmd lowLatencyCmd = {};
     lowLatencyCmd.mac_id = htole32(IWX_LISTENER_MAC_ID);
@@ -11161,6 +11167,8 @@ iwx_awdl_update_low_latency(struct iwx_softc *sc)
         0, sizeof(lowLatencyCmd), &lowLatencyCmd);
     if (err)
         return err;
+    if (!iwx_awdl_client_enabled())
+        return 0;
 
     struct iwx_mac_power_cmd cmd = {};
     /* Match iwl_mld P2P low-latency timeouts: 2 TU TX and 40 TU RX. */
@@ -11202,7 +11210,7 @@ iwx_awdl_clear_keys(struct iwx_softc *sc)
     }
 }
 
-/* AWDL unicast on MLD uses a peer station and its own queue. */
+/* AWDL and LLW unicast share one MLD peer station with per-TID queues. */
 void ItlIwx::
 iwx_awdl_peer_task(void *arg)
 {
@@ -11227,6 +11235,7 @@ iwx_awdl_peer_task(void *arg)
     sc->sc_awdl_peer_busy = 1;
     int err = 0;
     const uint32_t dataTidbit = 1U << 0;
+    const uint32_t llwTidbit = 1U << 6;
     const uint32_t mgmtTidbit = 1U << IWX_MGMT_TID;
     uint32_t saved;
 
@@ -11244,6 +11253,7 @@ iwx_awdl_peer_task(void *arg)
         if (IEEE80211_ADDR_EQ(target, sc->sc_awdl_peer_addr))
             goto done;
         if ((sc->sc_awdl_peer_qid >= 0 && sc->txq[sc->sc_awdl_peer_qid].queued) ||
+            (sc->sc_awdl_peer_llw_qid >= 0 && sc->txq[sc->sc_awdl_peer_llw_qid].queued) ||
             (sc->sc_awdl_peer_mgmt_qid >= 0 && sc->txq[sc->sc_awdl_peer_mgmt_qid].queued))
             goto done;
         for (int i = 0; i < nitems(sc->sc_rxba_data); i++) {
@@ -11281,6 +11291,18 @@ iwx_awdl_peer_task(void *arg)
             that->iwx_free_tx_ring(sc, &sc->txq[sc->sc_awdl_peer_mgmt_qid]);
             sc->sc_awdl_peer_mgmt_qid = -1;
         }
+        if (sc->sc_awdl_peer_llw_qid >= 0) {
+            saved = sc->sc_mld_txq_tidmask & llwTidbit;
+            err = that->iwx_mld_queue_cmd(sc, 1U << IWX_AWDL_PEER_STA_ID,
+                6, 1, 0, 0, 0, NULL, NULL);
+            if (generation != sc->sc_generation)
+                return;
+            sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~llwTidbit) | saved;
+            if (err)
+                goto failed;
+            that->iwx_free_tx_ring(sc, &sc->txq[sc->sc_awdl_peer_llw_qid]);
+            sc->sc_awdl_peer_llw_qid = -1;
+        }
         struct iwx_mld_mvm_remove_sta_cmd rm = {};
         rm.sta_id = htole32(IWX_AWDL_PEER_STA_ID);
         err = that->iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
@@ -11292,6 +11314,7 @@ iwx_awdl_peer_task(void *arg)
         sc->sc_awdl_peer_added = 0;
         sc->sc_awdl_peer_tlc_configured = 0;
         sc->sc_awdl_peer_tx_seq = 0;
+        sc->sc_awdl_peer_llw_tx_seq = 0;
         memset(sc->sc_awdl_peer_addr, 0, sizeof(sc->sc_awdl_peer_addr));
     }
 
@@ -11318,6 +11341,7 @@ iwx_awdl_peer_task(void *arg)
             goto failed;
         sc->sc_awdl_peer_tlc_configured = 0;
         sc->sc_awdl_peer_tx_seq = 0;
+        sc->sc_awdl_peer_llw_tx_seq = 0;
         const int tlc_version = that->iwx_lookup_cmd_ver(sc,
             IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD);
         if (tlc_version == 4 || tlc_version == 6) {
@@ -11402,6 +11426,24 @@ iwx_awdl_peer_task(void *arg)
         }
         sc->sc_awdl_peer_mgmt_qid = qid;
     }
+    {
+        if (!that->iwx_nic_lock(sc)) {
+            err = EBUSY;
+            goto failed;
+        }
+        saved = sc->sc_mld_txq_tidmask & llwTidbit;
+        int qid = that->iwx_tvqm_enable_txq(sc, 6, 0,
+            IWX_DEFAULT_QUEUE_SIZE, IWX_AWDL_PEER_STA_ID);
+        that->iwx_nic_unlock(sc);
+        if (generation != sc->sc_generation)
+            return;
+        sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~llwTidbit) | saved;
+        if (qid < 0) {
+            err = -qid;
+            goto failed;
+        }
+        sc->sc_awdl_peer_llw_qid = qid;
+    }
 
 done:
     if (sc->sc_awdl_ba_pending && sc->sc_awdl_peer_added &&
@@ -11425,7 +11467,8 @@ done:
          IEEE80211_ADDR_EQ(sc->sc_awdl_ba_peer, sc->sc_awdl_peer_addr)) ||
         (!IEEE80211_ADDR_EQ(target, sc->sc_awdl_peer_target) &&
          (sc->sc_awdl_peer_qid < 0 || !sc->txq[sc->sc_awdl_peer_qid].queued) &&
-         (sc->sc_awdl_peer_mgmt_qid < 0 || !sc->txq[sc->sc_awdl_peer_mgmt_qid].queued)))
+         (sc->sc_awdl_peer_mgmt_qid < 0 || !sc->txq[sc->sc_awdl_peer_mgmt_qid].queued) &&
+         (sc->sc_awdl_peer_llw_qid < 0 || !sc->txq[sc->sc_awdl_peer_llw_qid].queued)))
         task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
     return;
 
@@ -11443,21 +11486,47 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
 {
     struct iwx_softc *sc = (struct iwx_softc *)IC2IFP(ic)->if_softc;
     ItlIwx *that = container_of(sc, ItlIwx, com);
-    
+
+    if (!frame || len < sizeof(struct ieee80211_frame)) {
+        ic->ic_awdl_tx_err++;
+        return EINVAL;
+    }
+    const struct ieee80211_frame *wh = (const struct ieee80211_frame *)frame;
+    const uint8_t type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+    const uint8_t subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+    const int isData = type == IEEE80211_FC0_TYPE_DATA;
+    const int qosData = isData && subtype == IEEE80211_FC0_SUBTYPE_QOS &&
+        len >= sizeof(*wh) + 2;
+    const uint16_t qos = qosData ? frame[sizeof(*wh)] |
+        ((uint16_t)frame[sizeof(*wh) + 1] << 8) : 0;
+    const int llwData = qosData && (qos & IEEE80211_QOS_TID) == 6;
+    const int llwBaResponse = sc->sc_awdl_low_latency && sc->sc_listener_up &&
+        type == IEEE80211_FC0_TYPE_MGT &&
+        subtype == IEEE80211_FC0_SUBTYPE_ACTION &&
+        len >= sizeof(*wh) + 9 &&
+        frame[sizeof(*wh)] == IEEE80211_CATEG_BA &&
+        frame[sizeof(*wh) + 1] == IEEE80211_ACTION_ADDBA_RESP &&
+        sc->sc_awdl_ba_tid == 6;
+    const int llwFrame = llwData || llwBaResponse;
+    const int unicast = !IEEE80211_IS_MULTICAST(wh->i_addr1);
+    if (llwFrame && (!sc->sc_use_mld_api || !sc->sc_listener_up ||
+        !sc->sc_awdl_low_latency))
+        return EAGAIN;
     if ((!iwx_p2p_listen_enabled() && !sc->sc_listener_up) ||
-        !sc->sc_p2p_queue || !sc->sc_aux_roc_running ||
-        ic->ic_awdl_listen_chan != chan || ic->ic_bss == NULL ||
+        !sc->sc_p2p_queue ||
+        (!llwFrame && (!sc->sc_aux_roc_running ||
+         ic->ic_awdl_listen_chan != chan)) ||
+        ic->ic_bss == NULL ||
         (sc->sc_flags & (IWX_FLAG_SHUTDOWN | IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL))) {
         ic->ic_awdl_tx_busy++;
         return EAGAIN;
     }
     int qid = sc->sc_aux_roc_qid;
-    if (sc->sc_use_mld_api && sc->sc_listener_up && len >= sizeof(struct ieee80211_frame)) {
-        const struct ieee80211_frame *wh = (const struct ieee80211_frame *)frame;
-        const int isData = (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA;
-        const int unicast = !IEEE80211_IS_MULTICAST(wh->i_addr1);
+    if (sc->sc_use_mld_api && sc->sc_listener_up) {
+        const int unicastData = isData && unicast;
         if (isData && !unicast) {
-            qid = sc->sc_awdl_listener_data_qid;
+            qid = llwData ? sc->sc_awdl_listener_llw_qid :
+                sc->sc_awdl_listener_data_qid;
             if (qid < 0)
                 return ENXIO;
         } else if (unicast) {
@@ -11472,7 +11541,9 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
                 return sc->sc_awdl_peer_error;
             if (sc->sc_awdl_peer_busy)
                 return EAGAIN;
-            int peerQid = isData ? sc->sc_awdl_peer_qid : sc->sc_awdl_peer_mgmt_qid;
+            int peerQid = unicastData ?
+                (llwData ? sc->sc_awdl_peer_llw_qid : sc->sc_awdl_peer_qid) :
+                sc->sc_awdl_peer_mgmt_qid;
             if (!sc->sc_awdl_peer_added || peerQid < 0 ||
                 !IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_addr)) {
                 task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
@@ -11541,9 +11612,11 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
 
     const bool dataFrame = (frame[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA;
     const uint8_t subtype = frame[0] & IEEE80211_FC0_SUBTYPE_MASK;
-    /* MLD firmware negotiates TX BA on QoS TID 0; AWDL supplies non-QoS data frames. */
+    const uint8_t peerTid = qid == sc->sc_awdl_peer_llw_qid ? 6 : 0;
+    /* The MLD peer uses TID 0 for AWDL data and TID 6 for LLW data. */
     const bool qosPeerData = dataFrame && sc->sc_awdl_peer_tlc_configured &&
-        sc->sc_awdl_peer_added && qid == sc->sc_awdl_peer_qid &&
+        sc->sc_awdl_peer_added &&
+        (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid) &&
         IEEE80211_ADDR_EQ(frame + 4, sc->sc_awdl_peer_addr) &&
         (subtype == IEEE80211_FC0_SUBTYPE_DATA ||
          subtype == IEEE80211_FC0_SUBTYPE_QOS);
@@ -11559,7 +11632,8 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
         return ENOMEM;
     }
     memcpy(mbuf_data(m), frame, len);
-    uint16_t qosSequence = sc->sc_awdl_peer_tx_seq;
+    uint16_t qosSequence = peerTid == 6 ? sc->sc_awdl_peer_llw_tx_seq :
+        sc->sc_awdl_peer_tx_seq;
     if (qosPeerData) {
         uint8_t *bytes = static_cast<uint8_t *>(mbuf_data(m));
         if (qosExtra) {
@@ -11569,7 +11643,7 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
             hdrlen += 2;
         }
         uint8_t *qos = bytes + hdrlen - 2;
-        qos[0] = 0;
+        qos[0] = (qos[0] & ~IEEE80211_QOS_TID) | peerTid;
         qos[1] = 0;
         uint16_t sequenceControl = htole16((qosSequence & 0x0fff) << 4);
         memcpy(bytes + 22, &sequenceControl, sizeof(sequenceControl));
@@ -11667,8 +11741,12 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
     ring->cur = (ring->cur + 1) % getTxQueueSize();
     IWX_WRITE(sc, IWX_HBUS_TARG_WRPTR, ring->qid << 16 | ring->cur);
     ring->queued++;
-    if (qosPeerData)
-        sc->sc_awdl_peer_tx_seq = (qosSequence + 1) & 0x0fff;
+    if (qosPeerData) {
+        if (peerTid == 6)
+            sc->sc_awdl_peer_llw_tx_seq = (qosSequence + 1) & 0x0fff;
+        else
+            sc->sc_awdl_peer_tx_seq = (qosSequence + 1) & 0x0fff;
+    }
     if ((ic->ic_if.if_flags & IFF_UP) && !sc->sc_tx_timer[ring->qid]) {
         sc->sc_tx_timer[ring->qid] = 15;
         ic->ic_if.if_timer = 1;
@@ -12227,11 +12305,11 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     uint32_t stage = 0;
-    int err = 0, queue, dataQueue = -1, qtid;
+    int err = 0, queue, dataQueue = -1, llwQueue = -1, qtid;
     uint32_t qbit, qhad;
     bool mac_added = false, link_added = false, phy_added = false, phy_incomplete = false;
     bool link_active = false, sta_added = false, mac_associated = false;
-    bool queue_added = false, data_queue_added = false;
+    bool queue_added = false, data_queue_added = false, llw_queue_added = false;
     const uint8_t chan = iwx_awdl_listener_pick(sc);
     int generation = sc->sc_generation;
     /*
@@ -12437,9 +12515,29 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         goto fail;
     }
     data_queue_added = true;
+    setupStage(10);
+    if (!iwx_nic_lock(sc)) {
+        err = EBUSY;
+        goto fail;
+    }
+    qbit = 1U << 6;
+    qhad = sc->sc_mld_txq_tidmask & qbit;
+    llwQueue = iwx_tvqm_enable_txq(sc, 6, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_LISTENER_STA_ID);
+    iwx_nic_unlock(sc);
+    if (generation != sc->sc_generation) {
+        err = ENXIO;
+        goto fail;
+    }
+    sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~qbit) | qhad;
+    if (llwQueue < 0) {
+        err = -llwQueue;
+        goto fail;
+    }
+    llw_queue_added = true;
     sc->sc_p2p_queue = 1;
     sc->sc_aux_roc_qid = queue;
     sc->sc_awdl_listener_data_qid = dataQueue;
+    sc->sc_awdl_listener_llw_qid = llwQueue;
     ic->ic_awdl_roc_qid = queue;
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
@@ -12449,6 +12547,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         sc->sc_p2p_queue = 0;
         sc->sc_aux_roc_qid = -1;
         sc->sc_awdl_listener_data_qid = -1;
+        sc->sc_awdl_listener_llw_qid = -1;
         sc->sc_listener_chan = 0;
         ic->ic_awdl_roc_qid = -1;
         ic->ic_awdl_listener_chan = 0;
@@ -12478,6 +12577,14 @@ fail:
             sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~tidbit) | saved;
             if (!cleanup)
                 iwx_free_tx_ring(sc, &sc->txq[queue]);
+        }
+        if (!cleanup && llw_queue_added && generation == sc->sc_generation) {
+            uint32_t saved = sc->sc_mld_txq_tidmask & (1U << 6);
+            cleanup = iwx_mld_queue_cmd(sc, 1U << IWX_LISTENER_STA_ID,
+                6, 1, 0, 0, 0, NULL, NULL);
+            sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~(1U << 6)) | saved;
+            if (!cleanup)
+                iwx_free_tx_ring(sc, &sc->txq[llwQueue]);
         }
         if (!cleanup && data_queue_added && generation == sc->sc_generation) {
             uint32_t saved = sc->sc_mld_txq_tidmask & 1U;
@@ -16383,9 +16490,12 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_awdl_peer_added = sc->sc_awdl_peer_busy = 0;
     sc->sc_awdl_peer_tlc_configured = 0;
     sc->sc_awdl_peer_tx_seq = 0;
+    sc->sc_awdl_peer_llw_tx_seq = 0;
     sc->sc_awdl_peer_qid = -1;
+    sc->sc_awdl_peer_llw_qid = -1;
     sc->sc_awdl_peer_mgmt_qid = -1;
     sc->sc_awdl_listener_data_qid = -1;
+    sc->sc_awdl_listener_llw_qid = -1;
     sc->sc_awdl_encryption_type = 0;
     sc->sc_awdl_low_latency = 0;
     sc->sc_awdl_peer_error = 0;
@@ -19617,8 +19727,12 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     task_set(&sc->init_task, iwx_init_task, sc, "iwx_init_task");
     task_set(&sc->sc_awdl_peer_task, iwx_awdl_peer_task, sc, "iwx_awdl_peer_task");
     sc->sc_awdl_peer_qid = -1;
+    sc->sc_awdl_peer_llw_qid = -1;
     sc->sc_awdl_peer_mgmt_qid = -1;
     sc->sc_awdl_listener_data_qid = -1;
+    sc->sc_awdl_listener_llw_qid = -1;
+    sc->sc_awdl_peer_tx_seq = 0;
+    sc->sc_awdl_peer_llw_tx_seq = 0;
     task_set(&sc->mcc_task, iwx_mcc_task, sc, "iwx_mcc_task");
     task_set(&sc->newstate_task, iwx_newstate_task, sc, "iwx_newstate_task");
     task_set(&sc->sc_setkey_task, iwx_setkey_task, sc, "iwx_setkey_task");

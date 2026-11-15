@@ -180,7 +180,15 @@ outputLowLatency(mbuf_t packet, void *param)
             mbuf_freem(packet);
         return kIOReturnOutputDropped;
     }
-    return controller->outputPacket(packet, param);
+    auto *ic = controller->fHalService->get80211Controller();
+    if (!ic || !ic->ic_awdl_llw_tx)
+        return controller->outputPacket(packet, param);
+    if (!controller->fAWDLBsdIf) {
+        if (packet)
+            mbuf_freem(packet);
+        return kIOReturnOutputDropped;
+    }
+    return controller->fAWDLBsdIf->outputLowLatency(packet, param);
 }
 
 bool AirportItlwmAWDLEthernetInterface::
@@ -235,9 +243,8 @@ static uint64_t hostUs();
 int AirportItlwmAWDLEthernetInterface::
 inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
 {
-    if (!awDataAllowed() || !getIfnet()) {
+    if (!awDataAllowed() || !getIfnet())
         return 0;
-    }
     if (mbuf_pullup(&m, mbuf_pkthdr_len(m) < 64 ? mbuf_pkthdr_len(m) : 64) != 0 || !m) {
         awdl->fDataRxBad++;
         return 1;   // mbuf_pullup freed it
@@ -257,6 +264,8 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
     const struct ieee80211_frame *wh = (const struct ieee80211_frame *)p;
     size_t hdr = sizeof(*wh);
     static const uint8_t kSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x17, 0xf2 };
+    static const uint8_t kLlwSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
+    bool lowLatency = false;
     if (ieee80211_has_qos(wh)) {
         if (len < hdr + 2) {
             awdl->fDataRxBad++;
@@ -264,34 +273,48 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
             return 1;
         }
         uint16_t qos = p[hdr] | (p[hdr + 1] << 8);
+        lowLatency = (qos & IEEE80211_QOS_TID) == 6 ||
+            (qos & IEEE80211_QOS_TID) == 7;
         hdr += 2;
         if (qos & IEEE80211_QOS_AMSDU) {
-            awdl->fDataRxAmsdu++;
+            if (!lowLatency)
+                awdl->fDataRxAmsdu++;
+            auto *driver = OSDynamicCast(AirportItlwm, getController());
+            auto *llw = lowLatency && driver ? driver->fLLWBsdIf : nullptr;
+            if (lowLatency && (!llw || !llw->getIfnet())) {
+                awdl->fDataRxBad++;
+                mbuf_freem(m);
+                return 1;
+            }
+            ifnet_t inputIf = lowLatency ? llw->getIfnet() : getIfnet();
             size_t offset = hdr, total = mbuf_pkthdr_len(m);
-            while (offset + 30 <= total) {
+            while (offset + (lowLatency ? 22 : 30) <= total) {
                 uint8_t subhdr[30];
-                mbuf_copydata(m, offset, sizeof(subhdr), subhdr);
+                mbuf_copydata(m, offset, lowLatency ? 22 : sizeof(subhdr), subhdr);
                 size_t sublen = (subhdr[12] << 8) | subhdr[13];
-                if (sublen < 16 || offset + 14 + sublen > total ||
-                    memcmp(subhdr + 14, kSnap, sizeof(kSnap)) ||
-                    subhdr[20] != 0x08 || subhdr[21] != 0x00) {
+                const size_t payloadOffset = lowLatency ? 22 : 30;
+                if (sublen < (lowLatency ? 8 : 16) ||
+                    offset + 14 + sublen > total ||
+                    memcmp(subhdr + 14, lowLatency ? kLlwSnap : kSnap, sizeof(kSnap)) ||
+                    (!lowLatency && (subhdr[20] != 0x08 || subhdr[21] != 0x00))) {
                     awdl->fDataRxBad++;
                     break;
                 }
                 mbuf_t sub = nullptr;
                 if (mbuf_gethdr(MBUF_DONTWAIT, MBUF_TYPE_DATA, &sub) || !sub) {
-                    awdl->fDataRxBad++;
+                    awdl->fDataRxNoBuf++;
                     break;
                 }
                 uint8_t eh[14];
                 memcpy(eh, subhdr, 12);
-                eh[12] = subhdr[28]; eh[13] = subhdr[29];
+                eh[12] = lowLatency ? subhdr[20] : subhdr[28];
+                eh[13] = lowLatency ? subhdr[21] : subhdr[29];
                 int err = mbuf_copyback(sub, 0, sizeof(eh), eh, MBUF_DONTWAIT);
-                size_t payload = sublen - 16;
+                size_t payload = sublen - (lowLatency ? 8 : 16);
                 uint8_t chunk[512];
                 for (size_t pos = 0; !err && pos < payload;) {
                     size_t n = MIN(sizeof(chunk), payload - pos);
-                    mbuf_copydata(m, offset + 30 + pos, n, chunk);
+                    mbuf_copydata(m, offset + payloadOffset + pos, n, chunk);
                     err = mbuf_copyback(sub, sizeof(eh) + pos, n, chunk, MBUF_DONTWAIT);
                     pos += n;
                 }
@@ -301,19 +324,49 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
                     break;
                 }
                 mbuf_pkthdr_setlen(sub, sizeof(eh) + payload);
-                mbuf_pkthdr_setrcvif(sub, getIfnet());
-                awdl->fDataRx++;
-                awdl->fDataRxLastLen = (uint32_t)mbuf_pkthdr_len(sub);
-                awdl->fDataRxLastType = (uint16_t)((eh[12] << 8) | eh[13]);
-                ifnet_stat_increment_in(getIfnet(), 1, (u_int32_t)mbuf_pkthdr_len(sub), 0);
-                inputPacket(sub, (UInt32)mbuf_pkthdr_len(sub), 0, sub);
+                mbuf_pkthdr_setrcvif(sub, inputIf);
+                if (!lowLatency) {
+                    awdl->fDataRx++;
+                    awdl->fDataRxLastLen = (uint32_t)mbuf_pkthdr_len(sub);
+                    awdl->fDataRxLastType = (uint16_t)((eh[12] << 8) | eh[13]);
+                }
+                ifnet_stat_increment_in(inputIf, 1, (u_int32_t)mbuf_pkthdr_len(sub), 0);
+                if (lowLatency)
+                    llw->inputPacket(sub, (UInt32)mbuf_pkthdr_len(sub), 0, sub);
+                else
+                    inputPacket(sub, (UInt32)mbuf_pkthdr_len(sub), 0, sub);
                 size_t consumed = 14 + sublen;
                 offset += (consumed + 3) & ~size_t(3);
             }
             mbuf_freem(m);
-            awdl->publishDataState();
+            if (!lowLatency)
+                awdl->publishDataState();
             return 1;
         }
+    }
+    if (lowLatency) {
+        auto *driver = OSDynamicCast(AirportItlwm, getController());
+        auto *llw = driver ? driver->fLLWBsdIf : nullptr;
+        if (!llw || !llw->getIfnet() || len < hdr + 8 ||
+            memcmp(p + hdr, kLlwSnap, sizeof(kLlwSnap))) {
+            awdl->fDataRxBad++;
+            mbuf_freem(m);
+            return 1;
+        }
+        uint8_t ethType[2] = { p[hdr + 6], p[hdr + 7] };
+        uint8_t dst[6], src[6];
+        memcpy(dst, wh->i_addr1, 6);
+        memcpy(src, wh->i_addr2, 6);
+        mbuf_adj(m, (int)(hdr + 8 - 14));
+        uint8_t *eh = (uint8_t *)mbuf_data(m);
+        memcpy(eh, dst, 6);
+        memcpy(eh + 6, src, 6);
+        eh[12] = ethType[0];
+        eh[13] = ethType[1];
+        mbuf_pkthdr_setrcvif(m, llw->getIfnet());
+        ifnet_stat_increment_in(llw->getIfnet(), 1, (u_int32_t)mbuf_pkthdr_len(m), 0);
+        llw->inputPacket(m, (UInt32)mbuf_pkthdr_len(m), 0, m);
+        return 1;
     }
     const size_t llc = 8, awdlHdr = 8;
     if (len < hdr + llc + awdlHdr || memcmp(p + hdr, kSnap, sizeof(kSnap)) ||
@@ -357,6 +410,20 @@ outputAWDL(mbuf_t m, void *param)
         return dropOutput(m, param);
     _fCommandGate->runAction([](OSObject *, void *owner, void *pkt, void *, void *) -> IOReturn {
         static_cast<AirportItlwmAWDLInterface *>(owner)->enqueueData((mbuf_t)pkt);
+        return kIOReturnSuccess;
+    }, fOwner, m);
+    return kIOReturnOutputSuccess;
+}
+
+UInt32 AirportItlwmAWDLEthernetInterface::
+outputLowLatency(mbuf_t m, void *param)
+{
+    if (!awDataAllowed() || !fOwner || !_fCommandGate)
+        return dropOutput(m, param);
+    _fCommandGate->runAction([](OSObject *, void *owner, void *pkt, void *, void *) -> IOReturn {
+        auto *awdl = static_cast<AirportItlwmAWDLInterface *>(owner);
+        awdl->enqueueLowLatencyData((mbuf_t)pkt);
+        awdl->flushLowLatencyData();
         return kIOReturnSuccess;
     }, fOwner, m);
     return kIOReturnOutputSuccess;
@@ -772,6 +839,12 @@ stopAWTimeline()
         fDataQHead = (fDataQHead + 1) % kDataQueueLen;
         fDataQCount--;
     }
+    while (fLowLatencyDataQCount) {
+        mbuf_freem(fLowLatencyDataQ[fLowLatencyDataQHead]);
+        fLowLatencyDataQ[fLowLatencyDataQHead] = nullptr;
+        fLowLatencyDataQHead = (fLowLatencyDataQHead + 1) % kDataQueueLen;
+        fLowLatencyDataQCount--;
+    }
     if (fInAW) {
         AWDLAWEndEvent end = {};
         end.endUsBE = OSSwapHostToBigInt32((uint32_t)hostUs());
@@ -799,6 +872,12 @@ teardownAW()
         fDataQ[fDataQHead] = nullptr;
         fDataQHead = (fDataQHead + 1) % kDataQueueLen;
         fDataQCount--;
+    }
+    while (fLowLatencyDataQCount) {
+        mbuf_freem(fLowLatencyDataQ[fLowLatencyDataQHead]);
+        fLowLatencyDataQ[fLowLatencyDataQHead] = nullptr;
+        fLowLatencyDataQHead = (fLowLatencyDataQHead + 1) % kDataQueueLen;
+        fLowLatencyDataQCount--;
     }
     if (fTxTimer) {
         fTxTimer->cancelTimeout();
@@ -1550,6 +1629,7 @@ txTimerFired(OSObject *owner, IOTimerEventSource *)
     }
     if ((that->fTxPending & kTxPendingData) && elapsed >= kTxDataAtUs) {
         if (awDataAllowed()) {
+            that->flushLowLatencyData();
             unsigned pc = that->peerChannelAt(now);
             if (!pc || pc == that->fTxChan)
                 that->flushData();
@@ -1798,6 +1878,78 @@ flushData()
         fDataQ[fDataQHead] = nullptr;
         fDataQHead = (fDataQHead + 1) % kDataQueueLen;
         fDataQCount--;
+    }
+}
+
+void AirportItlwmAWDLInterface::
+enqueueLowLatencyData(mbuf_t m)
+{
+    if (!m)
+        return;
+    if (fLowLatencyDataQCount >= kDataQueueLen) {
+        auto *llw = fController ? fController->fLLWBsdIf : nullptr;
+        if (llw && llw->getIfnet() && llw->getIfnet()->netStat)
+            ++llw->getIfnet()->netStat->outputErrors;
+        mbuf_freem(m);
+        return;
+    }
+    fLowLatencyDataQ[(fLowLatencyDataQHead + fLowLatencyDataQCount) % kDataQueueLen] = m;
+    fLowLatencyDataQCount++;
+}
+
+void AirportItlwmAWDLInterface::
+flushLowLatencyData()
+{
+    ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
+    if (!ic || !ic->ic_awdl_llw_tx)
+        return;
+    ifnet_t llwIfp = fController && fController->fLLWBsdIf ?
+        fController->fLLWBsdIf->getIfnet() : nullptr;
+    static uint8_t frame[2048];
+    const size_t hdr = sizeof(struct ieee80211_frame), qos = 2, llc = 8;
+    static const uint8_t snap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
+
+    while (fLowLatencyDataQCount) {
+        mbuf_t m = fLowLatencyDataQ[fLowLatencyDataQHead];
+        size_t plen = mbuf_pkthdr_len(m);
+        if (plen < 14 || hdr + qos + llc + plen - 14 > sizeof(frame)) {
+            if (llwIfp && llwIfp->netStat)
+                ++llwIfp->netStat->outputErrors;
+        } else {
+            uint8_t eh[14];
+            mbuf_copydata(m, 0, sizeof(eh), eh);
+            memset(frame, 0, hdr + qos + llc);
+            struct ieee80211_frame *wh = (struct ieee80211_frame *)frame;
+            wh->i_fc[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_DATA |
+                IEEE80211_FC0_SUBTYPE_QOS;
+            memcpy(wh->i_addr1, eh, 6);
+            memcpy(wh->i_addr2, &fMac, 6);
+            memcpy(wh->i_addr3,
+                ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : kAWDLBssid, 6);
+            uint16_t sc = (uint16_t)((fLowLatencySeq++ & 0x0fff) << 4);
+            wh->i_seq[0] = sc & 0xff;
+            wh->i_seq[1] = sc >> 8;
+            frame[hdr] = 6;
+            uint8_t *l = frame + hdr + qos;
+            memcpy(l, snap, sizeof(snap));
+            l[6] = eh[12];
+            l[7] = eh[13];
+            mbuf_copydata(m, 14, plen - 14, l + llc);
+            int err = ic->ic_awdl_llw_tx(ic, ic->ic_awdl_listener_chan, frame,
+                hdr + qos + llc + plen - 14);
+            if (err == EAGAIN)
+                return;
+            if (err) {
+                if (llwIfp && llwIfp->netStat)
+                    ++llwIfp->netStat->outputErrors;
+            } else if (llwIfp) {
+                ifnet_stat_increment_out(llwIfp, 1, 0, 0);
+            }
+        }
+        mbuf_freem(m);
+        fLowLatencyDataQ[fLowLatencyDataQHead] = nullptr;
+        fLowLatencyDataQHead = (fLowLatencyDataQHead + 1) % kDataQueueLen;
+        fLowLatencyDataQCount--;
     }
 }
 
@@ -2338,6 +2490,10 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     memset(fDataQ, 0, sizeof(fDataQ));
     fDataQHead = 0;
     fDataQCount = 0;
+    memset(fLowLatencyDataQ, 0, sizeof(fLowLatencyDataQ));
+    fLowLatencyDataQHead = 0;
+    fLowLatencyDataQCount = 0;
+    fLowLatencySeq = 0;
     fDataSeq = 0;
     fDataTx = 0;
     fDataTxQueued = 0;

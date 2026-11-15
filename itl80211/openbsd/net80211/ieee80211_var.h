@@ -578,6 +578,8 @@ struct ieee80211com {
      */
     int             (*ic_awdl_tx)(struct ieee80211com *, uint8_t chan,
                         const uint8_t *frame, size_t len);
+    int             (*ic_awdl_llw_tx)(struct ieee80211com *, uint8_t chan,
+                        const uint8_t *frame, size_t len);
     void            (*ic_awdl_peer_cache)(struct ieee80211com *, uint32_t,
                         const uint8_t *);
 #define IEEE80211_AWDL_KEY_GROUP 0x01
