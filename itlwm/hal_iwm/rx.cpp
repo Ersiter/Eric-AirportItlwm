@@ -462,6 +462,8 @@ iwm_detect_duplicate(struct iwm_softc *sc, mbuf_t m,
     int hasqos = ieee80211_has_qos(wh);
     uint16_t seq;
     
+    if (iwm_awdl_is_frame(sc, m))
+        return 0;
     if (type == IEEE80211_FC0_TYPE_CTL ||
         (hasqos && (subtype & IEEE80211_FC0_SUBTYPE_NODATA)) ||
         IEEE80211_IS_MULTICAST(wh->i_addr1))
@@ -677,7 +679,11 @@ iwm_rx_reorder(struct iwm_softc *sc, mbuf_t m, int chanidx,
         return 0;
     
     rxba = &sc->sc_rxba_data[baid];
-    if (rxba->reorder_buf.buf_size == 0 || tid != rxba->tid || rxba->sta_id != IWM_STATION_ID)
+    const bool awdl = rxba->sta_id == IWM_AWDL_STA_ID;
+    if (rxba->reorder_buf.buf_size == 0 || tid != rxba->tid ||
+        (rxba->sta_id != IWM_STATION_ID && !awdl) ||
+        (awdl && (!sc->sc_awdl_node || !iwm_awdl_is_frame(sc, m) ||
+         !IEEE80211_ADDR_EQ(wh->i_addr2, rxba->peer_addr))))
         return 0;
     
     if (rxba->timeout != 0)
@@ -699,7 +705,7 @@ iwm_rx_reorder(struct iwm_softc *sc, mbuf_t m, int chanidx,
         buffer->valid = 1;
     }
     
-    ni = ieee80211_find_rxnode(ic, wh);
+    ni = awdl ? &sc->sc_awdl_node->in_ni : ieee80211_find_rxnode(ic, wh);
     if (type == IEEE80211_FC0_TYPE_CTL &&
         subtype == IEEE80211_FC0_SUBTYPE_BAR) {
         iwm_release_frames(sc, ni, rxba, buffer, nssn, ml);

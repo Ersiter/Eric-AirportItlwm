@@ -468,6 +468,7 @@ struct iwm_rxba_data {
     uint8_t sta_id;
     uint8_t tid;
     uint8_t baid;
+    uint8_t peer_addr[ETHER_ADDR_LEN];
     uint16_t timeout;
     uint16_t entries_per_queue;
     struct timeval last_rx;
@@ -507,6 +508,13 @@ struct iwm_tx_ba {
 struct iwm_ba_task_data {
     uint32_t        start_tidmask;
     uint32_t        stop_tidmask;
+};
+
+struct iwm_awdl_key {
+    uint8_t addr[ETHER_ADDR_LEN];
+    struct ieee80211_key key;
+    uint32_t flags;
+    uint8_t valid;
 };
 
 struct iwm_softc {
@@ -661,6 +669,25 @@ struct iwm_softc {
 
 	/* phy contexts.  we only use the first one */
 	struct iwm_phy_ctxt sc_phyctxt[IWM_NUM_PHY_CTX];
+    struct iwm_node *sc_awdl_node;
+    uint8_t sc_awdl_peer_addr[ETHER_ADDR_LEN];
+    int sc_awdl_peer_valid;
+    int sc_awdl_generation;
+    struct iwm_awdl_key sc_awdl_keys[IEEE80211_GROUP_NKID];
+    int sc_awdl_supported;
+    int sc_awdl_listener_up;
+    int sc_awdl_listener_active;
+    int sc_awdl_context_up;
+    int sc_awdl_mac_up;
+    int sc_awdl_binding_up;
+    int sc_awdl_sta_up;
+    int sc_awdl_mgmt_qid;
+    int sc_awdl_data_qid;
+    int sc_awdl_listener_chan;
+    int sc_awdl_listener_tries;
+    int sc_awdl_addr_gen;
+    int sc_awdl_encryption_type;
+    int sc_awdl_low_latency;
 
 	struct iwm_notif_statistics sc_stats;
 	int sc_noise;
@@ -716,6 +743,8 @@ struct iwm_node {
 
     uint16_t in_id;
     uint16_t in_color;
+    uint32_t in_tfd_queue_msk;
+    uint8_t in_sta_id;
 
     struct ieee80211_amrr_node in_amn;
     int lq_rate_mismatch;
@@ -726,6 +755,10 @@ struct iwm_node {
 #define IWM_STATION_ID 0
 #define IWM_AUX_STA_ID 1
 #define IWM_MONITOR_STA_ID 2
+#define IWM_AWDL_STA_ID 3
+#define IWM_AWDL_MAC_ID 1
+#define IWM_AWDL_MGMT_QUEUE IWM_DQA_P2P_DEVICE_QUEUE
+#define IWM_AWDL_DATA_QUEUE IWM_DQA_BSS_CLIENT_QUEUE
 
 #define IWM_ICT_SIZE        4096
 #define IWM_ICT_COUNT        (IWM_ICT_SIZE / sizeof (uint32_t))

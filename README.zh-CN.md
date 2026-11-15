@@ -23,7 +23,7 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 | 6 GHz | AX210/AX211/AX411、BE | ✅ BE200 实机 |
 | 802.11be（EHT）、320 MHz、多链路（eMLSR） | BE | ✅ 320 MHz 实机；可加入开启 MLO 的路由器；链路配对仍属实验 |
 | 睡眠唤醒、固件出错自动恢复 | 全部 | ✅ |
-| 隔空投送 / AWDL | AX、BE | 🧪 开发中，见[接续互通](#接续互通) |
+| 隔空投送 / AWDL | AC（9260/9560）、AX、BE | 🧪 AC IWM 源码路径已实现，构建与实机验证待完成，见[接续互通](#接续互通) |
 | 即时热点（在 Wi-Fi 菜单里直接连 iPhone） | 全部 | 🧪 开发中 |
 
 **BE200 实测**（macOS 26，6 GHz，320 MHz，双流）：链路速率 2882 Mbit/s，接口实测**发送 2.55 Gbit/s、
@@ -76,7 +76,7 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
   在 AX211 上实现双向隔空的做法相同。
 - **BE 系列**（MLD 固件）：同样的思路换成 MLD 命令集，在主链路旁加一条 P2P 客户端链路（Linux 允许两条
   不同信道的组合）。正在按固件自身代码梳理它的激活条件，尚未走通。
-- **AC 及更早**：不在计划内。
+- **AC（9260/9560，IWM API 46）**：试验性 IWM 路径使用第三个 PHY 上下文、listener MAC 与 binding、DQA P2P 队列、单 peer station、软件 CCMP 和固件 RX BA 重排。源码路径已实现，构建与 AC 实机验证待完成。Owly 的 Linux 实测使用独占模式；本项目的 macOS IWM P2P 上下文路径仍待 AC 网卡验证。
 
 前提是蓝牙 LE 广播与扫描在 macOS 上可用。测试包附带配套的 [BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM)，
 支持 `-btlfxadvsets`（第三方控制器的 LE 广播集，macOS 26.4–26.7.3）和 `-btlfxrpa`（连接使用私有地址的 iPhone，

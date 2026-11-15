@@ -345,6 +345,7 @@ iwm_clear_reorder_buffer(struct iwm_softc *sc, struct iwm_rxba_data *rxba)
     timeout_del(&rxba->session_timer);
     timeout_free(&rxba->session_timer);
     rxba->baid = IWM_RX_REORDER_DATA_INVALID_BAID;
+    memset(rxba->peer_addr, 0, sizeof(rxba->peer_addr));
 }
 
 void ItlIwm::
@@ -353,7 +354,8 @@ iwm_rx_ba_session_expired(void *arg)
     struct iwm_rxba_data *rxba = (struct iwm_rxba_data *)arg;
     struct iwm_softc *sc = rxba->sc;
     struct ieee80211com *ic = &sc->sc_ic;
-    struct ieee80211_node *ni = ic->ic_bss;
+    struct ieee80211_node *ni = rxba->sta_id == IWM_AWDL_STA_ID && sc->sc_awdl_node ?
+        &sc->sc_awdl_node->in_ni : ic->ic_bss;
     struct timeval now, timeout, expiry;
     int s;
     
@@ -385,7 +387,8 @@ iwm_reorder_timer_expired(void *arg)
     struct iwm_softc *sc = rxba->sc;
     ItlIwm *that = container_of(sc, ItlIwm, com);
     struct ieee80211com *ic = &sc->sc_ic;
-    struct ieee80211_node *ni = ic->ic_bss;
+    struct ieee80211_node *ni = rxba->sta_id == IWM_AWDL_STA_ID && sc->sc_awdl_node ?
+        &sc->sc_awdl_node->in_ni : ic->ic_bss;
     int i, s;
     uint16_t sn = 0, index = 0;
     int expired = 0;
@@ -517,7 +520,7 @@ iwm_setup_vht_rates(struct iwm_softc *sc)
 
 int ItlIwm::
 iwm_sta_rx_agg(struct iwm_softc *sc, struct ieee80211_node *ni, uint8_t tid,
-               uint16_t ssn, uint16_t winsize, int timeout_val, int start)
+               uint16_t ssn, uint16_t winsize, int timeout_val, int start, int send_response)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     struct iwm_add_sta_cmd cmd;
@@ -531,14 +534,15 @@ iwm_sta_rx_agg(struct iwm_softc *sc, struct ieee80211_node *ni, uint8_t tid,
     s = splnet();
     
     if (start && sc->sc_rx_ba_sessions >= IWM_MAX_RX_BA_SESSIONS) {
-        ieee80211_addba_req_refuse(ic, ni, tid);
+        if (send_response)
+            ieee80211_addba_req_refuse(ic, ni, tid);
         splx(s);
-        return 0;
+        return send_response ? 0 : ENOSPC;
     }
     
     memset(&cmd, 0, sizeof(cmd));
     
-    cmd.sta_id = IWM_STATION_ID;
+    cmd.sta_id = in->in_sta_id;
     cmd.mac_id_n_color
     = htole32(IWM_FW_CMD_ID_AND_COLOR(in->in_id, in->in_color));
     cmd.add_modify = IWM_STA_MODE_MODIFY;
@@ -563,7 +567,7 @@ iwm_sta_rx_agg(struct iwm_softc *sc, struct ieee80211_node *ni, uint8_t tid,
     if (!err && (status & IWM_ADD_STA_STATUS_MASK) != IWM_ADD_STA_SUCCESS)
         err = EIO;
     if (err) {
-        if (start)
+        if (start && send_response)
             ieee80211_addba_req_refuse(ic, ni, tid);
         splx(s);
         return err;
@@ -573,7 +577,8 @@ iwm_sta_rx_agg(struct iwm_softc *sc, struct ieee80211_node *ni, uint8_t tid,
         /* Deaggregation is done in hardware. */
         if (start) {
             if (!(status & IWM_ADD_STA_BAID_VALID_MASK)) {
-                ieee80211_addba_req_refuse(ic, ni, tid);
+                if (send_response)
+                    ieee80211_addba_req_refuse(ic, ni, tid);
                 splx(s);
                 return EIO;
             }
@@ -581,23 +586,29 @@ iwm_sta_rx_agg(struct iwm_softc *sc, struct ieee80211_node *ni, uint8_t tid,
             IWM_ADD_STA_BAID_SHIFT;
             if (baid == IWM_RX_REORDER_DATA_INVALID_BAID ||
                 baid >= nitems(sc->sc_rxba_data)) {
-                ieee80211_addba_req_refuse(ic, ni, tid);
+                if (send_response)
+                    ieee80211_addba_req_refuse(ic, ni, tid);
                 splx(s);
                 return EIO;
             }
             rxba = &sc->sc_rxba_data[baid];
             if (rxba->baid != IWM_RX_REORDER_DATA_INVALID_BAID) {
-                ieee80211_addba_req_refuse(ic, ni, tid);
+                if (send_response)
+                    ieee80211_addba_req_refuse(ic, ni, tid);
                 splx(s);
-                return 0;
+                return send_response ? 0 : EBUSY;
             }
-            rxba->sta_id = IWM_STATION_ID;
+            rxba->sta_id = in->in_sta_id;
             rxba->tid = tid;
             rxba->baid = baid;
+            IEEE80211_ADDR_COPY(rxba->peer_addr, ni->ni_macaddr);
             rxba->timeout = timeout_val;
             getmicrouptime(&rxba->last_rx);
             iwm_init_reorder_buffer(&rxba->reorder_buf, ssn,
                                     winsize);
+            timeout_set(&rxba->session_timer, iwm_rx_ba_session_expired, rxba);
+            timeout_set(&rxba->reorder_buf.reorder_timer,
+                        iwm_reorder_timer_expired, &rxba->reorder_buf);
             if (timeout_val != 0) {
                 struct ieee80211_rx_ba *ba;
                 timeout_add_usec(&rxba->session_timer,
@@ -613,7 +624,7 @@ iwm_sta_rx_agg(struct iwm_softc *sc, struct ieee80211_node *ni, uint8_t tid,
                 if (rxba->baid ==
                     IWM_RX_REORDER_DATA_INVALID_BAID)
                     continue;
-                if (rxba->tid != tid)
+                if (rxba->sta_id != in->in_sta_id || rxba->tid != tid)
                     continue;
                 iwm_clear_reorder_buffer(sc, rxba);
                 break;
@@ -623,7 +634,8 @@ iwm_sta_rx_agg(struct iwm_softc *sc, struct ieee80211_node *ni, uint8_t tid,
     
     if (start) {
         sc->sc_rx_ba_sessions++;
-        ieee80211_addba_req_accept(ic, ni, tid);
+        if (send_response)
+            ieee80211_addba_req_accept(ic, ni, tid);
     } else if (sc->sc_rx_ba_sessions > 0)
         sc->sc_rx_ba_sessions--;
     
@@ -883,6 +895,8 @@ iwm_rx_hwdecrypt(struct iwm_softc *sc, mbuf_t m, uint32_t rx_pkt_status,
     uint8_t type, subtype;
     
     wh = mtod(m, struct ieee80211_frame *);
+    if (iwm_awdl_is_frame(sc, m))
+        return 0;
     
     type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
     if (type == IEEE80211_FC0_TYPE_CTL)
@@ -1427,7 +1441,17 @@ iwm_rx_tx_cmd_single(struct iwm_softc *sc, struct iwm_tx_resp *tx_resp,
 
             ieee80211_tx_status(sc, info, tid, txd->fc, ssn);
 
-            iwm_reset_sched(sc, ring->qid, ring->tail, IWM_STATION_ID);
+            const uint8_t sta_id = txd->in ? txd->in->in_sta_id : IWM_STATION_ID;
+            if (sta_id == IWM_AWDL_STA_ID) {
+                if ((status & IWM_TX_STATUS_MSK) == IWM_TX_STATUS_SUCCESS ||
+                    (status & IWM_TX_STATUS_MSK) == IWM_TX_STATUS_DIRECT_DONE)
+                    sc->sc_ic.ic_awdl_tx_ok++;
+                else {
+                    sc->sc_ic.ic_awdl_tx_fail++;
+                    sc->sc_ic.ic_awdl_tx_last_status = status;
+                }
+            }
+            iwm_reset_sched(sc, ring->qid, ring->tail, sta_id);
             iwm_txd_done(sc, txd);
             ring->queued--;
         }
@@ -1599,10 +1623,8 @@ iwm_rx_bmiss(struct iwm_softc *sc, struct iwm_rx_packet *pkt,
 }
 
 static int
-iwm_rate2ridx(struct iwm_softc *sc, int rate)
+iwm_rate2ridx(struct iwm_softc *sc, struct ieee80211_node *ni, int rate)
 {
-    struct ieee80211com *ic = &sc->sc_ic;
-    struct ieee80211_node *ni = ic->ic_bss;
     int ridx = -1, i;
     
     int min_ridx = (IEEE80211_IS_CHAN_5GHZ(ni->ni_chan)) ?
@@ -1631,7 +1653,7 @@ iwm_tx_fill_cmd(struct iwm_softc *sc, struct iwm_node *in,
     int type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
     int subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
     int ridx = -1, rate_flags;
-    int min_ridx = iwm_rate2ridx(sc, ieee80211_min_basic_rate(ic));
+    int min_ridx = iwm_rate2ridx(sc, ni, ieee80211_min_basic_rate(ic));
     
     tx->rts_retry_limit = IWM_RTS_DFAULT_RETRY_LIMIT;
     
@@ -1659,7 +1681,7 @@ iwm_tx_fill_cmd(struct iwm_softc *sc, struct iwm_node *in,
         tx->tx_flags |= htole32(IWM_TX_CMD_FLG_STA_RATE);
         if (ni->ni_flags & IEEE80211_NODE_HT) /* VHT implies HT */
             return 0;
-        return &iwl_rates[iwm_rate2ridx(sc, ni->ni_txrate)];
+        return &iwl_rates[iwm_rate2ridx(sc, ni, ni->ni_txrate)];
     }
     
     if (ridx == -1 || ridx >= IWL_RATE_COUNT_LEGACY)
@@ -1699,6 +1721,7 @@ iwm_tx(struct iwm_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     int i, totlen, hasqos;
     int rtsthres = ic->ic_rtsthreshold;
     int qid;
+    const int awdl = in->in_sta_id == IWM_AWDL_STA_ID;
     uint16_t len, tb1_len;
     
     wh = mtod(m, struct ieee80211_frame *);
@@ -1728,12 +1751,14 @@ iwm_tx(struct iwm_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
      * client mode; the firmware's station table contains only one entry
      * which represents our access point.
      */
-    if (isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DQA_SUPPORT))
+    if (awdl)
+        qid = type == IEEE80211_FC0_TYPE_DATA ? sc->sc_awdl_data_qid : sc->sc_awdl_mgmt_qid;
+    else if (isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DQA_SUPPORT))
         qid = IWM_DQA_MIN_MGMT_QUEUE + ac;
     else
         qid = ac;
     
-    if (hasqos) {
+    if (hasqos && !awdl) {
         struct ieee80211_tx_ba *ba;
         uint16_t qos = ieee80211_get_qos(wh);
         int qostid = qos & IEEE80211_QOS_TID;
@@ -1808,7 +1833,17 @@ iwm_tx(struct iwm_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
 #endif
     totlen = mbuf_pkthdr_len(m);
     
-    if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
+    if (awdl && type == IEEE80211_FC0_TYPE_DATA) {
+        int crypto_err = ic->ic_awdl_crypto ?
+            ic->ic_awdl_crypto(ic, &m, 1) : ENOTSUP;
+        if (crypto_err) {
+            if (m)
+                mbuf_freem(m);
+            return crypto_err;
+        }
+        wh = mtod(m, struct ieee80211_frame *);
+        totlen = mbuf_pkthdr_len(m);
+    } else if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
         k = ieee80211_get_txkey(ic, wh, ni);
         if ((k->k_flags & IEEE80211_KEY_GROUP) ||
             (k->k_cipher != IEEE80211_CIPHER_CCMP)) {
@@ -1847,7 +1882,7 @@ iwm_tx(struct iwm_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
         flags |= (IWM_TX_CMD_FLG_ACK | IWM_TX_CMD_FLG_BAR);
     }
     
-    tx->sta_id = IWM_STATION_ID;
+    tx->sta_id = ic->ic_opmode == IEEE80211_M_MONITOR ? IWM_MONITOR_STA_ID : in->in_sta_id;
     
     if (type == IEEE80211_FC0_TYPE_MGT) {
         if (subtype == IEEE80211_FC0_SUBTYPE_ASSOC_REQ ||
@@ -2015,7 +2050,7 @@ iwm_update_sched(struct iwm_softc *sc, int qid, int cur, uint8_t sta_id, uint16_
     }
 
     len = howmany(len, 4);
-    bc_ent = htole16(len | (IWM_STATION_ID << 12));
+    bc_ent = htole16(len | (sta_id << 12));
     scd_bc_tbl[qid].tfd_offset[cur] = bc_ent;
     if (cur < IWM_TFD_QUEUE_SIZE_BC_DUP) {
         scd_bc_tbl[qid].tfd_offset[IWM_TFD_QUEUE_SIZE_MAX + cur] = bc_ent;
@@ -2243,6 +2278,15 @@ iwm_update_quotas(struct iwm_softc *sc, struct iwm_node *in, int running)
         if (running)
             n_ifs[id] = 1;
     }
+    if (sc->sc_awdl_binding_up && sc->sc_awdl_node &&
+        sc->sc_awdl_node->in_phyctxt) {
+        id = sc->sc_awdl_node->in_phyctxt->id;
+        KASSERT(id < IWM_MAX_BINDINGS, "AWDL PHY id < IWM_MAX_BINDINGS");
+        colors[id] = sc->sc_awdl_node->in_phyctxt->color;
+        if (sc->sc_awdl_listener_up)
+            n_ifs[id] = 1;
+    }
+
     
     /*
      * The FW's scheduling session consists of
@@ -2293,12 +2337,956 @@ iwm_update_quotas(struct iwm_softc *sc, struct iwm_node *in, int running)
             cmd_v2.quotas[i].max_duration =
             cmd.quotas[i].max_duration;
         }
+        if (sc->sc_awdl_low_latency && sc->sc_awdl_listener_up &&
+            sc->sc_awdl_node && sc->sc_awdl_node->in_phyctxt) {
+            const uint32_t awdl_binding = htole32(IWM_FW_CMD_ID_AND_COLOR(
+                sc->sc_awdl_node->in_phyctxt->id,
+                sc->sc_awdl_node->in_phyctxt->color));
+            for (i = 0; i < IWM_MAX_BINDINGS; i++) {
+                if (cmd_v2.quotas[i].id_and_color == awdl_binding) {
+                    cmd_v2.quotas[i].low_latency =
+                        htole32(IWM_QUOTA_LOW_LATENCY_TX | IWM_QUOTA_LOW_LATENCY_RX);
+                    break;
+                }
+            }
+        }
         return iwm_send_cmd_pdu(sc, IWM_TIME_QUOTA_CMD, 0,
                                 sizeof(cmd_v2), &cmd_v2);
     }
     
     return iwm_send_cmd_pdu(sc, IWM_TIME_QUOTA_CMD, 0, sizeof(cmd), &cmd);
 }
+
+static const uint8_t iwm_awdl_default_bssid[ETHER_ADDR_LEN] =
+    { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
+
+bool ItlIwm::
+iwm_awdl_is_frame(struct iwm_softc *sc, mbuf_t m)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    if (!sc->sc_awdl_listener_up || !ic->ic_awdl_addr_gen ||
+        mbuf_len(m) < sizeof(struct ieee80211_frame_min))
+        return false;
+    const struct ieee80211_frame *wh =
+        mtod(m, const struct ieee80211_frame *);
+    if (IEEE80211_ADDR_EQ(wh->i_addr1, ic->ic_awdl_addr))
+        return true;
+    if (mbuf_len(m) < sizeof(struct ieee80211_frame))
+        return false;
+    return (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
+        IEEE80211_IS_MULTICAST(wh->i_addr1) &&
+        IEEE80211_ADDR_EQ(wh->i_addr3,
+            ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : iwm_awdl_default_bssid);
+}
+
+uint8_t ItlIwm::
+iwm_awdl_listener_pick(struct iwm_softc *sc)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    struct ieee80211_node *ni = ic->ic_bss;
+    const struct ieee80211_channel *station =
+        ni && ni->ni_chan != IEEE80211_CHAN_ANYC ? ni->ni_chan : NULL;
+    static const uint8_t channels_5g[] = { 149, 44 };
+    static const uint8_t channel_2g[] = { 6 };
+    const bool is2g = station && IEEE80211_IS_CHAN_2GHZ(station);
+    const uint8_t *order = is2g ? channel_2g : channels_5g;
+    const size_t count = is2g ? nitems(channel_2g) : nitems(channels_5g);
+    auto group160 = [](unsigned c) -> unsigned {
+        return c >= 36 && c <= 64 ? 1U :
+            c >= 100 && c <= 128 ? 2U :
+            c >= 149 && c <= 177 ? 3U : 0U;
+    };
+    const unsigned station_chan = station ? ieee80211_chan2ieee(ic, station) : 0;
+    const unsigned station_group =
+        station && (ni->ni_chw == IEEE80211_CHAN_WIDTH_160 ||
+                    ni->ni_chw == IEEE80211_CHAN_WIDTH_80P80) ?
+        group160(station_chan) : 0;
+
+    if (!station || station == IEEE80211_CHAN_ANYC)
+        return 0;
+    for (size_t i = 0; i < count; i++) {
+        const unsigned chan = order[i];
+        const struct ieee80211_channel *c = &ic->ic_channels[chan];
+        if (!c->ic_flags || !isset(ic->ic_chan_active, chan) ||
+            (c->ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)) ||
+            ((c->ic_flags & IEEE80211_CHAN_PASSIVE) &&
+             !isset(ic->ic_beacon_hint, chan)))
+            continue;
+        if (station_group && chan != station_chan &&
+            group160(chan) == station_group)
+            continue;
+        return (uint8_t)chan;
+    }
+    return 0;
+}
+
+int ItlIwm::
+iwm_awdl_phy_context_set(struct iwm_softc *sc, struct ieee80211_channel *chan)
+{
+    struct iwm_phy_ctxt *phy = &sc->sc_phyctxt[IWM_NUM_PHY_CTX - 1];
+    struct ieee80211_channel *old = phy->channel;
+    const bool sameBand = old &&
+        IEEE80211_IS_CHAN_2GHZ(old) == IEEE80211_IS_CHAN_2GHZ(chan);
+    int err;
+
+    if (sameBand) {
+        phy->channel = chan;
+        err = iwm_phy_ctxt_cmd(sc, phy, 1, 1, IWM_FW_CTXT_ACTION_MODIFY, 0);
+        if (!err)
+            return 0;
+        phy->channel = old;
+        if (sc->sc_awdl_generation == sc->sc_generation)
+            iwm_phy_ctxt_cmd(sc, phy, 1, 1, IWM_FW_CTXT_ACTION_MODIFY, 0);
+        return err;
+    }
+    err = iwm_phy_ctxt_cmd(sc, phy, 1, 1, IWM_FW_CTXT_ACTION_REMOVE, 0);
+    if (err)
+        return err;
+    phy->channel = chan;
+    err = iwm_phy_ctxt_cmd(sc, phy, 1, 1, IWM_FW_CTXT_ACTION_ADD, 0);
+    if (err) {
+        phy->channel = old;
+        if (sc->sc_awdl_generation == sc->sc_generation)
+            iwm_phy_ctxt_cmd(sc, phy, 1, 1, IWM_FW_CTXT_ACTION_ADD, 0);
+    }
+    return err;
+}
+
+int ItlIwm::
+iwm_awdl_mac_context_cmd(struct iwm_softc *sc, uint32_t action)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    struct iwm_node *in = sc->sc_awdl_node;
+    struct iwm_mac_ctx_cmd cmd = {};
+    const uint8_t *addr;
+
+    if (!in || !in->in_phyctxt)
+        return EINVAL;
+
+    iwm_mac_ctxt_cmd_common(sc, in, &cmd, action);
+    cmd.mac_type = htole32(IWM_FW_MAC_TYPE_LISTENER);
+    cmd.tsf_id = htole32(IWM_TSF_ID_B);
+    addr = ic->ic_awdl_addr_gen ? ic->ic_awdl_addr : ic->ic_myaddr;
+    IEEE80211_ADDR_COPY(cmd.node_addr, addr);
+    IEEE80211_ADDR_COPY(cmd.bssid_addr,
+        ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : iwm_awdl_default_bssid);
+    cmd.filter_flags = htole32(IWM_MAC_FILTER_IN_PROMISC |
+        IWM_MAC_FILTER_IN_CONTROL_AND_MGMT | IWM_MAC_FILTER_ACCEPT_GRP |
+        IWM_MAC_FILTER_DIS_DECRYPT | IWM_MAC_FILTER_DIS_GRP_DECRYPT |
+        IWM_MAC_FILTER_IN_BEACON | IWM_MAC_FILTER_IN_PROBE_REQUEST);
+    return iwm_send_cmd_pdu(sc, IWM_MAC_CONTEXT_CMD, 0, sizeof(cmd), &cmd);
+}
+
+int ItlIwm::
+iwm_awdl_binding_cmd(struct iwm_softc *sc, uint32_t action)
+{
+    struct iwm_node *in = sc->sc_awdl_node;
+    struct iwm_binding_cmd cmd = {};
+    uint32_t status = 0;
+    size_t len;
+    int err;
+
+    if (!in || !in->in_phyctxt)
+        return EINVAL;
+    cmd.id_and_color = htole32(IWM_FW_CMD_ID_AND_COLOR(
+        in->in_phyctxt->id, in->in_phyctxt->color));
+    cmd.action = htole32(action);
+    cmd.phy = cmd.id_and_color;
+    cmd.macs[0] = htole32(IWM_FW_CMD_ID_AND_COLOR(IWM_AWDL_MAC_ID, 0));
+    for (int i = 1; i < IWM_MAX_MACS_IN_BINDING; i++)
+        cmd.macs[i] = htole32(IWM_FW_CTXT_INVALID);
+    if (IEEE80211_IS_CHAN_2GHZ(in->in_phyctxt->channel) ||
+        !isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_CDB_SUPPORT))
+        cmd.lmac_id = htole32(IWM_LMAC_24G_INDEX);
+    else
+        cmd.lmac_id = htole32(IWM_LMAC_5G_INDEX);
+    len = isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_BINDING_CDB_SUPPORT) ?
+        sizeof(cmd) : sizeof(struct iwm_binding_cmd_v1);
+    err = iwm_send_cmd_pdu_status(sc, IWM_BINDING_CONTEXT_CMD, len, &cmd, &status);
+    if (!err && status)
+        err = EIO;
+    return err;
+}
+
+int ItlIwm::
+iwm_awdl_add_sta(struct iwm_softc *sc)
+{
+    struct iwm_node *in = sc->sc_awdl_node;
+    struct iwm_add_sta_cmd cmd = {};
+    size_t cmdsize;
+    uint32_t status = IWM_ADD_STA_SUCCESS;
+    int err;
+
+    if (!in || !in->in_phyctxt)
+        return EINVAL;
+    cmd.sta_id = IWM_AWDL_STA_ID;
+    cmd.station_type = IWM_STA_GENERAL_PURPOSE;
+    cmd.mac_id_n_color = htole32(IWM_FW_CMD_ID_AND_COLOR(in->in_id, in->in_color));
+    if (sc->sc_awdl_peer_valid)
+        IEEE80211_ADDR_COPY(cmd.addr, sc->sc_awdl_peer_addr);
+    else
+        memset(cmd.addr, 0xff, sizeof(cmd.addr));
+    cmd.tid_disable_tx = htole16(0xffff);
+    cmd.station_flags = htole32(IWM_STA_FLG_FAT_EN_20MHZ |
+                                IWM_STA_FLG_MIMO_EN_SISO);
+    cmd.station_flags_msk = htole32(IWM_STA_FLG_FAT_EN_MSK |
+                                    IWM_STA_FLG_MIMO_EN_MSK);
+    cmd.tfd_queue_msk = htole32((1U << IWM_AWDL_MGMT_QUEUE) |
+                                (1U << IWM_AWDL_DATA_QUEUE));
+    cmdsize = isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_STA_TYPE) ?
+        sizeof(cmd) : sizeof(struct iwm_add_sta_cmd_v7);
+    err = iwm_send_cmd_pdu_status(sc, IWM_ADD_STA, cmdsize, &cmd, &status);
+    if (!err && (status & IWM_ADD_STA_STATUS_MASK) != IWM_ADD_STA_SUCCESS)
+        err = EIO;
+    return err;
+}
+
+int ItlIwm::
+iwm_awdl_remove_sta(struct iwm_softc *sc)
+{
+    struct iwm_rm_sta_cmd cmd = {};
+    cmd.sta_id = IWM_AWDL_STA_ID;
+    return iwm_send_cmd_pdu(sc, IWM_REMOVE_STA, 0, sizeof(cmd), &cmd);
+}
+
+int ItlIwm::
+iwm_awdl_peer_apply(struct iwm_softc *sc, const uint8_t *peer, int valid)
+{
+    struct iwm_node *in = sc->sc_awdl_node;
+    const int was_active = sc->sc_awdl_listener_active;
+    const int old_valid = sc->sc_awdl_peer_valid;
+    uint8_t old_peer[ETHER_ADDR_LEN];
+    const uint32_t queue_mask = (1U << IWM_AWDL_MGMT_QUEUE) |
+        (1U << IWM_AWDL_DATA_QUEUE);
+    int err;
+
+    if (valid && !peer)
+        return EINVAL;
+    if (valid == old_valid &&
+        (!valid || IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_addr)))
+        return 0;
+    IEEE80211_ADDR_COPY(old_peer, sc->sc_awdl_peer_addr);
+
+    auto set_peer = [sc](const uint8_t *addr, int is_valid) {
+        sc->sc_awdl_peer_valid = is_valid;
+        if (is_valid) {
+            IEEE80211_ADDR_COPY(sc->sc_awdl_peer_addr, addr);
+            if (sc->sc_awdl_node)
+                IEEE80211_ADDR_COPY(sc->sc_awdl_node->in_ni.ni_macaddr, addr);
+        } else {
+            memset(sc->sc_awdl_peer_addr, 0, sizeof(sc->sc_awdl_peer_addr));
+            if (sc->sc_awdl_node)
+                memset(sc->sc_awdl_node->in_ni.ni_macaddr, 0xff,
+                       sizeof(sc->sc_awdl_node->in_ni.ni_macaddr));
+        }
+    };
+    auto queue_config = [this, sc](int enable) {
+        const int qids[] = { IWM_AWDL_MGMT_QUEUE, IWM_AWDL_DATA_QUEUE };
+        const int tids[] = { IWM_MAX_TID_COUNT, IWM_TID_NON_QOS };
+        int err = 0;
+        if (!iwm_nic_lock(sc))
+            return EBUSY;
+        for (int i = 0; i < nitems(qids); i++) {
+            int *stored_qid = i == 0 ? &sc->sc_awdl_mgmt_qid :
+                &sc->sc_awdl_data_qid;
+            if (enable) {
+                err = iwm_enable_txq(sc, IWM_AWDL_STA_ID, qids[i],
+                    iwm_ac_to_tx_fifo[EDCA_AC_BE], 0, tids[i], 0);
+                if (err)
+                    break;
+                *stored_qid = qids[i];
+            } else if (*stored_qid >= 0) {
+                struct iwm_scd_txq_cfg_cmd cmd = {};
+                cmd.scd_queue = *stored_qid;
+                cmd.enable = IWM_SCD_CFG_DISABLE_QUEUE;
+                cmd.sta_id = IWM_AWDL_STA_ID;
+                cmd.tid = tids[i];
+                err = iwm_send_cmd_pdu(sc, IWM_SCD_QUEUE_CFG, 0,
+                    sizeof(cmd), &cmd);
+                if (err)
+                    break;
+                *stored_qid = -1;
+            }
+        }
+        iwm_nic_unlock(sc);
+        return err;
+    };
+    auto restore_old = [&]() {
+        set_peer(old_peer, old_valid);
+        int restore_err = iwm_awdl_add_sta(sc);
+        if (restore_err)
+            return restore_err;
+        sc->sc_awdl_sta_up = 1;
+        return queue_config(1);
+    };
+
+    set_peer(peer, valid);
+    if (!sc->sc_awdl_listener_up || !sc->sc_awdl_sta_up || !in)
+        return 0;
+
+    sc->sc_awdl_listener_active = 0;
+    err = iwm_flush_tx_path(sc, queue_mask);
+    if (err)
+        goto restore_active;
+
+    for (int i = 0; i < nitems(sc->sc_rxba_data); i++) {
+        struct iwm_rxba_data *rxba = &sc->sc_rxba_data[i];
+        if (rxba->baid == IWM_RX_REORDER_DATA_INVALID_BAID ||
+            rxba->sta_id != IWM_AWDL_STA_ID)
+            continue;
+        err = iwm_sta_rx_agg(sc, &in->in_ni, rxba->tid, 0, 0, 0, 0, 0);
+        if (err)
+            goto restore_active;
+    }
+
+    err = queue_config(0);
+    if (err) {
+        iwm_awdl_listener_reset(sc);
+        return err;
+    }
+    err = iwm_awdl_remove_sta(sc);
+    if (err) {
+        if (queue_config(1)) {
+            iwm_awdl_listener_reset(sc);
+            return err;
+        }
+        goto restore_active;
+    }
+    sc->sc_awdl_sta_up = 0;
+
+    err = iwm_awdl_add_sta(sc);
+    if (!err) {
+        sc->sc_awdl_sta_up = 1;
+        err = queue_config(1);
+    }
+    if (!err) {
+        sc->sc_awdl_listener_active = was_active;
+        return 0;
+    }
+
+    if (queue_config(0)) {
+        iwm_awdl_listener_reset(sc);
+        return err;
+    }
+    if (sc->sc_awdl_sta_up) {
+        int remove_err = iwm_awdl_remove_sta(sc);
+        if (remove_err) {
+            iwm_awdl_listener_reset(sc);
+            return err;
+        }
+        sc->sc_awdl_sta_up = 0;
+    }
+    if (restore_old()) {
+        iwm_awdl_listener_reset(sc);
+        return err;
+    }
+restore_active:
+    set_peer(old_peer, old_valid);
+    sc->sc_awdl_listener_active = was_active;
+    return err;
+}
+
+void ItlIwm::
+iwm_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer)
+{
+    struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
+    ItlIwm *that = container_of(sc, ItlIwm, com);
+    static const uint8_t zero[ETHER_ADDR_LEN] = {};
+    int valid;
+
+    if (!peer || (op != 0 && op != 2 && op != 6))
+        return;
+    if (op == 2) {
+        if (!sc->sc_awdl_peer_valid ||
+            !IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_addr))
+            return;
+        valid = 0;
+    } else {
+        if (IEEE80211_IS_MULTICAST(peer) || IEEE80211_ADDR_EQ(peer, zero))
+            return;
+        valid = 1;
+    }
+    int err = that->iwm_awdl_peer_apply(sc, peer, valid);
+    if (err)
+        XYLog("%s peer cache update failed: %d\n", DEVNAME(sc), err);
+}
+
+int ItlIwm::
+iwm_awdl_rx_ba(struct ieee80211com *ic, const uint8_t *peer, uint8_t tid,
+    uint16_t ssn, uint16_t winsize, int start, const uint8_t *reply, uint8_t chan)
+{
+    struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
+    ItlIwm *that = container_of(sc, ItlIwm, com);
+    struct iwm_node *in = sc->sc_awdl_node;
+
+    (void)reply;
+    if (!sc->sc_awdl_listener_up || !sc->sc_awdl_listener_active ||
+        !sc->sc_awdl_sta_up || !sc->sc_mqrx_supported || !in ||
+        tid >= IWM_MAX_TID_COUNT || chan != sc->sc_awdl_listener_chan ||
+        !sc->sc_awdl_peer_valid ||
+        !IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_addr))
+        return ENOTSUP;
+
+    if (start) {
+        int err = that->iwm_sta_rx_agg(sc, &in->in_ni, tid, ssn,
+            winsize, 0, 1, 0);
+        if (err)
+            return err;
+        for (int i = 0; i < nitems(sc->sc_rxba_data); i++) {
+            struct iwm_rxba_data *rxba = &sc->sc_rxba_data[i];
+            if (rxba->baid == IWM_RX_REORDER_DATA_INVALID_BAID ||
+                rxba->sta_id != IWM_AWDL_STA_ID || rxba->tid != tid)
+                continue;
+            IEEE80211_ADDR_COPY(rxba->peer_addr, peer);
+            return 0;
+        }
+        that->iwm_sta_rx_agg(sc, &in->in_ni, tid, 0, 0, 0, 0, 0);
+        return EIO;
+    }
+
+    for (int i = 0; i < nitems(sc->sc_rxba_data); i++) {
+        struct iwm_rxba_data *rxba = &sc->sc_rxba_data[i];
+        if (rxba->baid == IWM_RX_REORDER_DATA_INVALID_BAID ||
+            rxba->sta_id != IWM_AWDL_STA_ID || rxba->tid != tid ||
+            !IEEE80211_ADDR_EQ(rxba->peer_addr, peer))
+            continue;
+        return that->iwm_sta_rx_agg(sc, &in->in_ni, tid, 0, 0, 0, 0, 0);
+    }
+    return 0;
+}
+
+void ItlIwm::
+iwm_awdl_listener_reset(struct iwm_softc *sc)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    const bool can_send = !(sc->sc_flags & (IWM_FLAG_SHUTDOWN | IWM_FLAG_HW_ERR)) &&
+        sc->sc_awdl_generation == sc->sc_generation;
+    int cleanup_err = 0;
+    bool queues_safe = true;
+
+    sc->sc_awdl_listener_active = 0;
+    sc->sc_awdl_low_latency = 0;
+    sc->sc_awdl_listener_up = 0;
+    if (can_send && sc->sc_awdl_sta_up) {
+        const uint32_t mask = (1U << IWM_AWDL_MGMT_QUEUE) |
+            (1U << IWM_AWDL_DATA_QUEUE);
+        cleanup_err = iwm_flush_tx_path(sc, mask);
+        queues_safe = cleanup_err == 0;
+    }
+    if (can_send && queues_safe &&
+        (sc->sc_awdl_mgmt_qid >= 0 || sc->sc_awdl_data_qid >= 0)) {
+        if (!iwm_nic_lock(sc)) {
+            cleanup_err = cleanup_err ? cleanup_err : EBUSY;
+            queues_safe = false;
+        } else {
+            auto disable = [sc, &cleanup_err](int *qid, int tid) {
+                if (*qid < 0)
+                    return;
+                struct iwm_scd_txq_cfg_cmd cmd = {};
+                cmd.scd_queue = *qid;
+                cmd.enable = IWM_SCD_CFG_DISABLE_QUEUE;
+                cmd.sta_id = IWM_AWDL_STA_ID;
+                cmd.tid = tid;
+                int err = iwm_send_cmd_pdu(sc, IWM_SCD_QUEUE_CFG, 0,
+                    sizeof(cmd), &cmd);
+                if (err) {
+                    if (!cleanup_err)
+                        cleanup_err = err;
+                } else {
+                    *qid = -1;
+                }
+            };
+            disable(&sc->sc_awdl_data_qid, IWM_TID_NON_QOS);
+            disable(&sc->sc_awdl_mgmt_qid, IWM_MAX_TID_COUNT);
+            iwm_nic_unlock(sc);
+            queues_safe = sc->sc_awdl_mgmt_qid < 0 &&
+                sc->sc_awdl_data_qid < 0;
+        }
+    }
+    if (can_send && queues_safe && sc->sc_awdl_sta_up) {
+        int err = iwm_awdl_remove_sta(sc);
+        if (err) {
+            if (!cleanup_err)
+                cleanup_err = err;
+        } else {
+            sc->sc_awdl_sta_up = 0;
+        }
+    }
+    if (can_send && !sc->sc_awdl_sta_up && sc->sc_awdl_binding_up) {
+        int err = iwm_awdl_binding_cmd(sc, IWM_FW_CTXT_ACTION_REMOVE);
+        if (err) {
+            if (!cleanup_err)
+                cleanup_err = err;
+        } else {
+            sc->sc_awdl_binding_up = 0;
+        }
+    }
+    if (can_send && !sc->sc_awdl_binding_up && sc->sc_awdl_mac_up) {
+        int err = iwm_awdl_mac_context_cmd(sc, IWM_FW_CTXT_ACTION_REMOVE);
+        if (err) {
+            if (!cleanup_err)
+                cleanup_err = err;
+        } else {
+            sc->sc_awdl_mac_up = 0;
+        }
+    }
+    if (can_send && !sc->sc_awdl_mac_up &&
+        sc->sc_awdl_context_up && sc->sc_awdl_node) {
+        int err = iwm_awdl_phy_context_set(sc, &ic->ic_channels[1]);
+        if (err) {
+            if (!cleanup_err)
+                cleanup_err = err;
+        } else {
+            sc->sc_awdl_context_up = 0;
+        }
+    }
+
+    ic->ic_awdl_listener_chan = 0;
+    ic->ic_awdl_roc_qid = -1;
+    sc->sc_awdl_listener_chan = 0;
+
+    if (!can_send) {
+        sc->sc_awdl_sta_up = 0;
+        sc->sc_awdl_binding_up = 0;
+        sc->sc_awdl_mac_up = 0;
+        sc->sc_awdl_context_up = 0;
+        sc->sc_awdl_mgmt_qid = -1;
+        sc->sc_awdl_data_qid = -1;
+        sc->sc_awdl_generation = 0;
+        iwm_awdl_clear_keys(sc);
+        return;
+    }
+
+    const bool resources_remain = sc->sc_awdl_sta_up ||
+        sc->sc_awdl_binding_up || sc->sc_awdl_mac_up ||
+        sc->sc_awdl_context_up || sc->sc_awdl_mgmt_qid >= 0 ||
+        sc->sc_awdl_data_qid >= 0;
+    if (resources_remain) {
+        ic->ic_awdl_listener_stage = 6;
+        ic->ic_awdl_listener_code = cleanup_err ? cleanup_err : EBUSY;
+        return;
+    }
+
+    sc->sc_awdl_generation = 0;
+    iwm_awdl_clear_keys(sc);
+    if (!isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DYNAMIC_QUOTA) &&
+        ic->ic_state == IEEE80211_S_RUN) {
+        int err = iwm_update_quotas(sc, (struct iwm_node *)ic->ic_bss, 1);
+        if (err) {
+            ic->ic_awdl_listener_stage = 7;
+            ic->ic_awdl_listener_code = err;
+            return;
+        }
+    }
+}
+
+
+int ItlIwm::
+iwm_awdl_listener_setup(struct iwm_softc *sc, uint8_t chan)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    struct iwm_node *bss = (struct iwm_node *)ic->ic_bss;
+    struct iwm_phy_ctxt *phy = &sc->sc_phyctxt[IWM_NUM_PHY_CTX - 1];
+    int generation = sc->sc_generation;
+    int err = 0, stage = 0;
+
+    if (sc->sc_awdl_context_up || sc->sc_awdl_mac_up ||
+        sc->sc_awdl_binding_up || sc->sc_awdl_sta_up ||
+        sc->sc_awdl_mgmt_qid >= 0 || sc->sc_awdl_data_qid >= 0) {
+        iwm_awdl_listener_reset(sc);
+        if (sc->sc_awdl_context_up || sc->sc_awdl_mac_up ||
+            sc->sc_awdl_binding_up || sc->sc_awdl_sta_up ||
+            sc->sc_awdl_mgmt_qid >= 0 || sc->sc_awdl_data_qid >= 0) {
+            ic->ic_awdl_listener_stage = 6;
+            ic->ic_awdl_listener_code = EBUSY;
+            return EBUSY;
+        }
+    }
+    if (!sc->sc_awdl_supported ||
+        !(sc->sc_capaflags & IWM_UCODE_TLV_FLAGS_P2P) ||
+        !isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DQA_SUPPORT) ||
+        !bss || !bss->in_phyctxt || ic->ic_state != IEEE80211_S_RUN ||
+        !chan || chan > IEEE80211_CHAN_MAX || phy == bss->in_phyctxt)
+        return ENOTSUP;
+
+    if (!sc->sc_awdl_node) {
+        sc->sc_awdl_node = (struct iwm_node *)iwm_node_alloc(ic);
+        if (!sc->sc_awdl_node)
+            return ENOMEM;
+        sc->sc_awdl_node->in_ni.ni_ic = ic;
+        sc->sc_awdl_node->in_ni.ni_refcnt = 1;
+    }
+    struct iwm_node *in = sc->sc_awdl_node;
+    in->in_ni.ni_ic = ic;
+    in->in_ni.ni_flags = 0;
+    in->in_ni.ni_chan = &ic->ic_channels[chan];
+    in->in_ni.ni_txrate = 12;
+    in->in_ni.ni_txmcs = -1;
+    in->in_phyctxt = phy;
+    in->in_id = IWM_AWDL_MAC_ID;
+    in->in_color = 0;
+    in->in_sta_id = IWM_AWDL_STA_ID;
+    in->in_tfd_queue_msk = (1U << IWM_AWDL_MGMT_QUEUE) |
+        (1U << IWM_AWDL_DATA_QUEUE);
+    IEEE80211_ADDR_COPY(in->in_macaddr,
+        ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : iwm_awdl_default_bssid);
+    if (sc->sc_awdl_peer_valid)
+        IEEE80211_ADDR_COPY(in->in_ni.ni_macaddr, sc->sc_awdl_peer_addr);
+    else
+        memset(in->in_ni.ni_macaddr, 0xff, sizeof(in->in_ni.ni_macaddr));
+    IEEE80211_ADDR_COPY(in->in_ni.ni_bssid,
+        ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : iwm_awdl_default_bssid);
+
+    if (generation != sc->sc_generation)
+        return ENXIO;
+    sc->sc_awdl_generation = generation;
+    stage = 1;
+    err = iwm_awdl_phy_context_set(sc, &ic->ic_channels[chan]);
+    if (err)
+        goto fail;
+    sc->sc_awdl_context_up = 1;
+    if (generation != sc->sc_generation) {
+        err = ENXIO;
+        goto fail;
+    }
+
+    stage = 2;
+    err = iwm_awdl_mac_context_cmd(sc, IWM_FW_CTXT_ACTION_ADD);
+    if (err)
+        goto fail;
+    sc->sc_awdl_mac_up = 1;
+    if (generation != sc->sc_generation) {
+        err = ENXIO;
+        goto fail;
+    }
+
+    stage = 3;
+    err = iwm_awdl_binding_cmd(sc, IWM_FW_CTXT_ACTION_ADD);
+    if (err)
+        goto fail;
+    sc->sc_awdl_binding_up = 1;
+    if (generation != sc->sc_generation) {
+        err = ENXIO;
+        goto fail;
+    }
+
+    stage = 4;
+    err = iwm_awdl_add_sta(sc);
+    if (err)
+        goto fail;
+    sc->sc_awdl_sta_up = 1;
+    if (generation != sc->sc_generation) {
+        err = ENXIO;
+        goto fail;
+    }
+
+    stage = 5;
+    if (!iwm_nic_lock(sc)) {
+        err = EBUSY;
+        goto fail;
+    }
+    err = iwm_enable_txq(sc, IWM_AWDL_STA_ID, IWM_AWDL_MGMT_QUEUE,
+        iwm_ac_to_tx_fifo[EDCA_AC_BE], 0, IWM_MAX_TID_COUNT, 0);
+    if (!err) {
+        sc->sc_awdl_mgmt_qid = IWM_AWDL_MGMT_QUEUE;
+        err = iwm_enable_txq(sc, IWM_AWDL_STA_ID, IWM_AWDL_DATA_QUEUE,
+            iwm_ac_to_tx_fifo[EDCA_AC_BE], 0, IWM_TID_NON_QOS, 0);
+        if (!err)
+            sc->sc_awdl_data_qid = IWM_AWDL_DATA_QUEUE;
+    }
+    iwm_nic_unlock(sc);
+    if (err)
+        goto fail;
+    if (generation != sc->sc_generation) {
+        err = ENXIO;
+        goto fail;
+    }
+
+    if (!isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DYNAMIC_QUOTA)) {
+        sc->sc_awdl_listener_up = 1;
+        err = iwm_update_quotas(sc, bss, 1);
+        if (err) {
+            sc->sc_awdl_listener_up = 0;
+            goto fail;
+        }
+    }
+    sc->sc_awdl_listener_chan = chan;
+    sc->sc_awdl_addr_gen = ic->ic_awdl_addr_gen;
+    sc->sc_awdl_listener_up = 1;
+    ic->ic_awdl_listener_chan = chan;
+    ic->ic_awdl_listener_stage = 0;
+    ic->ic_awdl_listener_code = 0;
+    return 0;
+
+fail:
+    ic->ic_awdl_listener_stage = (uint8_t)stage;
+    ic->ic_awdl_listener_code = err;
+    iwm_awdl_listener_reset(sc);
+    return err;
+}
+
+static bool
+iwm_awdl_enabled(void)
+{
+    int enabled = 0;
+    return PE_parse_boot_argn("-itlawdl", &enabled, sizeof(enabled));
+}
+
+int ItlIwm::
+iwm_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
+{
+    (void)dwell_tu;
+    struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
+    ItlIwm *that = container_of(sc, ItlIwm, com);
+    const uint8_t selected = that->iwm_awdl_listener_pick(sc);
+
+    if (!iwm_awdl_enabled() || !sc->sc_awdl_supported)
+        return ENOTSUP;
+    if (sc->sc_flags & (IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN |
+                        IWM_FLAG_SHUTDOWN | IWM_FLAG_HW_ERR | IWM_FLAG_RFKILL))
+        return EBUSY;
+    if (ic->ic_state != IEEE80211_S_RUN || !selected)
+        return EBUSY;
+#ifdef AIRPORT_WCL
+    if (ic->ic_wcl_scan_requested)
+        return EBUSY;
+#endif
+    if (!sc->sc_awdl_listener_up) {
+        if (sc->sc_awdl_listener_tries)
+            return ic->ic_awdl_listener_code ? ic->ic_awdl_listener_code : ENOTSUP;
+        sc->sc_awdl_listener_tries++;
+        ic->ic_awdl_listener_tries = sc->sc_awdl_listener_tries;
+        int err = that->iwm_awdl_listener_setup(sc, selected);
+        if (err)
+            return err;
+    }
+    if (chan != sc->sc_awdl_listener_chan)
+        return EBUSY;
+    if (sc->sc_awdl_addr_gen != ic->ic_awdl_addr_gen) {
+        if (sc->sc_awdl_node) {
+            const uint8_t *bssid = ic->ic_awdl_bssid_valid ?
+                ic->ic_awdl_bssid : iwm_awdl_default_bssid;
+            IEEE80211_ADDR_COPY(sc->sc_awdl_node->in_macaddr, bssid);
+            IEEE80211_ADDR_COPY(sc->sc_awdl_node->in_ni.ni_bssid, bssid);
+            if (sc->sc_awdl_peer_valid)
+                IEEE80211_ADDR_COPY(sc->sc_awdl_node->in_ni.ni_macaddr,
+                    sc->sc_awdl_peer_addr);
+            else
+                memset(sc->sc_awdl_node->in_ni.ni_macaddr, 0xff,
+                    sizeof(sc->sc_awdl_node->in_ni.ni_macaddr));
+        }
+        int err = that->iwm_awdl_mac_context_cmd(sc, IWM_FW_CTXT_ACTION_MODIFY);
+        if (err)
+            return err;
+        sc->sc_awdl_addr_gen = ic->ic_awdl_addr_gen;
+    }
+    sc->sc_awdl_listener_active = 1;
+    ic->ic_awdl_listen_chan = sc->sc_awdl_listener_chan;
+    return 0;
+}
+
+
+int ItlIwm::
+iwm_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t len)
+{
+    struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
+    ItlIwm *that = container_of(sc, ItlIwm, com);
+    struct iwm_node *in = sc->sc_awdl_node;
+    mbuf_t m = NULL;
+    int err;
+
+    if (!iwm_awdl_enabled() || !sc->sc_awdl_listener_up ||
+        !sc->sc_awdl_listener_active || !in ||
+        chan != sc->sc_awdl_listener_chan || !frame ||
+        len < sizeof(struct ieee80211_frame) || len > MCLBYTES) {
+        ic->ic_awdl_tx_busy++;
+        return EBUSY;
+    }
+    if (mbuf_gethdr(MBUF_DONTWAIT, MBUF_TYPE_DATA, &m) != 0 || !m)
+        return ENOMEM;
+    if (len > mbuf_get_mhlen() &&
+        (mbuf_mclget(MBUF_DONTWAIT, MBUF_TYPE_DATA, &m) != 0 ||
+         !(mbuf_flags(m) & MBUF_EXT))) {
+        mbuf_freem(m);
+        return ENOMEM;
+    }
+    memcpy(mbuf_data(m), frame, len);
+    mbuf_setlen(m, len);
+    mbuf_pkthdr_setlen(m, len);
+    in->in_ni.ni_chan = &ic->ic_channels[chan];
+    ieee80211_ref_node(ic, &in->in_ni);
+    err = that->iwm_tx(sc, m, &in->in_ni, EDCA_AC_BE);
+    if (err) {
+        ieee80211_release_node(ic, &in->in_ni);
+        ic->ic_awdl_tx_err++;
+        return err;
+    }
+    ic->ic_awdl_tx_sent++;
+    return 0;
+}
+
+int ItlIwm::
+iwm_awdl_key(struct ieee80211com *ic, const uint8_t *addr, uint8_t kid,
+    const uint8_t *keydata, uint8_t keylen, uint32_t flags, uint64_t rsc, int remove)
+{
+    struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
+    struct iwm_awdl_key *slot = NULL;
+
+    if (!addr || kid >= IEEE80211_GROUP_NKID || kid > 3)
+        return EINVAL;
+    for (int i = 0; i < nitems(sc->sc_awdl_keys); i++) {
+        struct iwm_awdl_key *entry = &sc->sc_awdl_keys[i];
+        if (entry->valid && entry->key.k_id == kid &&
+            IEEE80211_ADDR_EQ(entry->addr, addr) &&
+            (entry->flags & IEEE80211_AWDL_KEY_GROUP) == (flags & IEEE80211_AWDL_KEY_GROUP) &&
+            (entry->flags & (IEEE80211_AWDL_KEY_TX | IEEE80211_AWDL_KEY_RX)) ==
+                (flags & (IEEE80211_AWDL_KEY_TX | IEEE80211_AWDL_KEY_RX))) {
+            slot = entry;
+            break;
+        }
+        if (!slot && !entry->valid)
+            slot = entry;
+    }
+    if (remove) {
+        for (int i = 0; i < nitems(sc->sc_awdl_keys); i++) {
+            struct iwm_awdl_key *entry = &sc->sc_awdl_keys[i];
+            if (!entry->valid || entry->key.k_id != kid ||
+                !IEEE80211_ADDR_EQ(entry->addr, addr) ||
+                (entry->flags & IEEE80211_AWDL_KEY_GROUP) !=
+                    (flags & IEEE80211_AWDL_KEY_GROUP))
+                continue;
+            uint32_t directions = flags & (IEEE80211_AWDL_KEY_TX | IEEE80211_AWDL_KEY_RX);
+            if (directions && !(entry->flags & directions))
+                continue;
+            ieee80211_ccmp_delete_key(ic, &entry->key);
+            explicit_bzero(entry, sizeof(*entry));
+        }
+        return 0;
+    }
+    if (!keydata || keylen != 16 ||
+        !(flags & (IEEE80211_AWDL_KEY_TX | IEEE80211_AWDL_KEY_RX)))
+        return EINVAL;
+    if (!slot || (slot->valid &&
+        (!IEEE80211_ADDR_EQ(slot->addr, addr) || slot->key.k_id != kid)))
+        return ENOSPC;
+    if (slot->valid)
+        ieee80211_ccmp_delete_key(ic, &slot->key);
+    explicit_bzero(slot, sizeof(*slot));
+    slot->key.k_id = kid;
+    slot->key.k_cipher = IEEE80211_CIPHER_CCMP;
+    slot->key.k_flags = IEEE80211_KEY_SWCRYPTO;
+    if (flags & IEEE80211_AWDL_KEY_GROUP)
+        slot->key.k_flags |= IEEE80211_KEY_GROUP;
+    slot->key.k_len = keylen;
+    memcpy(slot->key.k_key, keydata, keylen);
+    slot->key.k_tsc = 0;
+    for (int tid = 0; tid < IEEE80211_NUM_TID; tid++)
+        slot->key.k_rsc[tid] = rsc;
+    int err = ieee80211_ccmp_set_key(ic, &slot->key);
+    if (err) {
+        explicit_bzero(slot, sizeof(*slot));
+        return err;
+    }
+    IEEE80211_ADDR_COPY(slot->addr, addr);
+    slot->flags = flags;
+    slot->valid = 1;
+    return 0;
+}
+
+int ItlIwm::
+iwm_awdl_crypto(struct ieee80211com *ic, mbuf_t *mp, int tx)
+{
+    if (!mp || !*mp || mbuf_pkthdr_len(*mp) < sizeof(struct ieee80211_frame))
+        return EINVAL;
+    struct ieee80211_frame *wh = mtod(*mp, struct ieee80211_frame *);
+    struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
+    if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) != IEEE80211_FC0_TYPE_DATA)
+        return 0;
+    const bool protected_frame = (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) != 0;
+    if (sc->sc_awdl_encryption_type == 0 && !protected_frame)
+        return 0;
+    if (!tx && !protected_frame)
+        return 0;
+    if (sc->sc_awdl_encryption_type != 5)
+        return ENOTSUP;
+    const bool group = IEEE80211_IS_MULTICAST(wh->i_addr1);
+    uint8_t kid = 0;
+    if (!tx) {
+        const int hdrlen = ieee80211_get_hdrlen(wh);
+        if (mbuf_pkthdr_len(*mp) < hdrlen + IEEE80211_CCMP_HDRLEN)
+            return EINVAL;
+        const uint8_t *iv = (const uint8_t *)wh + hdrlen;
+        kid = iv[3] >> 6;
+    }
+    struct iwm_awdl_key *match = NULL;
+    for (int i = 0; i < nitems(sc->sc_awdl_keys); i++) {
+        struct iwm_awdl_key *entry = &sc->sc_awdl_keys[i];
+        if (!entry->valid ||
+            (entry->flags & IEEE80211_AWDL_KEY_GROUP) !=
+                (group ? IEEE80211_AWDL_KEY_GROUP : 0) ||
+            !(entry->flags & (tx ? IEEE80211_AWDL_KEY_TX : IEEE80211_AWDL_KEY_RX)) ||
+            (!tx && entry->key.k_id != kid))
+            continue;
+        const uint8_t *peer = tx ? wh->i_addr1 : wh->i_addr2;
+        static const uint8_t zero[IEEE80211_ADDR_LEN] = {};
+        if (IEEE80211_ADDR_EQ(entry->addr, peer) ||
+            IEEE80211_ADDR_EQ(entry->addr, wh->i_addr3) ||
+            (group && IEEE80211_ADDR_EQ(entry->addr, zero))) {
+            match = entry;
+            if (IEEE80211_ADDR_EQ(entry->addr, peer))
+                break;
+        }
+    }
+    if (!match)
+        return ENOENT;
+    if (tx) {
+        if (protected_frame)
+            return EALREADY;
+        wh->i_fc[1] |= IEEE80211_FC1_PROTECTED;
+        *mp = ieee80211_ccmp_encrypt(ic, *mp, &match->key);
+    } else {
+        *mp = ieee80211_ccmp_decrypt(ic, *mp, &match->key);
+    }
+    return *mp ? 0 : EIO;
+}
+
+int ItlIwm::
+iwm_awdl_set_encryption(struct ieee80211com *ic, uint32_t type)
+{
+    if (type != 0 && type != 5)
+        return ENOTSUP;
+    struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
+    sc->sc_awdl_encryption_type = type;
+    return 0;
+}
+
+int ItlIwm::
+iwm_awdl_set_low_latency(struct ieee80211com *ic, int active)
+{
+    struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
+    const int previous = sc->sc_awdl_low_latency;
+    sc->sc_awdl_low_latency = active != 0;
+    if (!sc->sc_awdl_listener_up ||
+        isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DYNAMIC_QUOTA))
+        return 0;
+    int err = iwm_update_quotas(sc, (struct iwm_node *)ic->ic_bss, 1);
+    if (err)
+        sc->sc_awdl_low_latency = previous;
+    return err;
+}
+
+void ItlIwm::
+iwm_awdl_clear_keys(struct iwm_softc *sc)
+{
+    for (int i = 0; i < nitems(sc->sc_awdl_keys); i++) {
+        struct iwm_awdl_key *entry = &sc->sc_awdl_keys[i];
+        if (entry->valid)
+            ieee80211_ccmp_delete_key(&sc->sc_ic, &entry->key);
+        explicit_bzero(entry, sizeof(*entry));
+    }
+    sc->sc_awdl_encryption_type = 0;
+}
+
 
 int ItlIwm::
 iwm_auth(struct iwm_softc *sc)
@@ -2616,6 +3604,13 @@ iwm_run_stop(struct iwm_softc *sc)
     int err, i, tid;
     
     splassert(IPL_NET);
+
+    if (sc->sc_awdl_listener_up || sc->sc_awdl_context_up ||
+        sc->sc_awdl_mac_up || sc->sc_awdl_binding_up || sc->sc_awdl_sta_up ||
+        sc->sc_awdl_mgmt_qid >= 0 || sc->sc_awdl_data_qid >= 0) {
+        iwm_awdl_listener_reset(sc);
+        sc->sc_awdl_listener_tries = 0;
+    }
     
     /*
      * Stop Tx/Rx BA sessions now. We cannot rely on the BA task
@@ -2630,10 +3625,13 @@ iwm_run_stop(struct iwm_softc *sc)
         struct iwm_rxba_data *rxba = &sc->sc_rxba_data[i];
         if (rxba->baid == IWM_RX_REORDER_DATA_INVALID_BAID)
             continue;
-        iwm_sta_rx_agg(sc, &in->in_ni, rxba->tid, 0, 0, 0, 0);
-        iwm_clear_reorder_buffer(sc, rxba);
-        if (sc->sc_rx_ba_sessions > 0)
-            sc->sc_rx_ba_sessions--;
+        struct ieee80211_node *ba_ni = rxba->sta_id == IWM_AWDL_STA_ID && sc->sc_awdl_node ?
+            &sc->sc_awdl_node->in_ni : &in->in_ni;
+        if (iwm_sta_rx_agg(sc, ba_ni, rxba->tid, 0, 0, 0, 0, 0)) {
+            iwm_clear_reorder_buffer(sc, rxba);
+            if (sc->sc_rx_ba_sessions > 0)
+                sc->sc_rx_ba_sessions--;
+        }
     }
     for (tid = 0; tid < IWM_MAX_TID_COUNT; tid++) {
         int qid = IWM_FIRST_AGG_TX_QUEUE + tid;
@@ -3726,6 +4724,14 @@ iwm_stop(struct _ifnet *ifp)
     //    refcnt_finalize(&sc->task_refs, "iwmstop");
     
     iwm_stop_device(sc);
+    iwm_awdl_listener_reset(sc);
+    sc->sc_awdl_listener_tries = 0;
+    if (sc->sc_awdl_node) {
+        free(sc->sc_awdl_node, M_DEVBUF, sizeof(*sc->sc_awdl_node));
+        sc->sc_awdl_node = NULL;
+        sc->sc_awdl_peer_valid = 0;
+        memset(sc->sc_awdl_peer_addr, 0, sizeof(sc->sc_awdl_peer_addr));
+    }
     
     /* Reset soft state. */
     
@@ -4561,6 +5567,8 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
     struct ieee80211com *ic = &sc->sc_ic;
     struct _ifnet *ifp = &ic->ic_if;
     int err;
+    sc->sc_awdl_mgmt_qid = -1;
+    sc->sc_awdl_data_qid = -1;
     int txq_i, i, j;
     
     sc->sc_pct = pa->pa_pc;
@@ -4729,6 +5737,7 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
             sc->non_shared_ant = IWM_ANT_A;
             break;
         case PCI_PRODUCT_INTEL_WL_9260_1:
+            sc->sc_awdl_supported = 1;
             sc->sc_fwname = "iwm-9260-46";
             sc->host_interrupt_operation_mode = 0;
             sc->sc_device_family = IWM_DEVICE_FAMILY_9000;
@@ -4755,6 +5764,12 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
         case PCI_PRODUCT_INTEL_WL_9461_3:
         case PCI_PRODUCT_INTEL_WL_9461_4:
             sc->sc_fwname = "iwm-9000-46";
+            sc->sc_awdl_supported = pa_id == PCI_PRODUCT_INTEL_WL_9560_1 ||
+                pa_id == PCI_PRODUCT_INTEL_WL_9560_2 ||
+                pa_id == PCI_PRODUCT_INTEL_WL_9560_3 ||
+                pa_id == PCI_PRODUCT_INTEL_WL_9560_4 ||
+                pa_id == PCI_PRODUCT_INTEL_WL_9560_5 ||
+                pa_id == PCI_PRODUCT_INTEL_WL_9560_6;
             sc->host_interrupt_operation_mode = 0;
             sc->sc_device_family = IWM_DEVICE_FAMILY_9000;
             sc->sc_fwdmasegsz = IWM_FWDMASEGSZ_8000;
@@ -4978,6 +5993,16 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
     ic->ic_ampdu_tx_start = iwm_ampdu_tx_start;
     ic->ic_ampdu_tx_stop = iwm_ampdu_tx_stop;
     ic->ic_update_chw = iwm_update_chw;
+    if (sc->sc_awdl_supported) {
+        ic->ic_awdl_listen = iwm_awdl_listen;
+        ic->ic_awdl_tx = iwm_awdl_tx;
+        ic->ic_awdl_peer_cache = iwm_awdl_peer_cache;
+        ic->ic_awdl_rx_ba = sc->sc_mqrx_supported ? iwm_awdl_rx_ba : NULL;
+        ic->ic_awdl_key = iwm_awdl_key;
+        ic->ic_awdl_crypto = iwm_awdl_crypto;
+        ic->ic_awdl_set_encryption = iwm_awdl_set_encryption;
+        ic->ic_awdl_set_low_latency = iwm_awdl_set_low_latency;
+    }
     /*
      * We cannot read the MAC address without loading the
      * firmware from disk. Postpone until mountroot is done.
@@ -5160,11 +6185,11 @@ iwm_ba_task(void *arg)
             break;
         if (sc->ba_rx.start_tidmask & (1 << tid)) {
             struct ieee80211_rx_ba *ba = &ni->ni_rx_ba[tid];
-            err = that->iwm_sta_rx_agg(sc, ni, tid,  ba->ba_winstart,
-                           ba->ba_winsize, ba->ba_timeout_val, 1);
+            err = that->iwm_sta_rx_agg(sc, ni, tid, ba->ba_winstart,
+                           ba->ba_winsize, ba->ba_timeout_val, 1, 1);
             sc->ba_rx.start_tidmask &= ~(1 << tid);
         } else if (sc->ba_rx.stop_tidmask & (1 << tid)) {
-            err = that->iwm_sta_rx_agg(sc, ni, tid, 0, 0, 0, 0);
+            err = that->iwm_sta_rx_agg(sc, ni, tid, 0, 0, 0, 0, 1);
             sc->ba_rx.stop_tidmask &= ~(1 << tid);
         }
     }

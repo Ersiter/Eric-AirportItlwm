@@ -232,7 +232,7 @@ public:
     static void   iwm_reorder_timer_expired(void *);
     static uint8_t iwm_num_of_ant(uint8_t mask);
     int    iwm_sta_rx_agg(struct iwm_softc *, struct ieee80211_node *, uint8_t,
-                           uint16_t, uint16_t, int, int);
+                           uint16_t, uint16_t, int, int, int);
     static int    iwm_ampdu_tx_start(struct ieee80211com *, struct ieee80211_node *,
                               uint8_t);
     static void    iwm_ampdu_tx_stop(struct ieee80211com *, struct ieee80211_node *,
@@ -274,6 +274,7 @@ public:
     int    iwm_get_noise(const struct iwm_statistics_rx_non_phy *);
     int    iwm_rx_hwdecrypt(struct iwm_softc *, mbuf_t, uint32_t,
                struct ieee80211_rxinfo *);
+    bool    iwm_awdl_is_frame(struct iwm_softc *, mbuf_t);
     int    iwm_ccmp_decap(struct iwm_softc *, mbuf_t,
                           struct ieee80211_node *, struct ieee80211_rxinfo *);
     void    iwm_rx_frame(struct iwm_softc *, mbuf_t, int, uint32_t, int, int,
@@ -317,6 +318,26 @@ public:
     void iwm_ampdu_txq_advance(struct iwm_softc *, struct iwm_tx_ring *, int);
     void iwm_clear_oactive(struct iwm_softc *, struct iwm_tx_ring *);
     int    iwm_tx(struct iwm_softc *, mbuf_t, struct ieee80211_node *, int);
+    static int    iwm_awdl_listen(struct ieee80211com *, uint8_t, uint16_t);
+    static int    iwm_awdl_tx(struct ieee80211com *, uint8_t, const uint8_t *, size_t);
+    static int    iwm_awdl_key(struct ieee80211com *, const uint8_t *, uint8_t,
+                               const uint8_t *, uint8_t, uint32_t, uint64_t, int);
+    static int    iwm_awdl_crypto(struct ieee80211com *, mbuf_t *, int);
+    static int    iwm_awdl_set_encryption(struct ieee80211com *, uint32_t);
+    static int    iwm_awdl_set_low_latency(struct ieee80211com *, int);
+    static void    iwm_awdl_peer_cache(struct ieee80211com *, uint32_t, const uint8_t *);
+    static int    iwm_awdl_rx_ba(struct ieee80211com *, const uint8_t *, uint8_t,
+                                 uint16_t, uint16_t, int, const uint8_t *, uint8_t);
+    int    iwm_awdl_peer_apply(struct iwm_softc *, const uint8_t *, int);
+    uint8_t    iwm_awdl_listener_pick(struct iwm_softc *);
+    int    iwm_awdl_phy_context_set(struct iwm_softc *, struct ieee80211_channel *);
+    int    iwm_awdl_listener_setup(struct iwm_softc *, uint8_t);
+    int    iwm_awdl_mac_context_cmd(struct iwm_softc *, uint32_t);
+    int    iwm_awdl_binding_cmd(struct iwm_softc *, uint32_t);
+    int    iwm_awdl_add_sta(struct iwm_softc *);
+    int    iwm_awdl_remove_sta(struct iwm_softc *);
+    void    iwm_awdl_listener_reset(struct iwm_softc *);
+    void    iwm_awdl_clear_keys(struct iwm_softc *);
     int    iwm_flush_tx_path(struct iwm_softc *, int);
     void    iwm_led_enable(struct iwm_softc *);
     void    iwm_led_disable(struct iwm_softc *);
