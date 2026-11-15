@@ -340,9 +340,11 @@ private:
     uint32_t fSyncState;
     enum {
         kAwdlTrafficAirDrop = 1U << 0,
-        kAwdlTrafficSidecar = 1U << 1
+        kAwdlTrafficSidecar = 1U << 1,
+        kAwdlTrafficLLWParams = 1U << 2
     };
     uint8_t fAwdlTrafficMask;
+    IOReturn setAwdlTrafficReason(uint8_t reason, bool active);
     uint64_t fCallCount;
 };
 

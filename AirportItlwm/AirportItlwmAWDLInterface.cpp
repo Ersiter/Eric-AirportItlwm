@@ -2843,9 +2843,23 @@ AWDL_GET_STUB(AWDL_DEV_STATS, apple80211_awdl_dev_stats)
 AWDL_GET_STUB(AWDL_DFSP_CONFIG, apple80211_awdl_dfsp_config)
 AWDL_GET_STUB(AWDL_CCA, apple80211_awdl_cca)
 AWDL_GET_STUB(AWDL_AF_SECONDARY_PAYLOAD_CAPABILITIES, apple80211_awdl_cap)
-AWDL_GET_STUB(LLW_PARAMS, apple80211_llw_params)
+IOReturn AirportItlwmAWDLInterface::
+getLLW_PARAMS(apple80211_llw_params *d)
+{
+    fCallCount++;
+    if (!d)
+        return kIOReturnBadArgument;
+    if (!_fCommandGate)
+        return kIOReturnUnsupported;
+    return _fCommandGate->runAction([](OSObject *, void *owner, void *arg, void *, void *) -> IOReturn {
+        auto *that = static_cast<AirportItlwmAWDLInterface *>(owner);
+        auto *params = reinterpret_cast<uint8_t *>(arg);
+        params[0x0b] = that->fAwdlTrafficMask != 0;
+        return kIOReturnSuccess;
+    }, this, d);
+}
 
-#pragma mark - setters accepted but not acted on yet
+#pragma mark - AWDL setters
 
 AWDL_SET_STUB(SSID, apple80211_ssid_data)
 AWDL_SET_STUB(CHANNEL, apple80211_channel_data)
@@ -2854,6 +2868,27 @@ AWDL_SET_STUB(AWDL_ELECTION_ID, apple80211_awdl_election_id)
 AWDL_SET_STUB(AWDL_ELECTION_METRIC, apple80211_awdl_election_metric)
 AWDL_SET_STUB(AWDL_ELECTION_RSSI_THRESHOLDS, apple80211_awdl_election_rssi_thresholds)
 AWDL_SET_STUB(AWDL_ELECTION_PARAMS, apple80211_awdl_election_params)
+IOReturn AirportItlwmAWDLInterface::
+setAwdlTrafficReason(uint8_t reason, bool active)
+{
+    ieee80211com *ic = fController->fHalService->get80211Controller();
+    if (!ic || !ic->ic_awdl_set_low_latency)
+        return kIOReturnUnsupported;
+    const uint8_t previous = fAwdlTrafficMask;
+    if (active)
+        fAwdlTrafficMask |= reason;
+    else
+        fAwdlTrafficMask &= static_cast<uint8_t>(~reason);
+    const bool lowLatency = fAwdlTrafficMask != 0;
+    int err = ic->ic_awdl_set_low_latency(ic, lowLatency);
+    if (err) {
+        fAwdlTrafficMask = previous;
+        return kIOReturnError;
+    }
+    setProperty("AWDLLowLatencyActive", lowLatency);
+    return kIOReturnSuccess;
+}
+
 IOReturn AirportItlwmAWDLInterface::
 setAWDL_PEER_TRAFFIC_REGISTRATION(apple80211_awdl_peer_traffic_registration *d)
 {
@@ -2882,25 +2917,13 @@ setAWDL_PEER_TRAFFIC_REGISTRATION(apple80211_awdl_peer_traffic_registration *d)
         auto that = static_cast<AirportItlwmAWDLInterface *>(owner);
         auto *registration = static_cast<apple80211_awdl_peer_traffic_registration *>(arg);
         auto *serviceBit = static_cast<uint8_t *>(serviceArg);
-        ieee80211com *ic = that->fController->fHalService->get80211Controller();
-        if (!ic || !ic->ic_awdl_set_low_latency)
-            return kIOReturnUnsupported;
-        const uint8_t previous = that->fAwdlTrafficMask;
-        if (registration->active)
-            that->fAwdlTrafficMask |= *serviceBit;
-        else
-            that->fAwdlTrafficMask &= static_cast<uint8_t>(~*serviceBit);
-        const bool lowLatency = that->fAwdlTrafficMask != 0;
-        int err = ic->ic_awdl_set_low_latency(ic, lowLatency);
-        if (err) {
-            that->fAwdlTrafficMask = previous;
-            return kIOReturnError;
-        }
+        IOReturn err = that->setAwdlTrafficReason(*serviceBit, registration->active != 0);
+        if (err != kIOReturnSuccess)
+            return err;
         if (*serviceBit == AirportItlwmAWDLInterface::kAwdlTrafficAirDrop)
             that->setProperty("AWDLDiscoveryActive", registration->active != 0);
         else
             that->setProperty("AWDLSidecarActive", registration->active != 0);
-        that->setProperty("AWDLLowLatencyActive", lowLatency);
         return kIOReturnSuccess;
     }, this, d, &serviceBit);
 }
@@ -2981,7 +3004,21 @@ setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create *data)
     return controller->createLowLatencyInterface(reinterpret_cast<char *>(request + 8));
 }
 AWDL_SET_STUB(AWDL_OOB_SEC_PAYLOAD_REQUEST, apple80211_awdl_af_sec_payload_request)
-AWDL_SET_STUB(LLW_PARAMS, apple80211_llw_params)
+IOReturn AirportItlwmAWDLInterface::
+setLLW_PARAMS(apple80211_llw_params *d)
+{
+    fCallCount++;
+    if (!d)
+        return kIOReturnBadArgument;
+    if (!fController || !_fCommandGate)
+        return kIOReturnUnsupported;
+    return _fCommandGate->runAction([](OSObject *, void *owner, void *arg, void *, void *) -> IOReturn {
+        auto *that = static_cast<AirportItlwmAWDLInterface *>(owner);
+        const auto *params = reinterpret_cast<const uint8_t *>(arg);
+        // Apple CoreMac LLW_PARAMS stores its enable flag at byte offset 0x0b.
+        return that->setAwdlTrafficReason(kAwdlTrafficLLWParams, params[0x0b] != 0);
+    }, this, d);
+}
 AWDL_SET_STUB(TX_RATE, apple80211_tx_rate)
 AWDL_SET_STUB(P2P_COEX_PROTECTION, apple80211_p2p_coex_protection)
 AWDL_SET_STUB(PSF_DWELL, apple80211_awdl_psf_dwell_params)
