@@ -268,9 +268,17 @@ public:
 #ifdef AIRPORT_WCL
     class AirportItlwmAWDLInterface *fAWDLIf;
     class AirportItlwmAWDLEthernetInterface *fAWDLBsdIf;
+    class AirportItlwmLowLatencyInterface *fLLWIf;
+    class AirportItlwmLowLatencyEthernetInterface *fLLWBsdIf;
     bool fCreatingAWDL;
+    bool fCreatingLLW;
+    bool fLLWAttached;
+    bool fLLWStarted;
     ether_addr fAWDLMac;
+    ether_addr fLLWMac;
     IOReturn createAWDLInterface(struct apple80211_virt_if_create_data *data);
+    IOReturn createLowLatencyInterface(char *bsdName);
+    IOReturn destroyLowLatencyInterface();
     static IOReturn setAWDLLinkGated(OSObject *owner, void *arg0, void *, void *, void *);
     void destroyAWDLInterface();
 #endif

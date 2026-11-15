@@ -15,6 +15,20 @@ extern IOCommandGate *_fCommandGate;
 
 OSDefineMetaClassAndStructors(AirportItlwmAWDLInterface, IO80211AWDLProtocol);
 OSDefineMetaClassAndStructors(AirportItlwmAWDLEthernetInterface, AirportItlwmEthernetInterface);
+OSDefineMetaClassAndStructors(AirportItlwmLowLatencyEthernetInterface, AirportItlwmEthernetInterface);
+
+extern "C" {
+unsigned int awdlGetInterfaceId(IO80211SkywalkInterface *)
+    __asm__("__ZN23IO80211SkywalkInterface14getInterfaceIdEv");
+void awdlSetLowLatencyEnabled(IO80211SkywalkInterface *, bool)
+    __asm__("__ZN23IO80211SkywalkInterface20setLowLatencyEnabledEb");
+void awdlSetCompanionInterfaceId(IO80211SkywalkInterface *, unsigned int)
+    __asm__("__ZN23IO80211SkywalkInterface23setCompanionInterfaceIdEj");
+void awdlSetParentInterface(IO80211SkywalkInterface *, IO80211VirtualInterface *)
+    __asm__("__ZN23IO80211SkywalkInterface18setParentInterfaceEP23IO80211VirtualInterface");
+void awdlSetCompanionLowLatencySkywalkInterface(IO80211VirtualInterface *, IO80211SkywalkInterface *)
+    __asm__("__ZN23IO80211VirtualInterface38setCompanionLowLatencySkywalkInterfaceEP23IO80211SkywalkInterface");
+}
 
 #pragma mark - native table check
 
@@ -85,6 +99,88 @@ const char *AirportItlwmAWDLEthernetInterface::
 getNamePrefix() const
 {
     return "awdl";
+}
+
+void AirportItlwmLowLatencyEthernetInterface::
+setLowLatencyAddress(const ether_addr &mac)
+{
+    memcpy(&fMac, &mac, sizeof(fMac));
+    memcpy(fUniqueId, mac.octet, sizeof(mac.octet));
+    fUniqueId[6] = kAirportItlwmLowLatencyInterfaceId;
+}
+
+const char *AirportItlwmLowLatencyEthernetInterface::
+getNamePrefix() const
+{
+    return "llw";
+}
+
+bool AirportItlwmLowLatencyEthernetInterface::
+initIfnetParams(struct ifnet_init_params *params)
+{
+    setProperty(kIOMACAddress, (void *)&fMac, kIOEthernetAddressSize);
+    setProperty("HiddenInterface", kOSBooleanTrue);
+    if (!AirportItlwmEthernetInterface::initIfnetParams(params))
+        return false;
+    params->uniqueid = fUniqueId;
+    params->uniqueid_len = sizeof(fUniqueId);
+    return true;
+}
+
+IOReturn AirportItlwmLowLatencyEthernetInterface::
+attachToDataLinkLayer(IOOptionBits options, void *parameter)
+{
+    IOReturn ret = AirportItlwmEthernetInterface::attachToDataLinkLayer(options, parameter);
+    if (ret == kIOReturnSuccess && getIfnet())
+        ifnet_set_lladdr(getIfnet(), &fMac, sizeof(fMac));
+    return ret;
+}
+
+IOReturn AirportItlwmLowLatencyEthernetInterface::
+getInterfaceAddress(IOEthernetAddress *addr)
+{
+    memcpy(addr, &fMac, sizeof(fMac));
+    return kIOReturnSuccess;
+}
+
+bool AirportItlwmLowLatencyEthernetInterface::
+setLinkState(IO80211LinkState state)
+{
+    if (!getIfnet())
+        return false;
+    ifnet_set_flags(getIfnet(), state == kIO80211NetworkLinkUp ? IFF_RUNNING : 0,
+                    state == kIO80211NetworkLinkUp ? 0 : IFF_RUNNING);
+    return true;
+}
+
+SInt32 AirportItlwmLowLatencyEthernetInterface::
+performCommand(IONetworkController *controller, unsigned long cmd, void *arg0, void *arg1)
+{
+    if (cmd == SIOCSIFFLAGS) {
+        auto *driver = OSDynamicCast(AirportItlwm, getController());
+        auto *llw = OSDynamicCast(AirportItlwmLowLatencyInterface, getProvider());
+        if (driver && driver->fHalService && llw) {
+            ifnet_t ifp = getIfnet();
+            bool up = ifp && (ifnet_flags(ifp) & IFF_UP) &&
+                driver->fHalService->get80211Controller()->ic_state == IEEE80211_S_RUN;
+            llw->setRunningState(up);
+            llw->reportLinkStatus(up ? 3 : 1, up ? 0x80 : 0);
+        }
+        return 0;
+    }
+    return AirportItlwmEthernetInterface::performCommand(controller, cmd, arg0, arg1);
+}
+
+UInt32 AirportItlwmLowLatencyEthernetInterface::
+outputLowLatency(mbuf_t packet, void *param)
+{
+    AirportItlwm *controller = OSDynamicCast(AirportItlwm, getController());
+    if (!controller) {
+        if (packet)
+            mbuf_freem(packet);
+        return kIOReturnOutputDropped;
+    }
+    return controller->outputPacket(packet, param);
 }
 
 bool AirportItlwmAWDLEthernetInterface::
@@ -1913,9 +2009,162 @@ setAWDLLinkGated(OSObject *owner, void *arg0, void *, void *, void *)
     return kIOReturnSuccess;
 }
 
+IOReturn AirportItlwm::
+createLowLatencyInterface(char *bsdName)
+{
+    if (!bsdName || !fAWDLEnabled || !fAWDLIf)
+        return kIOReturnNotReady;
+    if (fLLWIf || fLLWBsdIf) {
+        if (fLLWIf && fLLWBsdIf && fLLWBsdIf->getIfnet()) {
+            snprintf(bsdName, 16, "%s%u", ifnet_name(fLLWBsdIf->getIfnet()),
+                     ifnet_unit(fLLWBsdIf->getIfnet()));
+            return kIOReturnSuccess;
+        }
+        destroyLowLatencyInterface();
+    }
+
+    ether_addr *parentMac = fAWDLIf->getSelfMacAddr();
+    if (!parentMac)
+        return kIOReturnNotReady;
+    memcpy(&fLLWMac, parentMac, sizeof(fLLWMac));
+
+    auto *llw = new AirportItlwmLowLatencyInterface;
+    if (!llw)
+        return kIOReturnNoMemory;
+    llw->setParentAddress(*parentMac);
+    if (!llw->init(this)) {
+        llw->release();
+        return kIOReturnError;
+    }
+    fLLWIf = llw;
+    fLLWAttached = false;
+    fLLWStarted = false;
+    llw->setInterfaceRole(kAirportItlwmLowLatencyRole);
+    llw->setInterfaceId(kAirportItlwmLowLatencyInterfaceId);
+    awdlSetLowLatencyEnabled(llw, true);
+    awdlSetParentInterface(llw, fAWDLIf);
+    awdlSetCompanionLowLatencySkywalkInterface(fAWDLIf, llw);
+    if (!llw->attach(this)) {
+        destroyLowLatencyInterface();
+        return kIOReturnError;
+    }
+    fLLWAttached = true;
+
+    IOSkywalkEthernetInterface::RegistrationInfo info;
+    memset(&info, 0, sizeof(info));
+    if (!llw->initRegistrationInfo(&info, 1, sizeof(info))) {
+        destroyLowLatencyInterface();
+        return kIOReturnError;
+    }
+
+    // Match Tahoe's role-2 RegistrationInfo fields for AppleBCMWLANLowLatencyInterface.
+    auto put32 = [](uint8_t *dst, uint32_t value) { memcpy(dst, &value, sizeof(value)); };
+    const uint64_t registrationFlags = 0x8000000080ULL;
+    const uint16_t txHeadroom = 64;
+    const uint32_t lowLatencyFlags = 4;
+    const char *prefix = "llw";
+    put32(info.bytes + 0x0c, 3);
+    put32(info.bytes + 0x14, kAirportItlwmLowLatencyRole);
+    memcpy(info.bytes + 0x24, &registrationFlags, sizeof(registrationFlags));
+    memcpy(info.bytes + 0x30, &prefix, sizeof(prefix));
+    put32(info.bytes + 0x38, 0);
+    memcpy(info.bytes + 0x3c, &txHeadroom, sizeof(txHeadroom));
+    put32(info.bytes + 0x40, 0);
+    memcpy(info.bytes + 0x108, fLLWMac.octet, 4);
+    memcpy(info.bytes + 0x10c, fLLWMac.octet + 4, 2);
+    put32(info.bytes + 0x120, lowLatencyFlags);
+
+    auto *networkInfo = (IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(
+        sizeof(IOSkywalkNetworkInterface::RegistrationInfo));
+    auto *ethernetInfo = (IOSkywalkEthernetInterface::RegistrationInfo *)IOMalloc(
+        sizeof(IOSkywalkEthernetInterface::RegistrationInfo));
+    if (!networkInfo || !ethernetInfo) {
+        if (networkInfo) IOFree(networkInfo, sizeof(*networkInfo));
+        if (ethernetInfo) IOFree(ethernetInfo, sizeof(*ethernetInfo));
+        destroyLowLatencyInterface();
+        return kIOReturnNoMemory;
+    }
+    memcpy(networkInfo, &info, sizeof(info));
+    memcpy(ethernetInfo, &info, sizeof(info));
+    llw->mExpansionData->fRegistrationInfo = networkInfo;
+    llw->mExpansionData2->fRegistrationInfo = ethernetInfo;
+    llw->deferBSDAttach(true);
+    if (!llw->start(this)) {
+        destroyLowLatencyInterface();
+        return kIOReturnError;
+    }
+    fLLWStarted = true;
+    awdlSetCompanionInterfaceId(llw, awdlGetInterfaceId(fAWDLIf));
+
+    IONetworkInterface *bsd = nullptr;
+    fCreatingLLW = true;
+    bool ok = IONetworkController::attachInterface(&bsd, false);
+    fCreatingLLW = false;
+    if (!ok || !bsd) {
+        if (bsd) {
+            detachInterface(bsd, true);
+            bsd->release();
+        }
+        destroyLowLatencyInterface();
+        return kIOReturnError;
+    }
+    fLLWBsdIf = OSDynamicCast(AirportItlwmLowLatencyEthernetInterface, bsd);
+    if (!fLLWBsdIf) {
+        detachInterface(bsd, true);
+        bsd->release();
+        destroyLowLatencyInterface();
+        return kIOReturnError;
+    }
+    bsd->registerService();
+    if (!fLLWBsdIf->getIfnet()) {
+        destroyLowLatencyInterface();
+        return kIOReturnError;
+    }
+
+    bool linkUp = fHalService->get80211Controller()->ic_state == IEEE80211_S_RUN;
+    fLLWBsdIf->setLinkState(linkUp ? kIO80211NetworkLinkUp : kIO80211NetworkLinkDown);
+    bool llwUp = linkUp && (ifnet_flags(fLLWBsdIf->getIfnet()) & IFF_UP);
+    llw->setRunningState(llwUp);
+    llw->reportLinkStatus(llwUp ? 3 : 1, llwUp ? 0x80 : 0);
+    snprintf(bsdName, 16, "%s%u", ifnet_name(fLLWBsdIf->getIfnet()),
+             ifnet_unit(fLLWBsdIf->getIfnet()));
+    XYLog("AWDL companion created %s role %u id %u\n", bsdName,
+          kAirportItlwmLowLatencyRole, kAirportItlwmLowLatencyInterfaceId);
+    return kIOReturnSuccess;
+}
+
+IOReturn AirportItlwm::
+destroyLowLatencyInterface()
+{
+    if (!fLLWIf && !fLLWBsdIf)
+        return kIOReturnNotFound;
+    if (fAWDLIf)
+        awdlSetCompanionLowLatencySkywalkInterface(fAWDLIf, nullptr);
+    if (fLLWIf)
+        awdlSetParentInterface(fLLWIf, nullptr);
+    if (fLLWBsdIf) {
+        detachInterface(fLLWBsdIf, true);
+        fLLWBsdIf->release();
+        fLLWBsdIf = nullptr;
+    }
+    if (fLLWIf) {
+        if (fLLWStarted)
+            fLLWIf->stop(this);
+        if (fLLWAttached)
+            fLLWIf->detach(this);
+        fLLWIf->release();
+        fLLWIf = nullptr;
+    }
+    fLLWStarted = false;
+    fLLWAttached = false;
+    memset(&fLLWMac, 0, sizeof(fLLWMac));
+    return kIOReturnSuccess;
+}
+
 void AirportItlwm::
 destroyAWDLInterface()
 {
+    destroyLowLatencyInterface();
     if (fAWDLBsdIf) {
         XYLog("AWDL %s: dropped %llu packets\n", __FUNCTION__, fAWDLBsdIf->droppedPackets());
         detachInterface(fAWDLBsdIf, true);
@@ -2714,7 +2963,23 @@ AWDL_SET_STUB(AWDL_TXCAL_PERIOD, apple80211_awdl_txcal_period)
 AWDL_SET_STUB(AWDL_AWDL_ADVERTISERS, awdl_peer_advert_add)
 AWDL_SET_STUB(AWDL_DFSP_CONFIG, apple80211_awdl_dfsp_config)
 AWDL_SET_STUB(AWDL_DFSP_UCSA_CONFIG, apple80211_awdl_dfsp_ucsa_config)
-AWDL_SET_STUB(COMPANION_SKYWALK_IF_CREATE, apple80211_companion_skywalk_if_create)
+IOReturn AirportItlwmAWDLInterface::
+setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create *data)
+{
+    if (!data)
+        return kIOReturnBadArgument;
+    AirportItlwm *controller = OSDynamicCast(AirportItlwm, getController());
+    if (!controller)
+        return kIOReturnNotReady;
+    uint8_t *request = reinterpret_cast<uint8_t *>(data);
+    uint32_t operation;
+    memcpy(&operation, request + 4, sizeof(operation));
+    if (operation == 0)
+        return controller->destroyLowLatencyInterface();
+    if (operation != 1)
+        return kIOReturnSuccess;
+    return controller->createLowLatencyInterface(reinterpret_cast<char *>(request + 8));
+}
 AWDL_SET_STUB(AWDL_OOB_SEC_PAYLOAD_REQUEST, apple80211_awdl_af_sec_payload_request)
 AWDL_SET_STUB(LLW_PARAMS, apple80211_llw_params)
 AWDL_SET_STUB(TX_RATE, apple80211_tx_rate)

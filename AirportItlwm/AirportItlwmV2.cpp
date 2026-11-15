@@ -149,7 +149,13 @@ bool AirportItlwm::init(OSDictionary *properties)
 #ifdef AIRPORT_WCL
     fAWDLIf = nullptr;
     fAWDLBsdIf = nullptr;
+    fLLWIf = nullptr;
+    fLLWBsdIf = nullptr;
     fCreatingAWDL = false;
+    fCreatingLLW = false;
+    fLLWAttached = false;
+    fLLWStarted = false;
+    memset(&fLLWMac, 0, sizeof(fLLWMac));
 #endif
     power_state = 0;
     memset(geo_location_cc, 0, sizeof(geo_location_cc));
@@ -628,6 +634,11 @@ bool AirportItlwm::configureInterface(IONetworkInterface *netif)
         return false;
     }
 #ifdef AIRPORT_WCL
+    // llw0 uses the associated Wi-Fi TX path; awdl0 keeps its separate P2P queue.
+    if (AirportItlwmLowLatencyEthernetInterface *llw =
+            OSDynamicCast(AirportItlwmLowLatencyEthernetInterface, netif))
+        return llw->registerOutputHandler(llw,
+            (IOOutputAction)&AirportItlwmLowLatencyEthernetInterface::outputLowLatency);
     // awdl0 must not take over the station's net80211 ifnet or statistics.
     if (AirportItlwmAWDLEthernetInterface *awdl = OSDynamicCast(AirportItlwmAWDLEthernetInterface, netif))
         return awdl->registerOutputHandler(awdl,
@@ -659,6 +670,16 @@ bool AirportItlwm::configureInterface(IONetworkInterface *netif)
 IONetworkInterface *AirportItlwm::createInterface()
 {
 #ifdef AIRPORT_WCL
+    if (fCreatingLLW) {
+        auto *llw = new AirportItlwmLowLatencyEthernetInterface;
+        if (llw)
+            llw->setLowLatencyAddress(fLLWMac);
+        if (llw && !llw->initWithSkywalkInterfaceAndProvider(this, fLLWIf)) {
+            llw->release();
+            llw = nullptr;
+        }
+        return llw;
+    }
     if (fCreatingAWDL) {
         AirportItlwmAWDLEthernetInterface *awdl = new AirportItlwmAWDLEthernetInterface;
         if (awdl) {
@@ -750,9 +771,18 @@ setLinkStateGated(OSObject *target, void *arg0, void *arg1, void *arg2, void *ar
 {
     AirportItlwm *that = OSDynamicCast(AirportItlwm, target);
 #ifdef AIRPORT_WCL
-    that->bsdInterface->setLinkState((IO80211LinkState)(uint64_t)arg0);
-    static_cast<AirportItlwmSkywalkInterface *>(that->fNetIf)->handleWCLLink(
-        (IO80211LinkState)(uint64_t)arg0 == kIO80211NetworkLinkUp);
+    const auto state = (IO80211LinkState)(uint64_t)arg0;
+    const bool up = state == kIO80211NetworkLinkUp;
+    that->bsdInterface->setLinkState(state);
+    static_cast<AirportItlwmSkywalkInterface *>(that->fNetIf)->handleWCLLink(up);
+    if (that->fLLWBsdIf)
+        that->fLLWBsdIf->setLinkState(state);
+    if (that->fLLWIf) {
+        bool llwUp = up && that->fLLWBsdIf && that->fLLWBsdIf->getIfnet() &&
+            (ifnet_flags(that->fLLWBsdIf->getIfnet()) & IFF_UP);
+        that->fLLWIf->setRunningState(llwUp);
+        that->fLLWIf->reportLinkStatus(llwUp ? 3 : 1, llwUp ? 0x80 : 0);
+    }
     return kIOReturnSuccess;
 #else
     IOReturn ret = that->fNetIf->setLinkState((IO80211LinkState)(uint64_t)arg0, (unsigned int)(uint64_t)arg1);

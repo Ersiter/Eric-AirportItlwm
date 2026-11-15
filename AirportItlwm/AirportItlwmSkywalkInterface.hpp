@@ -115,6 +115,9 @@ public:
 #endif
 
     virtual bool init(IOService *) AIRPORT_SKYWALK_OVERRIDE;
+#ifdef AIRPORT_WCL
+    bool initLowLatency(IOService *provider, const ether_addr &parentMac);
+#endif
 //    virtual ifnet_t getBSDInterface(void) AIRPORT_SKYWALK_OVERRIDE;
     
     void associateSSID(uint8_t *ssid, uint32_t ssid_len, const struct ether_addr &bssid, uint32_t authtype_lower, uint32_t authtype_upper, uint8_t *key, uint32_t key_len, int key_index);
@@ -523,6 +526,7 @@ private:
 #endif
 
 private:
+    bool initProvider(IOService *provider, bool setupWCL, const ether_addr *macOverride);
     AirportItlwm *instance;
     ItlHalService *fHalService;
     
@@ -536,5 +540,44 @@ private:
     bool disassocIsVoluntary;
 };
 
+
+#ifdef AIRPORT_WCL
+enum : unsigned int {
+    kAirportItlwmLowLatencyRole = 2,
+    kAirportItlwmLowLatencyInterfaceId = 9,
+};
+
+class AirportItlwmLowLatencyInterface : public AirportItlwmSkywalkInterface {
+    OSDeclareDefaultStructors(AirportItlwmLowLatencyInterface)
+public:
+    bool init(IOService *provider) override { return initLowLatency(provider, fParentMac); }
+    const char *getBSDNamePrefix() override { return "llw"; }
+#if __IO80211_TARGET == __MAC_15_2
+    IOReturn setMacAddress(ether_addr &) override { return kIOReturnSuccess; }
+#else
+    IOReturn setMacAddress(mloAddrArray &) override { return kIOReturnSuccess; }
+#endif
+    void setParentAddress(const ether_addr &mac) { memcpy(&fParentMac, &mac, sizeof(fParentMac)); }
+private:
+    ether_addr fParentMac;
+};
+
+class AirportItlwmLowLatencyEthernetInterface : public AirportItlwmEthernetInterface {
+    OSDeclareDefaultStructors(AirportItlwmLowLatencyEthernetInterface)
+public:
+    const char *getNamePrefix() const override { return "llw"; }
+    bool initIfnetParams(struct ifnet_init_params *params) override;
+    IOReturn attachToDataLinkLayer(IOOptionBits options, void *parameter) override;
+    IOReturn getInterfaceAddress(IOEthernetAddress *addr) override;
+    bool setLinkState(IO80211LinkState state) override;
+    SInt32 performCommand(IONetworkController *controller, unsigned long cmd,
+                          void *arg0, void *arg1) override;
+    UInt32 outputLowLatency(mbuf_t packet, void *param);
+    void setLowLatencyAddress(const ether_addr &mac);
+private:
+    ether_addr fMac;
+    uint8_t fUniqueId[7];
+};
+#endif
 
 #endif /* AirportItlwmSkywalkInterface_hpp */

@@ -20,6 +20,9 @@ extern IOCommandGate *_fCommandGate;
 
 #define super IO80211InfraProtocol
 OSDefineMetaClassAndStructors(AirportItlwmSkywalkInterface, IO80211InfraProtocol);
+#ifdef AIRPORT_WCL
+OSDefineMetaClassAndStructors(AirportItlwmLowLatencyInterface, AirportItlwmSkywalkInterface);
+#endif
 
 const char* hexdump(uint8_t *buf, size_t len) {
     ssize_t str_len = len * 3 + 1;
@@ -280,6 +283,24 @@ void AirportItlwmSkywalkInterface::setGTK(const u_int8_t *gtk, size_t key_len, u
 bool AirportItlwmSkywalkInterface::
 init(IOService *provider)
 {
+    return initProvider(provider, true, nullptr);
+}
+
+#ifdef AIRPORT_WCL
+bool AirportItlwmSkywalkInterface::
+initLowLatency(IOService *provider, const ether_addr &parentMac)
+{
+    return initProvider(provider, false, &parentMac);
+}
+#endif
+
+bool AirportItlwmSkywalkInterface::
+initProvider(IOService *provider, bool setupWCL, const ether_addr *macOverride)
+{
+#ifdef AIRPORT_WCL
+    joinTimer = nullptr;
+    wclEapolSource = nullptr;
+#endif
     bool ret = IO80211InfraInterface::init();
     if (!ret) {
         XYLog("%s IO80211InfraInterface init failed\n", __PRETTY_FUNCTION__);
@@ -292,16 +313,28 @@ init(IOService *provider)
     this->scanSource = instance->scanSource;
 #ifdef AIRPORT_WCL
     IOEthernetAddress address;
-    if (instance->getHardwareAddress(&address) != kIOReturnSuccess)
+    if (macOverride)
+        memcpy(&address, macOverride, sizeof(address));
+    else if (instance->getHardwareAddress(&address) != kIOReturnSuccess)
         return false;
     memcpy(wclPermanentMAC, &address, sizeof(wclPermanentMAC));
     if (!IO80211SkywalkInterface::init(provider, reinterpret_cast<ether_addr *>(&address)))
         return false;
-    if (!initWCL())
+    if (setupWCL && !initWCL())
         return false;
+#else
+    (void)setupWCL;
+    (void)macOverride;
 #endif
     return ret;
 }
+
+#ifdef AIRPORT_WCL
+const char *AirportItlwmLowLatencyInterface::getBSDNamePrefix()
+{
+    return "llw";
+}
+#endif
 
 //ifnet_t AirportItlwmSkywalkInterface::
 //getBSDInterface()
