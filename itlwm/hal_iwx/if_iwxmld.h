@@ -142,6 +142,14 @@ struct iwx_system_statistics_cmd {
 	uint32_t type_id_mask;
 } __packed; /* STATISTICS_FW_CMD_API_S_VER_1 */
 
+#define IWX_LOW_LATENCY_CMD 0x03
+struct iwx_mac_low_latency_cmd {
+    uint32_t mac_id;
+    uint8_t low_latency_rx;
+    uint8_t low_latency_tx;
+    uint16_t reserved;
+} __packed;
+
 #define IWX_MLD_RX_BAID_CONFIG_CMD 0x16
 #define IWX_MLD_RX_BAID_ADD 0
 #define IWX_MLD_RX_BAID_MODIFY 1

@@ -439,7 +439,7 @@ public:
     static int    iwx_awdl_set_encryption(struct ieee80211com *, uint32_t);
     static int    iwx_awdl_set_low_latency(struct ieee80211com *, int);
     void   iwx_awdl_clear_keys(struct iwx_softc *);
-    int    iwx_awdl_update_power(struct iwx_softc *);
+    int    iwx_awdl_update_low_latency(struct iwx_softc *);
     int    iwx_awdl_tx_frame(struct iwx_softc *, const uint8_t *, size_t, int);
     static void iwx_awdl_peer_task(void *);
     static int iwx_awdl_rx_ba(struct ieee80211com *, const uint8_t *, uint8_t, uint16_t, uint16_t, int, const uint8_t *, uint8_t);

@@ -11149,10 +11149,19 @@ iwx_awdl_set_encryption(struct ieee80211com *ic, uint32_t type)
 }
 
 int ItlIwx::
-iwx_awdl_update_power(struct iwx_softc *sc)
+iwx_awdl_update_low_latency(struct iwx_softc *sc)
 {
     if (!sc->sc_use_mld_api || !sc->sc_listener_up || !iwx_awdl_client_enabled())
         return 0;
+    struct iwx_mac_low_latency_cmd lowLatencyCmd = {};
+    lowLatencyCmd.mac_id = htole32(IWX_LISTENER_MAC_ID);
+    lowLatencyCmd.low_latency_rx = sc->sc_awdl_low_latency;
+    lowLatencyCmd.low_latency_tx = sc->sc_awdl_low_latency;
+    int err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_LOW_LATENCY_CMD),
+        0, sizeof(lowLatencyCmd), &lowLatencyCmd);
+    if (err)
+        return err;
+
     struct iwx_mac_power_cmd cmd = {};
     /* Match iwl_mld P2P low-latency timeouts: 2 TU TX and 40 TU RX. */
     cmd.id_and_color = htole32(IWX_FW_CMD_ID_AND_COLOR(IWX_LISTENER_MAC_ID, 0));
@@ -11172,9 +11181,13 @@ iwx_awdl_set_low_latency(struct ieee80211com *ic, int active)
     ItlIwx *that = container_of(sc, ItlIwx, com);
     const uint8_t previous = sc->sc_awdl_low_latency;
     sc->sc_awdl_low_latency = active != 0;
-    int err = that->iwx_awdl_update_power(sc);
-    if (err)
+    int err = that->iwx_awdl_update_low_latency(sc);
+    if (err) {
         sc->sc_awdl_low_latency = previous;
+        int rollbackErr = that->iwx_awdl_update_low_latency(sc);
+        if (rollbackErr)
+            DPRINTFN(1, ("Failed to restore AWDL low-latency state: %d\n", rollbackErr));
+    }
     return err;
 }
 
@@ -12431,7 +12444,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
     sc->sc_listener_up = 1;
-    if ((err = iwx_awdl_update_power(sc)) != 0) {
+    if ((err = iwx_awdl_update_low_latency(sc)) != 0) {
         sc->sc_listener_up = 0;
         sc->sc_p2p_queue = 0;
         sc->sc_aux_roc_qid = -1;
