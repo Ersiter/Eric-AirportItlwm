@@ -2004,6 +2004,7 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fSyncEnabled = false;
     fEncryptionType = APPLE80211_CIPHER_NONE;
     fSyncState = 0;
+    fAwdlTrafficMask = 0;
     fCallCount = 0;
     fRxAF = 0;
     fRxAFDropped = 0;
@@ -2611,25 +2612,48 @@ setAWDL_PEER_TRAFFIC_REGISTRATION(apple80211_awdl_peer_traffic_registration *d)
     if (!d || d->name_len == 0 || d->name_len > sizeof(d->name))
         return kIOReturnBadArgument;
     static const char kAirDropService[] = "wifid-assisted-discovery";
-    if (d->name_len != sizeof(kAirDropService) - 1 &&
-        (d->name_len != sizeof(kAirDropService) || d->name[sizeof(kAirDropService) - 1] != '\0'))
-        return kIOReturnSuccess;
-    if (memcmp(d->name, kAirDropService, sizeof(kAirDropService) - 1) != 0)
+    static const char kSidecarService[] = "sidecar";
+    auto nameMatches = [d](const char *name, size_t length) {
+        if (d->name_len == length)
+            return memcmp(d->name, name, length) == 0;
+        return d->name_len == length + 1 && d->name[length] == '\0' &&
+            memcmp(d->name, name, length) == 0;
+    };
+    uint8_t serviceBit = 0;
+    if (nameMatches(kAirDropService, sizeof(kAirDropService) - 1))
+        serviceBit = kAwdlTrafficAirDrop;
+    else if (nameMatches(kSidecarService, sizeof(kSidecarService) - 1))
+        serviceBit = kAwdlTrafficSidecar;
+    else
         return kIOReturnSuccess;
     if (!fController || !_fCommandGate)
         return kIOReturnUnsupported;
-    return _fCommandGate->runAction([](OSObject *, void *owner, void *arg, void *, void *) -> IOReturn {
+    return _fCommandGate->runAction([](OSObject *, void *owner, void *arg,
+        void *serviceArg, void *) -> IOReturn {
         auto that = static_cast<AirportItlwmAWDLInterface *>(owner);
         auto *registration = static_cast<apple80211_awdl_peer_traffic_registration *>(arg);
+        auto *serviceBit = static_cast<uint8_t *>(serviceArg);
         ieee80211com *ic = that->fController->fHalService->get80211Controller();
         if (!ic || !ic->ic_awdl_set_low_latency)
             return kIOReturnUnsupported;
-        int err = ic->ic_awdl_set_low_latency(ic, registration->active != 0);
-        if (err)
+        const uint8_t previous = that->fAwdlTrafficMask;
+        if (registration->active)
+            that->fAwdlTrafficMask |= *serviceBit;
+        else
+            that->fAwdlTrafficMask &= static_cast<uint8_t>(~*serviceBit);
+        const bool lowLatency = that->fAwdlTrafficMask != 0;
+        int err = ic->ic_awdl_set_low_latency(ic, lowLatency);
+        if (err) {
+            that->fAwdlTrafficMask = previous;
             return kIOReturnError;
-        that->setProperty("AWDLDiscoveryActive", registration->active != 0);
+        }
+        if (*serviceBit == AirportItlwmAWDLInterface::kAwdlTrafficAirDrop)
+            that->setProperty("AWDLDiscoveryActive", registration->active != 0);
+        else
+            that->setProperty("AWDLSidecarActive", registration->active != 0);
+        that->setProperty("AWDLLowLatencyActive", lowLatency);
         return kIOReturnSuccess;
-    }, this, d);
+    }, this, d, &serviceBit);
 }
 AWDL_SET_STUB(AWDL_SECONDARY_MASTER_CHANNEL, apple80211_awdl_secondary_master_channel)
 AWDL_SET_STUB(AWDL_MIN_RATE, apple80211_awdl_min_rate)

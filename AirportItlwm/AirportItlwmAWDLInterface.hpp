@@ -338,6 +338,11 @@ private:
     apple80211_awdl_sync_params fSyncParams;
     bool fSyncEnabled;
     uint32_t fSyncState;
+    enum {
+        kAwdlTrafficAirDrop = 1U << 0,
+        kAwdlTrafficSidecar = 1U << 1
+    };
+    uint8_t fAwdlTrafficMask;
     uint64_t fCallCount;
 };
 
