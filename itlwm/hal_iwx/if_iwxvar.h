@@ -380,6 +380,7 @@ struct iwx_rx_ring {
 	void	        *stat;
 	struct iwx_rx_data	data[IWX_RX_MQ_RING_COUNT];
 	int			cur;
+	bool			next_fragment;
 };
 
 #define IWX_FLAG_USE_ICT	0x01	/* using Interrupt Cause Table */
@@ -569,6 +570,7 @@ struct iwx_rxba_data {
     uint32_t sta_mask;
     uint8_t tid;
     uint8_t baid;
+    uint16_t start_sn;
     uint16_t timeout;
     uint16_t entries_per_queue;
     struct timeval last_rx;
@@ -620,6 +622,14 @@ struct iwx_setkey_arg {
 	struct ieee80211_key *k;
 };
 #define IWX_SETKEY_NKEYS 4
+#define IWX_AWDL_KEY_SLOTS 32
+
+struct iwx_awdl_key {
+	struct ieee80211_key key;
+	uint8_t addr[IEEE80211_ADDR_LEN];
+	uint8_t flags;
+	uint8_t valid;
+};
 
 #include "iwx_be_config.h"
 
@@ -838,7 +848,7 @@ struct iwx_softc {
 	struct iwx_nvm_data sc_nvm;
 	struct iwx_bf_data sc_bf;
 
-	int sc_tx_timer;
+	int sc_tx_timer[IWX_MAX_TVQM_QUEUES];
 	int sc_rx_ba_sessions;
 
 	int sc_scan_last_antenna;
@@ -904,6 +914,28 @@ struct iwx_softc {
 	uint8_t sc_listener_up;	/* the LISTENER MAC, link, station and queue exist and are active */
 	uint8_t sc_listener_chan;
 	uint8_t sc_listener_width;     /* MHz, 20 or 80 (legacy listener only) */
+	struct task sc_awdl_peer_task;
+	struct iwx_awdl_key sc_awdl_keys[IWX_AWDL_KEY_SLOTS];
+	uint32_t sc_awdl_encryption_type;
+	uint8_t sc_awdl_low_latency;
+	uint8_t sc_awdl_peer_addr[IEEE80211_ADDR_LEN];
+	uint8_t sc_awdl_peer_target[IEEE80211_ADDR_LEN];
+	int sc_awdl_peer_qid;       /* non-QoS data, TID 0 */
+	int sc_awdl_peer_mgmt_qid;  /* management/action frames, TID 15 */
+	int sc_awdl_listener_data_qid; /* group data, listener STA TID 0 */
+	int sc_awdl_peer_error;
+	uint8_t sc_awdl_peer_added;
+	uint8_t sc_awdl_peer_busy;
+	uint8_t sc_awdl_ba_pending;
+	uint8_t sc_awdl_ba_tid;
+	uint8_t sc_awdl_ba_start;
+	uint16_t sc_awdl_ba_ssn;
+	uint16_t sc_awdl_ba_winsize;
+	uint8_t sc_awdl_ba_peer[IEEE80211_ADDR_LEN];
+	int sc_awdl_ba_error;
+	uint8_t sc_awdl_ba_reply[sizeof(struct ieee80211_frame) + 9];
+	uint8_t sc_awdl_ba_reply_pending;
+	uint8_t sc_awdl_ba_reply_chan;
 	uint8_t sc_awdl_rate_step;     /* data-frame rate ladder on the legacy listener, 0 = 54 Mbit/s OFDM */
 	uint16_t sc_awdl_rate_ok, sc_awdl_rate_fail;
 	uint8_t sc_listener_tries;
@@ -975,6 +1007,7 @@ struct iwx_node {
 #define IWX_LISTENER_MAC_ID   2
 #define IWX_LISTENER_LINK_ID  3
 #define IWX_LISTENER_STA_ID   9
+#define IWX_AWDL_PEER_STA_ID 10
 #define IWX_MONITOR_STA_ID 2
 
 #define IWX_ICT_SIZE		4096

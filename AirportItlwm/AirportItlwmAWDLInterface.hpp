@@ -70,7 +70,7 @@ public:
     UInt32 dropOutput(mbuf_t m, void *param);
     uint64_t droppedPackets() const { return fDropped; }
     // Stage 4: an AWDL data frame for awdl0; consumes m, returns 1.
-    int inputAWDLData(mbuf_t m, class AirportItlwmAWDLInterface *awdl);
+    int inputAWDLData(mbuf_t m, class AirportItlwmAWDLInterface *awdl, struct ieee80211com *ic);
     // Stage 4 output: hand Ethernet frames to the AWDL interface's tx queue.
     UInt32 outputAWDL(mbuf_t m, void *param);
     void setAWDLOwner(class AirportItlwmAWDLInterface *owner) { fOwner = owner; }
@@ -225,6 +225,7 @@ private:
     uint64_t fListenOwn;            // own-sequence dwells started
     uint64_t fBssidSets;
     uint64_t fPeerCacheOps;
+    uint32_t fEncryptionType;
     uint64_t fDataTxNotCommon;      // data held: peer not on our channel now
     void startListen(unsigned chan, uint32_t dwellTU, unsigned home, bool aligned);
     IOTimerEventSource *fListenTimer;
@@ -265,7 +266,7 @@ private:
     uint64_t fListenOnChan[4];      // listens started on 6, 44, 149, 161
     void publishListenState();
     uint64_t hostRxUs(const ieee80211_rxinfo *rxi);
-    // Stage 3: transmit payloads handed down by the peer manager (recorded only).
+    // Stage 3: transmit PSF and MI payloads handed down by the peer manager.
     void recordOOB(const void *req, bool autoReq);
     uint8_t fSyncTmpl[512];         // PSF payload TLVs (SYNC_FRAME_TEMPLATE)
     uint16_t fSyncTmplLen;
@@ -279,8 +280,11 @@ private:
     // during each aligned listen dwell.
     static void txTimerFired(OSObject *owner, IOTimerEventSource *sender);
     void scheduleTx(uint8_t chan, uint64_t slotStartUs);
-    void sendAWDLFrame(bool mi);
-    size_t buildAWDLFrame(uint8_t *buf, size_t cap, bool mi, uint64_t nowUs);
+    void scheduleTxTimer();
+    int sendAWDLFrame(bool mi, uint8_t chan, const uint8_t *destination,
+        const uint8_t *payload, size_t payloadLen);
+    size_t buildAWDLFrame(uint8_t *buf, size_t cap, bool mi, uint64_t nowUs,
+        const uint8_t *destination, const uint8_t *payload, size_t payloadLen);
     void publishTxState();
     void publishAWDLAddress();
 public:
@@ -310,7 +314,10 @@ public:
 private:
     IOTimerEventSource *fTxTimer;
     uint8_t fTxChan;
-    uint8_t fTxPhase;               // 0 idle, 1 PSF next, 2 MI next
+    uint8_t fTxPending;              // Pending PSF, data and MI events
+    uint32_t fTxMIOffsetUs;
+    uint32_t fTxMIBitmap;
+    uint8_t fTxMISlot;
     uint64_t fTxSlotUs;
     uint16_t fTxSeq;                // 802.11 sequence number
     uint32_t fMasterChannel;        // setAWDL_MASTER_CHANNEL

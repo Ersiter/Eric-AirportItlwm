@@ -578,6 +578,18 @@ struct ieee80211com {
      */
     int             (*ic_awdl_tx)(struct ieee80211com *, uint8_t chan,
                         const uint8_t *frame, size_t len);
+    void            (*ic_awdl_peer_cache)(struct ieee80211com *, uint32_t,
+                        const uint8_t *);
+#define IEEE80211_AWDL_KEY_GROUP 0x01
+#define IEEE80211_AWDL_KEY_TX    0x02
+#define IEEE80211_AWDL_KEY_RX    0x04
+    int             (*ic_awdl_key)(struct ieee80211com *, const uint8_t *, uint8_t,
+                        const uint8_t *, uint8_t, uint32_t, uint64_t, int);
+    int             (*ic_awdl_crypto)(struct ieee80211com *, mbuf_t *, int);
+    int             (*ic_awdl_set_encryption)(struct ieee80211com *, uint32_t);
+    int             (*ic_awdl_set_low_latency)(struct ieee80211com *, int);
+    int             (*ic_awdl_rx_ba)(struct ieee80211com *, const uint8_t *,
+                        uint8_t, uint16_t, uint16_t, int, const uint8_t *, uint8_t);
     uint32_t        ic_awdl_tx_sent;     /* queued to the firmware */
     uint32_t        ic_awdl_tx_busy;     /* refused: not dwelling on chan */
     uint32_t        ic_awdl_tx_err;      /* refused: ring full, no mbuf, DMA */
@@ -605,7 +617,7 @@ struct ieee80211com {
     uint8_t         ic_awdl_rx_uc_last_src[IEEE80211_ADDR_LEN];
     uint8_t         ic_awdl_rx_uc_last_chan;
     uint32_t        ic_awdl_rx_uc_by_chan[4];   /* unicast to awdl0 heard on 6, 44, 149, other */
-    /* ADDBA requests from AWDL peers, refused so the peer sends plain MPDUs the firmware ACKs. */
+    /* AWDL Block Ack negotiation handled against the listener peer station. */
     uint32_t        ic_awdl_ba_req;
     uint32_t        ic_awdl_ba_resp_sent;
     uint8_t         ic_awdl_listener_chan;  /* standing listener's channel, 0 = none */
@@ -614,7 +626,7 @@ struct ieee80211com {
     int             ic_awdl_listener_code;  /* error of that stage */
     uint32_t        ic_awdl_ba_resp_err;
     uint16_t        ic_awdl_ba_resp_seq;
-    int             ic_awdl_ba_accept;      /* -itlawdlbaaccept: answer ADDBA with success, window 1 */
+    int             ic_awdl_ba_accept;      /* legacy listener's optional single-frame BA */
     uint32_t        ic_awdl_p2p_addr_changes;
     /*
      * Frames whose addr1 is ic_awdl_addr, counted in the driver right after

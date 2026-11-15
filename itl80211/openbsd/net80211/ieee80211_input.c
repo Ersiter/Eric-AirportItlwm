@@ -634,6 +634,17 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
     subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
     
 #ifdef AIRPORT_WCL
+    if (ic->ic_awdl_addr_gen && ic->ic_awdl_data_handler &&
+        type == IEEE80211_FC0_TYPE_DATA && mbuf_len(m) >= sizeof(struct ieee80211_frame) &&
+        IEEE80211_IS_MULTICAST(wh->i_addr1)) {
+        static const uint8_t awdl_bssid[IEEE80211_ADDR_LEN] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
+        const uint8_t *bssid = ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : awdl_bssid;
+        if (IEEE80211_ADDR_EQ(wh->i_addr3, bssid) &&
+            (*ic->ic_awdl_data_handler)(ic, m, rxi)) {
+            m = NULL;
+            goto out;
+        }
+    }
     if (ic->ic_awdl_addr_gen && type != IEEE80211_FC0_TYPE_CTL &&
         mbuf_len(m) >= sizeof(struct ieee80211_frame) &&
         IEEE80211_ADDR_EQ(wh->i_addr1, ic->ic_awdl_addr)) {
@@ -648,16 +659,33 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
         ic->ic_awdl_rx_uc_last_chan = rxi ? (uint8_t)rxi->rxi_chan : 0;
         ic->ic_awdl_rx_uc_by_chan[ic->ic_awdl_rx_uc_last_chan == 6 ? 0 : ic->ic_awdl_rx_uc_last_chan == 44 ? 1 :
             ic->ic_awdl_rx_uc_last_chan == 149 ? 2 : 3]++;
-        /*
-         * The peer wants a Block Ack agreement with awdl0. Nothing here keeps a
-         * reorder window or lets the firmware score A-MPDUs for this address,
-         * so refuse: the peer then sends ordinary MPDUs, which the firmware ACKs.
-         * Unanswered, the peer keeps retrying and holds its data back.
-         */
+        if (type == IEEE80211_FC0_TYPE_MGT && subtype == IEEE80211_FC0_SUBTYPE_ACTION &&
+            mbuf_len(m) >= sizeof(struct ieee80211_frame) + 6 &&
+            ic->ic_awdl_rx_ba) {
+            const uint8_t *body = (const uint8_t *)&wh[1];
+            if (body[0] == IEEE80211_CATEG_BA && body[1] == IEEE80211_ACTION_DELBA) {
+                uint16_t params = body[2] | ((uint16_t)body[3] << 8);
+                if (params & 0x0800) {
+                    if (ic->ic_awdl_rx_ba)
+                        (*ic->ic_awdl_rx_ba)(ic, wh->i_addr2, (params >> 12) & 0xf, 0, 0, 0, NULL, 0);
+                }
+                goto out;
+            }
+            if (mbuf_len(m) >= sizeof(struct ieee80211_frame) + 9 &&
+                body[0] == IEEE80211_CATEG_BA && body[1] == IEEE80211_ACTION_ADDBA_RESP)
+                goto out;
+        }
+        /* Establish the firmware receive session before acknowledging ADDBA. */
         if (type == IEEE80211_FC0_TYPE_MGT && subtype == IEEE80211_FC0_SUBTYPE_ACTION &&
             mbuf_len(m) >= sizeof(struct ieee80211_frame) + 9 && rxi && ic->ic_awdl_tx) {
             const uint8_t *body = (const uint8_t *)&wh[1];
             if (body[0] == IEEE80211_CATEG_BA && body[1] == IEEE80211_ACTION_ADDBA_REQ) {
+                uint16_t params = body[3] | ((uint16_t)body[4] << 8);
+                uint16_t winsize = (params >> 6) & 0x3ff;
+                int accept_ba = (ic->ic_awdl_ba_accept || ic->ic_awdl_rx_ba != NULL) &&
+                    (params & 0x0002);
+                if (!winsize || winsize > 64)
+                    winsize = 64;
                 uint8_t rsp[sizeof(struct ieee80211_frame) + 9];
                 struct ieee80211_frame *rh = (struct ieee80211_frame *)rsp;
                 uint16_t rseq = (uint16_t)(ic->ic_awdl_ba_resp_seq++ << 4);
@@ -671,14 +699,8 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
                 rsp[sizeof(*rh) + 0] = IEEE80211_CATEG_BA;
                 rsp[sizeof(*rh) + 1] = IEEE80211_ACTION_ADDBA_RESP;
                 rsp[sizeof(*rh) + 2] = body[2];                 /* dialog token */
-                if (ic->ic_awdl_ba_accept) {
-                    /*
-                     * The peer may be waiting for an agreement before it sends data at all
-                     * (a refusal gave 12 requests and no data frame in 6 minutes). Accept with a
-                     * window of one MPDU and no A-MSDU: the firmware has no receive reorder state
-                     * for awdl0, so the peer is asked to send single frames, which it ACKs.
-                     */
-                    uint16_t bp = (uint16_t)((body[3] | (body[4] << 8)) & 0x003e) | (1 << 6); /* tid + policy, size 1 */
+                if (accept_ba) {
+                    uint16_t bp = (params & 0x003e) | ((ic->ic_awdl_rx_ba ? winsize : 1) << 6);
                     rsp[sizeof(*rh) + 3] = IEEE80211_STATUS_SUCCESS & 0xff;
                     rsp[sizeof(*rh) + 4] = IEEE80211_STATUS_SUCCESS >> 8;
                     rsp[sizeof(*rh) + 5] = bp & 0xff;
@@ -688,6 +710,18 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
                     rsp[sizeof(*rh) + 4] = IEEE80211_STATUS_REFUSED >> 8;
                     rsp[sizeof(*rh) + 5] = body[3] & ~0x01;     /* BA parameters as asked, no A-MSDU */
                     rsp[sizeof(*rh) + 6] = body[4];
+                }
+                if (accept_ba && ic->ic_awdl_rx_ba) {
+                    int ba_result = (*ic->ic_awdl_rx_ba)(ic, wh->i_addr2,
+                        (params >> 2) & 0xf,
+                        (body[7] | ((uint16_t)body[8] << 8)) >> 4, winsize, 1,
+                        rsp, (uint8_t)rxi->rxi_chan);
+                    if (ba_result == EAGAIN)
+                        goto out;
+                    if (ba_result) {
+                        rsp[sizeof(*rh) + 3] = IEEE80211_STATUS_REFUSED & 0xff;
+                        rsp[sizeof(*rh) + 4] = IEEE80211_STATUS_REFUSED >> 8;
+                    }
                 }
                 ic->ic_awdl_ba_req++;
                 if ((*ic->ic_awdl_tx)(ic, (uint8_t)rxi->rxi_chan, rsp, sizeof(rsp)) == 0)

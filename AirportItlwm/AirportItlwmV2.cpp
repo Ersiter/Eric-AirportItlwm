@@ -519,7 +519,7 @@ int AirportItlwm::awdlDataFrameHandler(struct ieee80211com *ic, mbuf_t m, struct
     AirportItlwm *that = OSDynamicCast(AirportItlwm, ic->ic_ac.ac_if.controller);
     if (!that || !that->fAWDLIf || !that->fAWDLBsdIf)
         return 0;
-    return that->fAWDLBsdIf->inputAWDLData(m, that->fAWDLIf);
+    return that->fAWDLBsdIf->inputAWDLData(m, that->fAWDLIf, ic);
 #else
     return 0;
 #endif

@@ -432,7 +432,19 @@ public:
     static int    iwx_bgscan(struct ieee80211com *);
     static int    iwx_awdl_listen(struct ieee80211com *, uint8_t, uint16_t);
     static int    iwx_awdl_tx(struct ieee80211com *, uint8_t, const uint8_t *, size_t);
-    int    iwx_awdl_tx_frame(struct iwx_softc *, const uint8_t *, size_t);
+    static void   iwx_awdl_peer_cache(struct ieee80211com *, uint32_t, const uint8_t *);
+    static int    iwx_awdl_key(struct ieee80211com *, const uint8_t *, uint8_t,
+                        const uint8_t *, uint8_t, uint32_t, uint64_t, int);
+    static int    iwx_awdl_crypto(struct ieee80211com *, mbuf_t *, int);
+    static int    iwx_awdl_set_encryption(struct ieee80211com *, uint32_t);
+    static int    iwx_awdl_set_low_latency(struct ieee80211com *, int);
+    void   iwx_awdl_clear_keys(struct iwx_softc *);
+    int    iwx_awdl_update_power(struct iwx_softc *);
+    int    iwx_awdl_tx_frame(struct iwx_softc *, const uint8_t *, size_t, int);
+    static void iwx_awdl_peer_task(void *);
+    static int iwx_awdl_rx_ba(struct ieee80211com *, const uint8_t *, uint8_t, uint16_t, uint16_t, int, const uint8_t *, uint8_t);
+    int iwx_awdl_ba_apply(struct iwx_softc *, uint8_t, uint16_t, uint16_t, int);
+    void iwx_awdl_ba_reply(struct iwx_softc *);
     int    iwx_awdl_listen_v14(struct iwx_softc *, uint8_t, uint16_t);
     void   iwx_awdl_listen_abort(struct iwx_softc *);
     int    iwx_aux_roc(struct iwx_softc *, uint8_t, uint16_t);
