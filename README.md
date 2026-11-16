@@ -72,7 +72,6 @@ regulatory logic, as on Linux. There is nothing to set.
 | Argument | Effect |
 |---|---|
 | `itlwm_he=0` | Turn HE/EHT (802.11ax/be) off. On by default |
-| `itlwm_gl_api=86` | Limit BE200/BE202 to firmware API 86 |
 | `-itlawdl` | Experimental AirDrop: this one switch turns on all of it, see below. Leave out unless testing |
 
 ## Continuity

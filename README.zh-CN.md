@@ -60,7 +60,6 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 | 参数 | 作用 |
 |---|---|
 | `itlwm_he=0` | 关闭 HE/EHT（802.11ax/be），默认开启 |
-| `itlwm_gl_api=86` | BE200/BE202 限定固件 API 86 |
 | `-itlawdl` | 实验性隔空投送，这一个开关就带上全部，见下文，不测试就别加 |
 
 ## 接续互通

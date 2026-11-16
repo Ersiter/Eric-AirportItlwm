@@ -136,7 +136,7 @@ def page(code, folder, native, hl):
     ]
     cards_html = '\n'.join('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' % (
         '<span class="nw">%s</span>' % g, m, p, h) for g, m, p, h in cards_rows)
-    boot_codes = ['itlwm_he=0', 'itlwm_gl_api=86', '-itlawdl']
+    boot_codes = ['itlwm_he=0', '-itlawdl']
     boot_rows = '\n'.join('<tr><td><code>%s</code></td><td>%s</td></tr>' % (c, md_(e))
                           for c, e in zip(boot_codes, t['boot']))
     cred = '\n'.join('<li>%s</li>' % md_(c) for c in t['cred'])
