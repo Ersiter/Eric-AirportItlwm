@@ -880,6 +880,13 @@ teardownAW()
             fTxTimer->getWorkLoop()->removeEventSource(fTxTimer);
         OSSafeReleaseNULL(fTxTimer);
     }
+    if (fPeerCacheTimer) {
+        fPeerCacheTimer->cancelTimeout();
+        if (fPeerCacheTimer->getWorkLoop())
+            fPeerCacheTimer->getWorkLoop()->removeEventSource(fPeerCacheTimer);
+        OSSafeReleaseNULL(fPeerCacheTimer);
+    }
+    fPeerCacheDoneCount = 0;
     if (!fAWTimer)
         return;
     fAWTimer->cancelTimeout();
@@ -2367,6 +2374,13 @@ withController(AirportItlwm *controller, ether_addr *mac)
         AWDL_LOG("AW timer setup failed");
         OSSafeReleaseNULL(ifp->fAWTimer);
     }
+    ifp->fPeerCacheTimer = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsPriorityHigh,
+                                                                ifp, &AirportItlwmAWDLInterface::peerCacheTimerFired);
+    if (!ifp->fPeerCacheTimer || !controller->getWorkLoop() ||
+        controller->getWorkLoop()->addEventSource(ifp->fPeerCacheTimer) != kIOReturnSuccess) {
+        AWDL_LOG("peer cache timer setup failed");
+        OSSafeReleaseNULL(ifp->fPeerCacheTimer);
+    }
     if (awListenAllowed()) {
         ifp->fListenTimer = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsPriorityHigh,
                                                                  ifp, &AirportItlwmAWDLInterface::listenTimerFired);
@@ -2406,6 +2420,8 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fRxAF = 0;
     fRxAFDropped = 0;
     fAWTimer = nullptr;
+    fPeerCacheTimer = nullptr;
+    fPeerCacheDoneCount = fPeerCacheCompleted = fPeerCacheDropped = 0;
     fAWRunning = false;
     fRefUs = 0;
     fRefSeq = 0;
@@ -2724,9 +2740,49 @@ setPEER_CACHE_CONTROL(apple80211_peer_cache_control *d)
             ieee80211com *ic = that->fController->fHalService->get80211Controller();
             if (ic && ic->ic_awdl_peer_cache)
                 ic->ic_awdl_peer_cache(ic, (uint32_t)(uintptr_t)operation, (const uint8_t *)data);
+            // Answer it, after this handler has returned and the caller is asleep (see the member comment).
+            if (that->fPeerCacheTimer) {
+                if (that->fPeerCacheDoneCount < kPeerCacheQueueDepth) {
+                    uint8_t *slot = that->fPeerCacheDone[that->fPeerCacheDoneCount++];
+                    memcpy(slot, (const uint8_t *)data - 8, kPeerCacheBytes);
+                    const uint32_t result = (uint32_t)(uintptr_t)operation == 2 ? 3 : 1;
+                    memcpy(slot + 4, &result, sizeof(result));
+                    that->fPeerCacheTimer->setTimeoutMS(10);
+                } else {
+                    that->fPeerCacheDropped++;
+                }
+            }
             return kIOReturnSuccess;
         }, this, (void *)(r + 8), (void *)(uintptr_t)op);
     return kIOReturnSuccess;
+}
+
+void AirportItlwmAWDLInterface::
+peerCacheTimerFired(OSObject *owner, IOTimerEventSource *)
+{
+    if (auto *self = OSDynamicCast(AirportItlwmAWDLInterface, owner))
+        self->postPeerCacheCompletions();
+}
+
+void AirportItlwmAWDLInterface::
+postPeerCacheCompletions()
+{
+#ifndef APPLE80211_M_PEER_CACHE_CONTROL
+#define APPLE80211_M_PEER_CACHE_CONTROL 51
+#endif
+    unsigned count = fPeerCacheDoneCount;
+    fPeerCacheDoneCount = 0;
+    for (unsigned i = 0; i < count; i++) {
+        uint8_t record[kPeerCacheBytes];
+        memcpy(record, fPeerCacheDone[i], sizeof(record));
+        postMessage(APPLE80211_M_PEER_CACHE_CONTROL, record, sizeof(record), false);
+        fPeerCacheCompleted++;
+    }
+    if (count) {
+        setProperty("AWDLPeerCacheCompleted", fPeerCacheCompleted, 32);
+        if (fPeerCacheDropped)
+            setProperty("AWDLPeerCacheDropped", fPeerCacheDropped, 32);
+    }
 }
 
 IOReturn AirportItlwmAWDLInterface::

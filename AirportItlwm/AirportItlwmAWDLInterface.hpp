@@ -226,6 +226,16 @@ private:
     uint64_t fListenOwn;            // own-sequence dwells started
     uint64_t fBssidSets;
     uint64_t fPeerCacheOps;
+    // The family sleeps after setPEER_CACHE_CONTROL until event 51 comes back with the same 464-byte record and +4 set
+    // to 1 (added) or 3 (deleted), as Broadcom's firmware completion does (ForbiddenItlwm PR #57, read on Sequoia
+    // 24H232). A wakeup posted from inside the handler is lost, because the caller has not gone to sleep yet, so the
+    // completion is queued and posted by a timer on the controller work loop after the handler has returned.
+    static constexpr unsigned kPeerCacheBytes = 464, kPeerCacheQueueDepth = 8;
+    uint8_t fPeerCacheDone[kPeerCacheQueueDepth][kPeerCacheBytes];
+    unsigned fPeerCacheDoneCount, fPeerCacheCompleted, fPeerCacheDropped;
+    IOTimerEventSource *fPeerCacheTimer;
+    static void peerCacheTimerFired(OSObject *, IOTimerEventSource *);
+    void postPeerCacheCompletions();
     uint32_t fEncryptionType;
     uint64_t fDataTxNotCommon;      // data held: peer not on our channel now
     void startListen(unsigned chan, uint32_t dwellTU, unsigned home, bool aligned);
