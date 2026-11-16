@@ -320,6 +320,8 @@ public:
     int    iwm_tx(struct iwm_softc *, mbuf_t, struct ieee80211_node *, int);
     static int    iwm_awdl_listen(struct ieee80211com *, uint8_t, uint16_t);
     static int    iwm_awdl_tx(struct ieee80211com *, uint8_t, const uint8_t *, size_t);
+    static void    iwm_awdl_ba_task(void *);
+    void    iwm_awdl_ba_clear(struct iwm_softc *);
     static int    iwm_awdl_key(struct ieee80211com *, const uint8_t *, uint8_t,
                                const uint8_t *, uint8_t, uint32_t, uint64_t, int);
     static int    iwm_awdl_crypto(struct ieee80211com *, mbuf_t *, int);
