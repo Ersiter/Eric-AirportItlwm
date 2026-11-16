@@ -934,7 +934,7 @@ struct iwx_softc {
 	uint8_t sc_listener_chan;
 	/* -itlawdllegacyba: a firmware receive Block Ack session for the AWDL peer on pre-MLD firmware. */
 	uint8_t sc_legacy_ba_peer[ETHER_ADDR_LEN];
-	uint8_t sc_legacy_ba_peer_added;
+	uint8_t sc_legacy_ba_peer_added, sc_legacy_ba_remove;
 	uint16_t sc_legacy_ba_tids;		/* TIDs with an open session */
 	int sc_legacy_ba_quarantine;		/* generation in which a command failed; no more attempts in it */
 	uint8_t sc_legacy_ba_stage;

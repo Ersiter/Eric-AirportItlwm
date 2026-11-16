@@ -5773,7 +5773,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
         isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_MLD_API_SUPPORT);
     sc->sc_ic.ic_awdl_llw_tx = sc->sc_use_mld_api ? iwx_awdl_tx : NULL;
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
-    sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api ? iwx_awdl_peer_cache : NULL;
+    sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_peer_cache : NULL;
 #ifdef AIRPORT_VTD
     sc->sc_ic.ic_defer_eapol_key_input = sc->sc_use_mld_api ?
         iwx_defer_eapol_key_input : NULL;
@@ -11077,8 +11077,16 @@ iwx_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer)
 {
     struct iwx_softc *sc = (struct iwx_softc *)IC2IFP(ic)->if_softc;
     static const uint8_t zero[IEEE80211_ADDR_LEN] = {};
-    if (!sc->sc_use_mld_api || IEEE80211_IS_MULTICAST(peer) || IEEE80211_ADDR_EQ(peer, zero))
+    if (IEEE80211_IS_MULTICAST(peer) || IEEE80211_ADDR_EQ(peer, zero))
         return;
+    if (!sc->sc_use_mld_api) {
+        if (op == 2 && sc->sc_legacy_ba_peer_added && IEEE80211_ADDR_EQ(peer, sc->sc_legacy_ba_peer)) {
+            sc->sc_legacy_ba_remove = 1;
+            if (sc->sc_listener_up)
+                task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
+        }
+        return;
+    }
     if (op == 2) {
         if (IEEE80211_ADDR_EQ(sc->sc_awdl_peer_target, peer))
             memset(sc->sc_awdl_peer_target, 0, IEEE80211_ADDR_LEN);
@@ -11350,6 +11358,26 @@ iwx_legacy_ba_step(struct iwx_softc *sc)
     if (!sc->sc_listener_up || sc->sc_awdl_peer_busy ||
         (sc->sc_flags & (IWX_FLAG_SHUTDOWN | IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)))
         return;
+    if (sc->sc_legacy_ba_remove && !sc->sc_awdl_ba_pending && sc->sc_legacy_ba_peer_added) {
+        /* macOS dropped the peer from its cache: the station goes, and the filter returns to what it was. */
+        sc->sc_legacy_ba_remove = 0;
+        sc->sc_awdl_peer_busy = 1;
+        sc->sc_legacy_ba_stage = 6;
+        err = iwx_legacy_ba_peer_remove(sc);
+        if (generation != sc->sc_generation)
+            return;
+        sc->sc_awdl_peer_busy = 0;
+        if (err) {
+            sc->sc_legacy_ba_quarantine = generation;
+        } else {
+            sc->sc_legacy_ba_peer_added = 0;
+            sc->sc_legacy_ba_tids = 0;
+            sc->sc_legacy_ba_removed++;
+            iwx_awdl_listener_refit(sc);
+        }
+        iwx_legacy_ba_publish(sc);
+        return;
+    }
     if (!sc->sc_awdl_ba_pending && !sc->sc_awdl_ba_reply_pending)
         return;
     sc->sc_awdl_peer_busy = 1;
@@ -13030,8 +13058,14 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
                 return;
         }
         /* The firmware does not acknowledge a receive Block Ack session's frames while the filter is promiscuous. */
+        /*
+         * Off for as long as the peer's firmware station exists, not only while a receive TID is open: the TID is
+         * dropped after a minute idle but the station lives on, and with promiscuous receive on in that gap the
+         * firmware does not acknowledge the phone's replies to a send we start (AirportIntel / ForbiddenItlwm
+         * PR #57, 2026-11-15 tests: two minutes of silence).
+         */
         const bool sameChannel = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan) == sc->sc_listener_chan ||
-            sc->sc_legacy_ba_tids;
+            sc->sc_legacy_ba_peer_added;
         if ((err = iwx_legacy_listener_mac(sc, IWX_FW_CTXT_ACTION_MODIFY, sc->sc_listener_chan,
             sameChannel)) != 0)
             ic->ic_awdl_listener_code = err;
