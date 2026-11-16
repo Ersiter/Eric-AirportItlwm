@@ -335,21 +335,6 @@ iwx_mld_update_active_links(struct iwx_softc *sc, uint8_t link_mask,
 
     added = link_mask & ~old_links;
     removed = old_links & ~link_mask;
-    if (sc->sc_device_family == IWX_DEVICE_FAMILY_BZ) {
-        for (int i = 0; i < IWX_MLD_MAX_LINKS; i++) {
-            if (!(removed & (1U << i)))
-                continue;
-            err = iwx_mld_set_fw_link_active(this, sc, i, 0);
-            if (err) {
-                iwx_mld_log_failure(sc, "mld-link-update", "link-deactivate",
-                    err, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
-                        IWX_MLD_LINK_CONFIG_CMD), i);
-                goto rollback_added;
-            }
-            removed_done |= 1U << i;
-        }
-        removed = 0;
-    }
     for (int i = 0; i < IWX_MLD_MAX_LINKS; i++) {
         if (!(added & (1U << i)))
             continue;
@@ -409,10 +394,6 @@ rollback_added:
     for (int undo = 0; undo < IWX_MLD_MAX_LINKS; undo++)
         if (added_done & (1U << undo))
             iwx_mld_set_fw_link_active(this, sc, undo, 0);
-    if (sc->sc_device_family == IWX_DEVICE_FAMILY_BZ)
-        for (int undo = 0; undo < IWX_MLD_MAX_LINKS; undo++)
-            if (removed_done & (1U << undo))
-                iwx_mld_set_fw_link_active(this, sc, undo, 1);
     return err;
 }
 
