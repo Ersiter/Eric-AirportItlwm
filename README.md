@@ -72,6 +72,7 @@ regulatory logic, as on Linux. There is nothing to set.
 | Argument | Effect |
 |---|---|
 | `-itlawdl` | Experimental AirDrop: this one switch turns on all of it, see below. Leave out unless testing |
+| `-itlawdlac` | 9260/9560 only, next to `-itlawdl`: without it these cards stay on plain Wi-Fi |
 | `itlwm_he=0` | Turn HE/EHT (802.11ax/be) off. On by default |
 | `itlwm_log=1` | Verbose driver log in `dmesg`. Release builds only log errors and what the device is doing; Debug builds log everything |
 
@@ -91,12 +92,15 @@ radio (Wi-Fi 7 eMLSR is single radio too), so the firmware time-shares the two:
 - **BE cards** (MLD firmware): the same idea in the MLD command set, as a P2P client link next to the
   station link (the combination Linux allows on two channels). The firmware's activation rules are being
   worked out from its own code; not working yet.
-- **AC cards** (9260/9560): the same standing listener in the IWM firmware's command set; a test package exists and the first results on real hardware are pending. 9461/9462, 8265 and older: not planned.
+- **AC cards** (9260/9560): the same standing listener in the IWM firmware's command set; a test package exists and the first results on real hardware are pending (add `-itlawdlac` next to `-itlawdl`). 9461/9462, 8265 and older: not planned.
 
 Bluetooth LE advertising and scanning must work on macOS first. Test packages ship a matching
-[BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM) with `-btlfxadvsets` (LE advertising sets for
-third-party controllers, macOS 26.4–26.7.3) and `-btlfxrpa` (connecting to an iPhone that uses a private
-address; macOS 26.4 and 26.7 so far). With `-itlawdl` the driver first checks that Apple's AWDL interface
+[BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM) whose Intel patches are on by default: LE
+advertising sets for third-party controllers (macOS 26.4–26.7.3) and connecting to an iPhone that uses a
+private address (macOS 26.4 and 26.7 so far); `-btlfxnointel` turns them off. It works with Lilu,
+IntelBluetoothFirmware and IntelBTPatcher enabled. ForbiddenItlwm's BTLEAdvFixup does the same job with the
+stock BlueToolFixup instead: use one of the two, never both, and IntelBTPatcher must be off with BTLEAdvFixup
+(Lilu panics if both hook the same function). ForbiddenItlwm's `-itlawdlcoex*` arguments mean nothing here. With `-itlawdl` the driver first checks that Apple's AWDL interface
 table has the layout it was built for (`AWDLBuildCheck` in the I/O Registry) and otherwise runs as plain
 Wi-Fi, so a macOS update cannot turn it into a kernel panic. The listening channel is 149, then 44, then 6,
 and only one the country allows transmitting on (44 where there is no 149; a passive channel once a nearby

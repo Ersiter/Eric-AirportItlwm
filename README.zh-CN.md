@@ -60,6 +60,7 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 | 参数 | 作用 |
 |---|---|
 | `-itlawdl` | 实验性隔空投送，这一个开关就带上全部，见下文，不测试就别加 |
+| `-itlawdlac` | 仅 9260/9560，加在 `-itlawdl` 旁边：不加则这两张卡只做普通 Wi-Fi |
 | `itlwm_he=0` | 关闭 HE/EHT（802.11ax/be），默认开启 |
 | `itlwm_log=1` | 在 `dmesg` 里输出详细驱动日志。Release 版只记录错误和设备状态，Debug 版全部记录 |
 
@@ -76,11 +77,13 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
   在 AX211 上实现双向隔空的做法相同。
 - **BE 系列**（MLD 固件）：同样的思路换成 MLD 命令集，在主链路旁加一条 P2P 客户端链路（Linux 允许两条
   不同信道的组合）。正在按固件自身代码梳理它的激活条件，尚未走通。
-- **AC 系列**（9260/9560）：同样的常驻监听器，换成 IWM 固件的命令集；已有测试包，等第一批实机结果。9461/9462、8265 及更早的卡：不在计划内。
+- **AC 系列**（9260/9560）：同样的常驻监听器，换成 IWM 固件的命令集；已有测试包，等第一批实机结果（在 `-itlawdl` 之外再加 `-itlawdlac`）。9461/9462、8265 及更早的卡：不在计划内。
 
 前提是蓝牙 LE 广播与扫描在 macOS 上可用。测试包附带配套的 [BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM)，
-支持 `-btlfxadvsets`（第三方控制器的 LE 广播集，macOS 26.4–26.7.3）和 `-btlfxrpa`（连接使用私有地址的 iPhone，
-目前支持 macOS 26.4 与 26.7）。加了 `-itlawdl` 时，驱动先检查 Apple 的 AWDL 接口表是否与编译时一致
+它的 Intel 补丁默认开启：第三方控制器的 LE 广播集（macOS 26.4–26.7.3）、连接使用私有地址的 iPhone
+（目前支持 macOS 26.4 与 26.7），`-btlfxnointel` 可关闭。搭配 Lilu、IntelBluetoothFirmware、已启用的 IntelBTPatcher 使用。
+ForbiddenItlwm 的 BTLEAdvFixup 用原版 BlueToolFixup 做同样的事：两套任选其一，不要同时用；用 BTLEAdvFixup 时
+必须停用 IntelBTPatcher（两者钩同一个函数，Lilu 会 panic）。ForbiddenItlwm 的 `-itlawdlcoex*` 参数在这里没有意义。加了 `-itlawdl` 时，驱动先检查 Apple 的 AWDL 接口表是否与编译时一致
 （I/O Registry 里的 `AWDLBuildCheck`），不一致就只做普通 Wi-Fi，系统更新不会因此变成内核崩溃。
 监听信道依次选 149、44、6，只用当地允许发射的信道（没有 149 的国家用 44；被动信道在听到附近路由器的信标后
 才算可用）。149 最快：路由器在 149、iPhone 也在 149 或没连 Wi-Fi 时隔空速度最好。
