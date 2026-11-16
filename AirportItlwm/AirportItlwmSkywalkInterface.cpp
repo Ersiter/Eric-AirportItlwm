@@ -6,6 +6,7 @@
 //  Copyright © 2023 钟先耀. All rights reserved.
 //
 #include "AirportItlwmV2.hpp"
+#include <HAL/ItlAWDLBootArg.hpp>
 #include "AirportItlwmSkywalkInterface.hpp"
 #include <sys/CTimeout.hpp>
 #include <libkern/c++/OSMetaClass.h>
@@ -1119,7 +1120,7 @@ getHT_CAPABILITY(apple80211_ht_capability *d)
     static int awdl = -1;
     if (awdl < 0) {
         int v;
-        awdl = PE_parse_boot_argn("-itlawdl", &v, sizeof(v)) ? 1 : 0;
+        awdl = itlAWDLEnabled() ? 1 : 0;
     }
     struct ieee80211com *ic = fHalService ? fHalService->get80211Controller() : NULL;
     if (awdl != 1 || !d || !ic)

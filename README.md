@@ -100,7 +100,7 @@ advertising sets for third-party controllers (macOS 26.4–26.7.3) and connectin
 private address (macOS 26.4 and 26.7 so far); `-btlfxnointel` turns them off. It works with Lilu,
 IntelBluetoothFirmware and IntelBTPatcher enabled. ForbiddenItlwm's BTLEAdvFixup does the same job with the
 stock BlueToolFixup instead: use one of the two, never both, and IntelBTPatcher must be off with BTLEAdvFixup
-(Lilu panics if both hook the same function). ForbiddenItlwm's `-itlawdlcoex*` arguments mean nothing here. With `-itlawdl` the driver first checks that Apple's AWDL interface
+(Lilu panics if both hook the same function). Coming from ForbiddenItlwm: its `-itlawdliface` counts as `-itlawdl` and `-itlawdlcoexbatx` as `-itlawdllegacyba`; its other `-itlawdlcoex*` arguments mean nothing here. With `-itlawdl` the driver first checks that Apple's AWDL interface
 table has the layout it was built for (`AWDLBuildCheck` in the I/O Registry) and otherwise runs as plain
 Wi-Fi, so a macOS update cannot turn it into a kernel panic. The listening channel is 149, then 44, then 6,
 and only one the country allows transmitting on (44 where there is no 149; a passive channel once a nearby

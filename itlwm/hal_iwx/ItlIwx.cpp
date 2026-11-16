@@ -10687,8 +10687,7 @@ static bool iwx_awdl_legacy_ba_enabled()
 {
     static int enabled = -1;
     if (enabled < 0) {
-        int v;
-        enabled = PE_parse_boot_argn("-itlawdllegacyba", &v, sizeof(v)) ? 1 : 0;
+        enabled = itlAWDLLegacyBaFlag() ? 1 : 0;
     }
     return enabled == 1;
 }

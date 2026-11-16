@@ -355,7 +355,7 @@ bool AirportItlwm::start(IOService *provider)
         fHalService->get80211Controller()->ic_he_boot = he_enabled == 0 ? 2 : 1;
     if (he_enabled != 0)
         fHalService->get80211Controller()->ic_userflags |= IEEE80211_F_HEON;
-    fAWDLEnabled = PE_parse_boot_argn("-itlawdl", &boot_value, sizeof(boot_value));
+    fAWDLEnabled = itlAWDLEnabled();
     if (fAWDLEnabled) {
         // A macOS update that moves Apple's AWDL table would make awdl0 panic: plain Wi-Fi instead.
         const char *blocked = AirportItlwmAWDLInterface::nativeTableMismatch();

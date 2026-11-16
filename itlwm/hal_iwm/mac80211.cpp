@@ -120,6 +120,7 @@
  */
 
 #include "ItlIwm.hpp"
+#include <HAL/ItlAWDLBootArg.hpp>
 #include <net/ethernet.h>
 #include <IOKit/IOCommandGate.h>
 #include <net80211/ieee80211_priv.h>
@@ -3144,8 +3145,7 @@ static bool
 iwm_awdl_enabled(void)
 {
     int enabled = 0;
-    return PE_parse_boot_argn("-itlawdl", &enabled, sizeof(enabled)) &&
-        PE_parse_boot_argn("-itlawdlac", &enabled, sizeof(enabled));
+    return itlAWDLEnabled() && PE_parse_boot_argn("-itlawdlac", &enabled, sizeof(enabled));
 }
 
 int ItlIwm::

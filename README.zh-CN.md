@@ -83,7 +83,7 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 它的 Intel 补丁默认开启：第三方控制器的 LE 广播集（macOS 26.4–26.7.3）、连接使用私有地址的 iPhone
 （目前支持 macOS 26.4 与 26.7），`-btlfxnointel` 可关闭。搭配 Lilu、IntelBluetoothFirmware、已启用的 IntelBTPatcher 使用。
 ForbiddenItlwm 的 BTLEAdvFixup 用原版 BlueToolFixup 做同样的事：两套任选其一，不要同时用；用 BTLEAdvFixup 时
-必须停用 IntelBTPatcher（两者钩同一个函数，Lilu 会 panic）。ForbiddenItlwm 的 `-itlawdlcoex*` 参数在这里没有意义。加了 `-itlawdl` 时，驱动先检查 Apple 的 AWDL 接口表是否与编译时一致
+必须停用 IntelBTPatcher（两者钩同一个函数，Lilu 会 panic）。从 ForbiddenItlwm 换过来：它的 `-itlawdliface` 视同 `-itlawdl`，`-itlawdlcoexbatx` 视同 `-itlawdllegacyba`，其余 `-itlawdlcoex*` 在这里没有意义。加了 `-itlawdl` 时，驱动先检查 Apple 的 AWDL 接口表是否与编译时一致
 （I/O Registry 里的 `AWDLBuildCheck`），不一致就只做普通 Wi-Fi，系统更新不会因此变成内核崩溃。
 监听信道依次选 149、44、6，只用当地允许发射的信道（没有 149 的国家用 44；被动信道在听到附近路由器的信标后
 才算可用）。149 最快：路由器在 149、iPhone 也在 149 或没连 Wi-Fi 时隔空速度最好。
