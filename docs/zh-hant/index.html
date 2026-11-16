@@ -98,7 +98,7 @@
 <tr><td>WPA2 <wbr>個人級、<wbr>WPA2 <wbr>企業<wbr>級<wbr>（PEAP）、<wbr>WPA2/WPA3 <wbr>過<wbr>渡網路</td><td>全部</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span></td></tr>
 <tr><td>WPA3 <wbr>個人<wbr>級<wbr>（SAE、<wbr>H2E）、<wbr>增強型開放<wbr>網路<wbr>（OWE）</td><td>全部</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">BE200 <wbr>實機</span></td></tr>
 <tr><td><span class="nw">802.11ac</span><wbr>（VHT）、<wbr>160 MHz</td><td>AC 及以上</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span></td></tr>
-<tr><td><span class="nw">802.11ax</span><wbr>（HE）</td><td>AX、BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">BE <wbr>預設開啟，<wbr>AX <wbr>需 <code>itlwm_he=1</code></span></td></tr>
+<tr><td><span class="nw">802.11ax</span><wbr>（HE）</td><td>AX、BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span></td></tr>
 <tr><td>6 GHz</td><td>AX210/AX211/AX411、BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">BE200 <wbr>實機</span></td></tr>
 <tr><td><span class="nw">802.11be</span><wbr>（EHT）、<wbr>320 MHz、<wbr>多<wbr>連結<wbr>（eMLSR）</td><td>BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">320 MHz <wbr>實機；<wbr>可加入啟用 <wbr>MLO <wbr>的<wbr>路由<wbr>器；<wbr>連結配<wbr>對<wbr>仍屬實驗</span></td></tr>
 <tr><td>睡眠<wbr>喚醒、<wbr>韌體<wbr>出錯自動恢復</td><td>全部</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span></td></tr>
@@ -121,7 +121,7 @@
 <li>保留<wbr>一份<wbr>可以<wbr>開機<wbr>的 <wbr>EFI，<wbr>先用<wbr>隨身碟<wbr>測試。</li>
 </ol><p>國家<wbr>碼<wbr>與<wbr>可用<wbr>頻道<wbr>由<wbr>周圍<wbr>的<wbr>路由<wbr>器<wbr>透過<wbr>網卡<wbr>自身<wbr>的<wbr>法規<wbr>邏輯<wbr>決定，<wbr>與 <wbr>Linux <wbr>相同，<wbr>不需要<wbr>設定。</p>
 <h3>開機<wbr>參數</h3><div class="table-wrap"><table><thead><tr><th>參數</th><th>作用</th></tr></thead><tbody>
-<tr><td><code>itlwm_he=0 / 1</code></td><td>HE/EHT<wbr>（<span class="nw">802.11ax</span>/be）：<wbr><span class="nw">Wi-Fi 7</span> <wbr>網卡預設開啟，<wbr>設 <wbr>0 <wbr>可關閉；<wbr>AX <wbr>網卡需設 <wbr>1</td></tr>
+<tr><td><code>itlwm_he=0</code></td><td>關閉 <wbr>HE/EHT<wbr>（<span class="nw">802.11ax</span>/be），<wbr>預設開啟</td></tr>
 <tr><td><code>itlwm_gl_api=86</code></td><td>將 <wbr>BE200/BE202 <wbr>限定<wbr>為韌體 <wbr>API 86</td></tr>
 <tr><td><code>-itlawdl</code></td><td>實驗性<wbr>的 <wbr>AirDrop，<wbr>這<wbr>一個<wbr>開關<wbr>就<wbr>帶上<wbr>全部，<wbr>請見<wbr>下文，<wbr>不測試<wbr>請<wbr>勿加入</td></tr>
 </tbody></table></div></div></section>

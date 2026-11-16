@@ -98,7 +98,7 @@
 <tr><td>WPA2 Personnel, WPA2 Entreprise (PEAP), réseaux de transition WPA2/WPA3</td><td>toutes</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Fonctionne</span></td></tr>
 <tr><td>WPA3 Personnel (SAE, H2E), Enhanced Open (OWE)</td><td>toutes</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Fonctionne</span> <span class="snote">sur BE200</span></td></tr>
 <tr><td><span class="nw">802.11ac</span> (VHT), 160 MHz</td><td>AC et plus récentes</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Fonctionne</span></td></tr>
-<tr><td><span class="nw">802.11ax</span> (HE)</td><td>AX et BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Fonctionne</span> <span class="snote">BE activé par défaut, AX avec <code>itlwm_he=1</code></span></td></tr>
+<tr><td><span class="nw">802.11ax</span> (HE)</td><td>AX et BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Fonctionne</span></td></tr>
 <tr><td>6 GHz</td><td>AX210/AX211/AX411, BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Fonctionne</span> <span class="snote">sur BE200</span></td></tr>
 <tr><td><span class="nw">802.11be</span> (EHT), 320 MHz, <span class="nw">multi-lien</span> (eMLSR)</td><td>BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Fonctionne</span> <span class="snote">320 MHz sur matériel réel ; un routeur <span class="nw">multi-lien</span> est rejoint ; l'appairage des liens reste expérimental</span></td></tr>
 <tr><td>Veille et réveil, reprise après erreur du micrologiciel</td><td>toutes</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Fonctionne</span></td></tr>
@@ -121,7 +121,7 @@
 <li>Gardez une copie amorçable de votre EFI et testez d'abord depuis une clé USB.</li>
 </ol><p>Le pays et les canaux qui y sont autorisés viennent des réseaux environnants, grâce à la logique de réglementation de la carte <span class="nw">elle-même</span>, comme sous Linux. Il n'y a rien à régler.</p>
 <h3>Arguments de démarrage</h3><div class="table-wrap"><table><thead><tr><th>Argument</th><th>Effet</th></tr></thead><tbody>
-<tr><td><code>itlwm_he=0 / 1</code></td><td>HE/EHT (<span class="nw">802.11ax</span>/be) : activé par défaut sur les cartes <span class="nw">Wi-Fi 7</span>, <code>0</code> le désactive ; les cartes AX demandent <code>1</code></td></tr>
+<tr><td><code>itlwm_he=0</code></td><td>Désactive HE/EHT (<span class="nw">802.11ax</span>/be). Activé par défaut</td></tr>
 <tr><td><code>itlwm_gl_api=86</code></td><td>Limite les BE200/BE202 à l'API 86 du micrologiciel</td></tr>
 <tr><td><code>-itlawdl</code></td><td>AirDrop expérimental, voir <span class="nw">ci-dessous</span>. À n'utiliser que pour tester</td></tr>
 </tbody></table></div></div></section>

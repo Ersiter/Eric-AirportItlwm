@@ -349,12 +349,11 @@ bool AirportItlwm::start(IOService *provider)
         fHalService->get80211Controller()->ic_userflags |= IEEE80211_F_NOHT40;
 
 #ifdef AIRPORT_WCL
-    // itlwm_he=1 turns HE on for every card whose firmware can do it, itlwm_he=0 off; without it HE is on for the
-    // Wi-Fi 7 family, where 802.11be rides on it, and stays opt-in for the older AX cards.
+    // HE/EHT is on for every card whose firmware can do it; itlwm_he=0 turns it off.
     int he_enabled = -1;
     if (PE_parse_boot_argn("itlwm_he", &he_enabled, sizeof(he_enabled)))
-        fHalService->get80211Controller()->ic_he_boot = he_enabled == 1 ? 1 : 2;
-    if (he_enabled == 1)
+        fHalService->get80211Controller()->ic_he_boot = he_enabled == 0 ? 2 : 1;
+    if (he_enabled != 0)
         fHalService->get80211Controller()->ic_userflags |= IEEE80211_F_HEON;
     fAWDLEnabled = PE_parse_boot_argn("-itlawdl", &boot_value, sizeof(boot_value));
     if (fAWDLEnabled) {

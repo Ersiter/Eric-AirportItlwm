@@ -26,7 +26,7 @@ Every card it supported still works, on macOS's own Wi-Fi, with no HeliPort.
 | WPA2-Personal, WPA2-Enterprise (PEAP), WPA2/WPA3 transition networks | all | ✅ |
 | WPA3-Personal (SAE, H2E), Enhanced Open (OWE) | all | ✅ on BE200 |
 | 802.11ac (VHT), 160 MHz | AC and newer | ✅ |
-| 802.11ax (HE) | AX and BE | ✅ BE on by default, AX with `itlwm_he=1` |
+| 802.11ax (HE) | AX and BE | ✅ on by default |
 | 6 GHz | AX210/AX211/AX411, BE | ✅ on BE200 |
 | 802.11be (EHT), 320 MHz, multi-link (eMLSR) | BE | ✅ 320 MHz on hardware; a multi-link router joins; link pairing still experimental |
 | Sleep and wake, recovery from firmware errors | all | ✅ |
@@ -71,7 +71,7 @@ regulatory logic, as on Linux. There is nothing to set.
 
 | Argument | Effect |
 |---|---|
-| `itlwm_he=0` / `1` | HE/EHT (802.11ax/be): on by default for Wi-Fi 7 cards, `0` turns it off; AX cards need `1` |
+| `itlwm_he=0` | Turn HE/EHT (802.11ax/be) off. On by default |
 | `itlwm_gl_api=86` | Limit BE200/BE202 to firmware API 86 |
 | `-itlawdl` | Experimental AirDrop: this one switch turns on all of it, see below. Leave out unless testing |
 

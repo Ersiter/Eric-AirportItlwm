@@ -4803,7 +4803,7 @@ iwx_setup_he_rates(struct iwx_softc *sc)
     if ((sc->sc_use_mld_api ? !mld_he_api :
             (version != 1 && version != 2)) ||
         !sc->sc_nvm.sku_cap_11ax_enable ||
-        ic->ic_he_boot == 2 || (ic->ic_he_boot == 0 && !sc->sc_use_mld_api) ||
+        ic->ic_he_boot == 2 ||
         (ic->ic_userflags & IEEE80211_F_NOVHT))
         return;
     unsigned rx = iwx_num_of_ant(iwx_fw_valid_rx_ant(sc));

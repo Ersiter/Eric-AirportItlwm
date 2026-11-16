@@ -98,7 +98,7 @@
 <tr><td>WPA2 <wbr>个<wbr>人级、<wbr>WPA2 <wbr>企业级<wbr>（PEAP）、<wbr>WPA2/WPA3 <wbr>过<wbr>渡网络</td><td>全部</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span></td></tr>
 <tr><td>WPA3 <wbr>个<wbr>人<wbr>级<wbr>（SAE、<wbr>H2E）、<wbr>增强<wbr>型开放网络<wbr>（OWE）</td><td>全部</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">BE200 <wbr>实机</span></td></tr>
 <tr><td><span class="nw">802.11ac</span><wbr>（VHT）、<wbr>160 MHz</td><td>AC 及以上</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span></td></tr>
-<tr><td><span class="nw">802.11ax</span><wbr>（HE）</td><td>AX、BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">BE <wbr>默认<wbr>开启，<wbr>AX <wbr>需 <code>itlwm_he=1</code></span></td></tr>
+<tr><td><span class="nw">802.11ax</span><wbr>（HE）</td><td>AX、BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span></td></tr>
 <tr><td>6 GHz</td><td>AX210/AX211/AX411、BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">BE200 <wbr>实机</span></td></tr>
 <tr><td><span class="nw">802.11be</span><wbr>（EHT）、<wbr>320<wbr> MHz、<wbr>多链路<wbr>（eMLSR）</td><td>BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">320<wbr> MHz <wbr>实机；<wbr>可加入开启 <wbr>MLO <wbr>的<wbr>路由器；<wbr>链路配对<wbr>仍属实验</span></td></tr>
 <tr><td>睡眠<wbr>唤醒、<wbr>固件<wbr>出错<wbr>自动<wbr>恢复</td><td>全部</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span></td></tr>
@@ -121,7 +121,7 @@
 <li>保留<wbr>一份<wbr>能<wbr>启动<wbr>的 <wbr>EFI，<wbr>先用 <wbr>U <wbr>盘测试。</li>
 </ol><p>国<wbr>家<wbr>码<wbr>和<wbr>可用<wbr>信道<wbr>由<wbr>周围<wbr>的<wbr>路由<wbr>器经网卡<wbr>自身<wbr>的<wbr>法规<wbr>逻辑<wbr>确定，<wbr>与 <wbr>Linux <wbr>相同，<wbr>不需要<wbr>设置。</p>
 <h3>启动<wbr>参数</h3><div class="table-wrap"><table><thead><tr><th>参数</th><th>作用</th></tr></thead><tbody>
-<tr><td><code>itlwm_he=0 / 1</code></td><td>HE/EHT<wbr>（<span class="nw">802.11ax</span>/be）：<wbr><span class="nw">Wi-Fi 7</span> <wbr>网卡<wbr>默认<wbr>开启，<wbr>设 <wbr>0 <wbr>关闭；<wbr>AX <wbr>网卡需设 <wbr>1</td></tr>
+<tr><td><code>itlwm_he=0</code></td><td>关闭 <wbr>HE/EHT<wbr>（<span class="nw">802.11ax</span>/be），<wbr>默认<wbr>开<wbr>启</td></tr>
 <tr><td><code>itlwm_gl_api=86</code></td><td>BE200/BE202 <wbr>限定固件 <wbr>API 86</td></tr>
 <tr><td><code>-itlawdl</code></td><td>实验性<wbr>隔空投送，<wbr>这<wbr>一个<wbr>开关<wbr>就<wbr>带上<wbr>全部，<wbr>见下文，<wbr>不测试<wbr>就<wbr>别加</td></tr>
 </tbody></table></div></div></section>
