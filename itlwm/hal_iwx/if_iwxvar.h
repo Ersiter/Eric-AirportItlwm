@@ -335,6 +335,17 @@ struct iwx_dma_info {
     IODMACommand *cmd;
 };
 
+#define IWX_TX_TRACE_COUNT 48
+/* One TX_CMD as it went to the ring: enough to tell which frame a firmware assert named by queue and index. */
+struct iwx_tx_trace {
+	uint16_t qid, idx;
+	uint8_t tid, fc0, fc1, ntbs;
+	uint16_t len, hdrlen;
+	uint32_t offload, flags, rate;
+	uint16_t tb[4];
+	uint8_t cross4g;
+};
+
 struct iwx_tx_data {
 	bus_dmamap_t	map;
 	bus_addr_t	cmd_paddr;
@@ -849,6 +860,11 @@ struct iwx_softc {
 	struct iwx_bf_data sc_bf;
 
 	int sc_tx_timer[IWX_MAX_TVQM_QUEUES];
+	struct iwx_tx_trace sc_tx_trace[IWX_TX_TRACE_COUNT];	/* last TX commands, published when the firmware asserts */
+	uint32_t sc_tx_trace_next;
+	uint8_t sc_tlc_req[96];		/* the last TLC_MNG_CONFIG_CMD as sent */
+	uint8_t sc_tlc_req_len, sc_tlc_req_ver;
+	int sc_tx_progress;		/* a TX ring was reclaimed since the last watchdog tick */
 	int sc_rx_ba_sessions;
 
 	int sc_scan_last_antenna;

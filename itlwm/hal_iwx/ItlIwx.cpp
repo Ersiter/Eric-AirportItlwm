@@ -7147,18 +7147,17 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         qid = le16toh(ba_tfd->q_num);
         if (qid >= nitems(sc->txq) || !sc->txq[qid].ring_count)
             continue;
-        if (sc->sc_use_mld_api) {
-            // Match the station/TID queue before reclaiming its TX descriptors.
+        /*
+         * Linux reclaims on q_num and tfd_index alone, and so does the station. Only the AWDL peer's queues are
+         * matched against their TID, because those are the ones that share a firmware station with another path.
+         */
+        if (sc->sc_use_mld_api && ba_res->sta_id == IWX_AWDL_PEER_STA_ID) {
             const uint8_t tid = ba_tfd->tid;
             int expected_qid = IWX_INVALID_QUEUE;
-            if (ba_res->sta_id == IWX_AWDL_PEER_STA_ID) {
-                if (tid == 0)
-                    expected_qid = sc->sc_awdl_peer_qid;
-                else if (tid == 6)
-                    expected_qid = sc->sc_awdl_peer_llw_qid;
-            } else if (tid < IWX_MAX_TID_COUNT) {
-                expected_qid = sc->sc_tid_data[tid].qid;
-            }
+            if (tid == 0)
+                expected_qid = sc->sc_awdl_peer_qid;
+            else if (tid == 6)
+                expected_qid = sc->sc_awdl_peer_llw_qid;
             if (qid != expected_qid)
                 continue;
         }
@@ -7188,6 +7187,7 @@ iwx_ampdu_txq_advance(struct iwx_softc *sc, struct iwx_tx_ring *ring, int idx)
     }
     if (ring->queued != queued) {
         sc->sc_tx_timer[ring->qid] = ring->queued ? 15 : 0;
+        sc->sc_tx_progress = 1;
         getMainCommandGate()->commandWakeup(&ring->queued);
         if (!ring->queued && !sc->sc_awdl_peer_busy &&
             (ring->qid == sc->sc_awdl_peer_qid || ring->qid == sc->sc_awdl_peer_llw_qid ||
@@ -8676,6 +8676,30 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     
     iwx_tx_update_byte_tbl(sc, ring, idx, totlen, num_tbs);
     
+    {
+        struct iwx_tx_trace *trace = &sc->sc_tx_trace[sc->sc_tx_trace_next++ % IWX_TX_TRACE_COUNT];
+        trace->qid = ring->qid;
+        trace->idx = idx;
+        trace->tid = tid;
+        trace->fc0 = wh->i_fc[0];
+        trace->fc1 = wh->i_fc[1];
+        trace->ntbs = num_tbs;
+        trace->len = totlen;
+        trace->hdrlen = hdrlen;
+        trace->offload = offload_assist;
+        trace->flags = le32toh(flags);
+        trace->rate = le32toh(rate_n_flags);
+        trace->cross4g = 0;
+        for (int tb = 0; tb < 4 && tb < num_tbs; tb++)
+            trace->tb[tb] = le16toh(desc->tbs[tb].tb_len);
+        for (int tb = 0; tb < num_tbs && tb < IWX_TFH_NUM_TBS; tb++) {
+            uint64_t start;
+            memcpy(&start, &desc->tbs[tb].addr, sizeof(start));
+            start = le64toh(start);
+            if ((start >> 32) != ((start + le16toh(desc->tbs[tb].tb_len)) >> 32))
+                trace->cross4g |= 1 << tb;
+        }
+    }
     /* Kick TX ring. */
     ring->cur = (ring->cur + 1) % getTxQueueSize();
     IWX_WRITE(sc, IWX_HBUS_TARG_WRPTR, ring->qid << 16 | ring->cur);
@@ -13814,6 +13838,16 @@ iwx_rs_reset_amsdu(struct iwx_node *in)
     splx(s);
 }
 
+
+/* The TLC request is what a firmware assert on TX_CMD most needs next to it: keep the bytes that were sent. */
+static void
+iwx_note_tlc_request(struct iwx_softc *sc, uint8_t version, const void *cmd, size_t size)
+{
+    sc->sc_tlc_req_len = (uint8_t)MIN(size, sizeof(sc->sc_tlc_req));
+    sc->sc_tlc_req_ver = version;
+    memcpy(sc->sc_tlc_req, cmd, sc->sc_tlc_req_len);
+}
+
 int ItlIwx::
 iwx_rs_init(struct iwx_softc *sc, struct iwx_node *in, bool update)
 {
@@ -13877,11 +13911,17 @@ iwx_rs_init(struct iwx_softc *sc, struct iwx_node *in, bool update)
     }
     cfg_cmd.sta_id = sta_id;
     cfg_cmd.max_ch_width = update ? iwx_rs_fw_bw_from_sta_bw(ni->ni_chw) : IWX_RATE_MCS_CHAN_WIDTH_20;
+    /*
+     * The host builds A-MSDUs only for CCMP (iwx_tx_amsdu). Telling the firmware's rate scaling that this station
+     * takes them on a network where it never sends one leaves the two with different ideas of the link, and
+     * Linux likewise starts a station at 1 until the first rate notification allows more.
+     */
+    const bool amsdu = ni->ni_rsncipher == IEEE80211_CIPHER_CCMP;
     if (ni->ni_flags & (IEEE80211_NODE_HE | IEEE80211_NODE_EHT |
         IEEE80211_NODE_VHT))
-        cfg_cmd.max_mpdu_len = htole16(3895);
+        cfg_cmd.max_mpdu_len = htole16(amsdu ? 3895 : 0);
     else if (ni->ni_flags & IEEE80211_NODE_HT)
-        cfg_cmd.max_mpdu_len = htole16(3839);
+        cfg_cmd.max_mpdu_len = htole16(amsdu ? 3839 : 0);
     else
         cfg_cmd.max_mpdu_len = htole16(IEEE80211_MAX_LEN);
     in->in_max_mpdu_len = le16toh(cfg_cmd.max_mpdu_len);
@@ -13950,10 +13990,12 @@ iwx_rs_init(struct iwx_softc *sc, struct iwx_node *in, bool update)
         }
         if (cfg_cmd_v6.phy_id == htole32(IWX_FW_CTXT_INVALID))
             return ENXIO;
+        iwx_note_tlc_request(sc, 6, &cfg_cmd_v6, sizeof(cfg_cmd_v6));
         return iwx_send_cmd_pdu(sc, cmd_id, IWX_CMD_ASYNC,
             sizeof(cfg_cmd_v6), &cfg_cmd_v6);
     }
     if (cmdver == 4) {
+        iwx_note_tlc_request(sc, 4, &cfg_cmd, sizeof(cfg_cmd));
         return iwx_send_cmd_pdu(sc, cmd_id, IWX_CMD_ASYNC,
                                 sizeof(cfg_cmd), &cfg_cmd);
     } else if (cmdver < 4 || cmdver == IWX_FW_CMD_VER_UNKNOWN) {
@@ -13979,6 +14021,7 @@ iwx_rs_init(struct iwx_softc *sc, struct iwx_node *in, bool update)
         if (cmdver == IWX_FW_CMD_VER_UNKNOWN || cmdver < 3)
             cmd_size -= 4;
         
+        iwx_note_tlc_request(sc, 3, &cfg_cmd_v3, cmd_size);
         return iwx_send_cmd_pdu(sc, cmd_id, IWX_CMD_ASYNC, cmd_size,
                                 &cfg_cmd_v3);
     } else {
@@ -16556,6 +16599,17 @@ iwx_watchdog(struct _ifnet *ifp)
     ItlIwx *that = container_of(sc, ItlIwx, com);
     
     ifp->if_timer = 0;
+    /*
+     * A queue that waits while another one is being served is not a hung device: the radio is shared between
+     * links and stations, and the firmware may serve one at a time. Only when nothing at all completed for
+     * 15 s does a queue with frames in it count as stuck, as with the single timer before.
+     */
+    if (sc->sc_tx_progress) {
+        sc->sc_tx_progress = 0;
+        for (int qid = 0; qid < nitems(sc->sc_tx_timer); qid++)
+            if (sc->sc_tx_timer[qid])
+                sc->sc_tx_timer[qid] = 15;
+    }
     for (int qid = 0; qid < nitems(sc->sc_tx_timer); qid++) {
         if (sc->sc_tx_timer[qid] == 0)
             continue;
@@ -16845,6 +16899,50 @@ iwx_desc_lookup(uint32_t num)
  * I'll just leave it in, just in case e.g. the Intel guys want to
  * help us decipher some "ADVANCED_SYSASSERT" later.
  */
+
+/*
+ * A TX_CMD assert names its frame only as queue and index (last_cmd). The last TX commands and the TLC request
+ * go into the registry with it, and the first of each is kept apart, because later asserts of a recovery loop
+ * overwrite everything else.
+ */
+static void
+iwx_publish_tx_state(struct iwx_softc *sc)
+{
+#ifdef AIRPORT_WCL
+    char line[160];
+    char map[80];
+    int n = 0;
+    map[0] = 0;
+    for (int tid = 0; tid < IWX_MAX_TID_COUNT; tid++)
+        n += snprintf(map + n, sizeof(map) - n, "%d:%d ", tid, (int)sc->sc_tid_data[tid].qid);
+    snprintf(line, sizeof(line), "tidq=%s first_data_qid=%d tlcver=%u tlclen=%u", map, (int)sc->first_data_qid,
+        sc->sc_tlc_req_ver, sc->sc_tlc_req_len);
+    OSString *text = OSString::withCString(line);
+    if (text) {
+        sc->sc_pcitag->setProperty("AirportItlwm-TxQueueMap", text);
+        if (!sc->sc_pcitag->getProperty("AirportItlwm-TxQueueMapFirst"))
+            sc->sc_pcitag->setProperty("AirportItlwm-TxQueueMapFirst", text);
+        text->release();
+    }
+    OSData *tlc = OSData::withBytes(sc->sc_tlc_req, sc->sc_tlc_req_len);
+    if (tlc) {
+        sc->sc_pcitag->setProperty("AirportItlwm-TLCConfigRequest", tlc);
+        tlc->release();
+    }
+    OSData *trace = OSData::withCapacity(sizeof(sc->sc_tx_trace));
+    if (trace) {
+        const uint32_t next = sc->sc_tx_trace_next;
+        const uint32_t count = next < IWX_TX_TRACE_COUNT ? next : IWX_TX_TRACE_COUNT;
+        for (uint32_t k = 0; k < count; k++)
+            trace->appendBytes(&sc->sc_tx_trace[(next - count + k) % IWX_TX_TRACE_COUNT], sizeof(struct iwx_tx_trace));
+        sc->sc_pcitag->setProperty("AirportItlwm-TxTrace", trace);
+        if (!sc->sc_pcitag->getProperty("AirportItlwm-TxTraceFirst"))
+            sc->sc_pcitag->setProperty("AirportItlwm-TxTraceFirst", trace);
+        trace->release();
+    }
+#endif
+}
+
 void ItlIwx::
 iwx_nic_error(struct iwx_softc *sc)
 {
@@ -16867,6 +16965,7 @@ iwx_nic_error(struct iwx_softc *sc)
         (unsigned)sc->sc_flags, sc->sc_ic.ic_state,
         (unsigned)sc->sc_ic.ic_if.if_flags, sc->sc_generation);
     sc->sc_pcitag->setProperty("AirportItlwm-FirmwareErrorDriver", error_driver);
+    iwx_publish_tx_state(sc);
     if (sc->sc_fw_error_count == 1) {
         sc->sc_pcitag->setProperty("AirportItlwm-FirmwareErrorFirstDriver", error_driver);
         if (auto setup = sc->sc_pcitag->getProperty("AirportItlwm-AWDLSetupStage"))
