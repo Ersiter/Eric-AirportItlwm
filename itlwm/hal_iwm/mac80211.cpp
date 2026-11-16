@@ -2439,6 +2439,17 @@ iwm_awdl_phy_context_set(struct iwm_softc *sc, struct ieee80211_channel *chan)
             iwm_phy_ctxt_cmd(sc, phy, 1, 1, IWM_FW_CTXT_ACTION_MODIFY, 0);
         return err;
     }
+    /* Only a firmware with CDB bindings takes REMOVE + ADD for a band change; the others MODIFY across bands. */
+    if (!isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_BINDING_CDB_SUPPORT)) {
+        phy->channel = chan;
+        err = iwm_phy_ctxt_cmd(sc, phy, 1, 1, IWM_FW_CTXT_ACTION_MODIFY, 0);
+        if (!err)
+            return 0;
+        phy->channel = old;
+        if (sc->sc_awdl_generation == sc->sc_generation)
+            iwm_phy_ctxt_cmd(sc, phy, 1, 1, IWM_FW_CTXT_ACTION_MODIFY, 0);
+        return err;
+    }
     err = iwm_phy_ctxt_cmd(sc, phy, 1, 1, IWM_FW_CTXT_ACTION_REMOVE, 0);
     if (err)
         return err;

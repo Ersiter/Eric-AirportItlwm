@@ -134,10 +134,11 @@ iwm_phy_ctxt_cmd_hdr(struct iwm_softc *sc, struct iwm_phy_ctxt *ctxt,
 }
 
 static uint8_t
-iwm_get_channel_width(struct ieee80211com *ic, struct ieee80211_channel *c)
+iwm_get_channel_width(struct ieee80211com *ic, struct ieee80211_channel *c, bool awdl)
 {
     uint8_t ret = IWM_PHY_VHT_CHANNEL_MODE20;
-    if (ic->ic_bss == NULL || ic->ic_state < IEEE80211_S_ASSOC) {
+    /* The AWDL listener's context has a channel of its own at 20 MHz; the station's width is not its business. */
+    if (awdl || ic->ic_bss == NULL || ic->ic_state < IEEE80211_S_ASSOC) {
         return ret;
     }
     switch (ic->ic_bss->ni_chw) {
@@ -157,9 +158,9 @@ iwm_get_channel_width(struct ieee80211com *ic, struct ieee80211_channel *c)
 }
 
 static uint8_t
-iwm_get_ctrl_pos(struct ieee80211com *ic, struct ieee80211_channel *c)
+iwm_get_ctrl_pos(struct ieee80211com *ic, struct ieee80211_channel *c, bool awdl)
 {
-    if (ic->ic_bss == NULL || ic->ic_state < IEEE80211_S_ASSOC || iwm_get_channel_width(ic, c) == IWM_PHY_VHT_CHANNEL_MODE20)
+    if (awdl || ic->ic_bss == NULL || ic->ic_state < IEEE80211_S_ASSOC || iwm_get_channel_width(ic, c, false) == IWM_PHY_VHT_CHANNEL_MODE20)
         return IWM_PHY_VHT_CTRL_POS_1_BELOW;
     
     signed int offset = ic->ic_bss->ni_chan->ic_freq - ic->ic_bss->ni_chan->ic_center_freq1;
@@ -196,7 +197,7 @@ iwm_get_ctrl_pos(struct ieee80211com *ic, struct ieee80211_channel *c)
 void ItlIwm::
 iwm_phy_ctxt_cmd_data(struct iwm_softc *sc, struct iwm_phy_context_cmd *cmd,
     struct ieee80211_channel *chan, uint8_t chains_static,
-    uint8_t chains_dynamic)
+    uint8_t chains_dynamic, bool awdl)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     uint8_t active_cnt, idle_cnt;
@@ -204,8 +205,8 @@ iwm_phy_ctxt_cmd_data(struct iwm_softc *sc, struct iwm_phy_context_cmd *cmd,
     cmd->ci.band = IEEE80211_IS_CHAN_2GHZ(chan) ?
         IWM_PHY_BAND_24 : IWM_PHY_BAND_5;
     cmd->ci.channel = ieee80211_chan2ieee(ic, chan);
-    cmd->ci.width = iwm_get_channel_width(ic, chan);
-    cmd->ci.ctrl_pos = iwm_get_ctrl_pos(ic, chan);
+    cmd->ci.width = iwm_get_channel_width(ic, chan, awdl);
+    cmd->ci.ctrl_pos = iwm_get_ctrl_pos(ic, chan, awdl);
 
     /* Set rx the chains */
     idle_cnt = chains_static;
@@ -240,8 +241,9 @@ iwm_phy_ctxt_cmd_uhb(struct iwm_softc *sc, struct iwm_phy_ctxt *ctxt,
     cmd.ci.band = IEEE80211_IS_CHAN_2GHZ(chan) ?
     IWM_PHY_BAND_24 : IWM_PHY_BAND_5;
     cmd.ci.channel = htole32(ieee80211_chan2ieee(ic, chan));
-    cmd.ci.width = iwm_get_channel_width(ic, chan);
-    cmd.ci.ctrl_pos = iwm_get_ctrl_pos(ic, chan);
+    const bool awdl = ctxt == &sc->sc_phyctxt[IWM_NUM_PHY_CTX - 1];
+    cmd.ci.width = iwm_get_channel_width(ic, chan, awdl);
+    cmd.ci.ctrl_pos = iwm_get_ctrl_pos(ic, chan, awdl);
     
     idle_cnt = chains_static;
     active_cnt = chains_dynamic;
@@ -277,7 +279,7 @@ iwm_phy_ctxt_cmd(struct iwm_softc *sc, struct iwm_phy_ctxt *ctxt,
     iwm_phy_ctxt_cmd_hdr(sc, ctxt, &cmd, action, apply_time);
 
     iwm_phy_ctxt_cmd_data(sc, &cmd, ctxt->channel,
-        chains_static, chains_dynamic);
+        chains_static, chains_dynamic, ctxt == &sc->sc_phyctxt[IWM_NUM_PHY_CTX - 1]);
 
     return iwm_send_cmd_pdu(sc, IWM_PHY_CONTEXT_CMD, 0,
         sizeof(struct iwm_phy_context_cmd), &cmd);

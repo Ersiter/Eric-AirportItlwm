@@ -298,7 +298,7 @@ public:
     void    iwm_phy_ctxt_cmd_hdr(struct iwm_softc *, struct iwm_phy_ctxt *,
                                  struct iwm_phy_context_cmd *, uint32_t, uint32_t);
     void    iwm_phy_ctxt_cmd_data(struct iwm_softc *, struct iwm_phy_context_cmd *,
-                                  struct ieee80211_channel *, uint8_t, uint8_t);
+                                  struct ieee80211_channel *, uint8_t, uint8_t, bool);
     int    iwm_phy_ctxt_cmd(struct iwm_softc *, struct iwm_phy_ctxt *, uint8_t,
                             uint8_t, uint32_t, uint32_t);
     int    iwm_send_cmd(struct iwm_softc *, struct iwm_host_cmd *);
