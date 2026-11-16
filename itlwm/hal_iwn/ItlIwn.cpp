@@ -394,7 +394,7 @@ iwn_attach(struct iwn_softc *sc, struct pci_attach_args *pa)
     error = pci_get_capability(sc->sc_pct, sc->sc_pcitag,
         PCI_CAP_PCIEXPRESS, &sc->sc_cap_off, NULL);
     if (error == 0) {
-        XYLog(": PCIe capability structure not found!\n");
+        XYLogE(": PCIe capability structure not found!\n");
         return false;
     }
 
@@ -416,13 +416,13 @@ iwn_attach(struct iwn_softc *sc, struct pci_attach_args *pa)
     error = pci_mapreg_map(pa, IWN_PCI_BAR0, memtype, 0, &sc->sc_st,
         &sc->sc_sh, NULL, &sc->sc_sz, 0);
     if (error != 0) {
-        XYLog(": can't map mem space\n");
+        XYLogE(": can't map mem space\n");
         return false;
     }
 
     /* Install interrupt handler. */
     if (pci_intr_map_msi(pa, &sc->ih) != 0) {
-        XYLog(": can't map interrupt\n");
+        XYLogE(": can't map interrupt\n");
         return false;
     }
 
@@ -440,7 +440,7 @@ iwn_attach(struct iwn_softc *sc, struct pci_attach_args *pa)
         }
     }
     if (msiIntrIndex == -1) {
-        XYLog("%s: can't find MSI interrupt controller\n", DEVNAME(sc));
+        XYLogE("%s: can't find MSI interrupt controller\n", DEVNAME(sc));
         return false;
     }
 
@@ -448,7 +448,7 @@ iwn_attach(struct iwn_softc *sc, struct pci_attach_args *pa)
                                                                          (IOInterruptEventSource::Action)&ItlIwn::iwn_intr, &ItlIwn::intrFilter
                                                                          ,pa->pa_tag, msiIntrIndex);
     if (sc->sc_ih == NULL || pa->workloop->addEventSource(sc->sc_ih) != kIOReturnSuccess) {
-        XYLog("%s: can't establish interrupt\n", DEVNAME(sc));
+        XYLogE("%s: can't establish interrupt\n", DEVNAME(sc));
         return false;
     }
     sc->sc_ih->enable();
@@ -899,7 +899,7 @@ iwn_nic_lock(struct iwn_softc *sc)
         DELAY(10);
     }
     
-    XYLog("%s acquiring device failed.", __FUNCTION__);
+    XYLogE("%s acquiring device failed.", __FUNCTION__);
     return ETIMEDOUT;
 }
 
@@ -1094,7 +1094,7 @@ iwn_read_prom_data(struct iwn_softc *sc, uint32_t addr, void *data, int count)
             DELAY(5);
         }
         if (ntries == 10) {
-            XYLog("%s: timeout reading ROM at 0x%x\n",
+            XYLogE("%s: timeout reading ROM at 0x%x\n",
                 sc->sc_dev.dv_xname, addr);
             return ETIMEDOUT;
         }
@@ -1102,7 +1102,7 @@ iwn_read_prom_data(struct iwn_softc *sc, uint32_t addr, void *data, int count)
             /* OTPROM, check for ECC errors. */
             tmp = IWN_READ(sc, IWN_OTP_GP);
             if (tmp & IWN_OTP_GP_ECC_UNCORR_STTS) {
-                XYLog("%s: OTPROM ECC error at 0x%x\n",
+                XYLogE("%s: OTPROM ECC error at 0x%x\n",
                     sc->sc_dev.dv_xname, addr);
                 return EIO;
             }
@@ -1138,7 +1138,7 @@ bool allocDmaMemory2(bus_dma_tag_t tag, struct iwn_dma_info *dma, size_t size, i
     bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous | kIOMapInhibitCache, size, DMA_BIT_MASK(64));
     
     if (bmd == NULL) {
-        XYLog("%s alloc DMA memory failed.\n", __FUNCTION__);
+        XYLogE("%s alloc DMA memory failed.\n", __FUNCTION__);
         return false;
     }
     
@@ -1146,7 +1146,7 @@ bool allocDmaMemory2(bus_dma_tag_t tag, struct iwn_dma_info *dma, size_t size, i
     IODMACommand *cmd = IODMACommand::withSpecification(kIODMACommandOutputHost64, 64, 0, IODMACommand::kMapped, 0, alignment);
     
     if (cmd == NULL) {
-        XYLog("%s alloc IODMACommand memory failed.\n", __FUNCTION__);
+        XYLogE("%s alloc IODMACommand memory failed.\n", __FUNCTION__);
         bmd->complete();
         bmd->release();
         return false;
@@ -1558,11 +1558,11 @@ iwn_read_eeprom(struct iwn_softc *sc)
     }
 
     if ((IWN_READ(sc, IWN_EEPROM_GP) & 0x7) == 0) {
-        XYLog("%s: bad ROM signature\n", sc->sc_dev.dv_xname);
+        XYLogE("%s: bad ROM signature\n", sc->sc_dev.dv_xname);
         return EIO;
     }
     if ((error = iwn_eeprom_lock(sc)) != 0) {
-        XYLog("%s: could not lock ROM (error=%d)\n",
+        XYLogE("%s: could not lock ROM (error=%d)\n",
             sc->sc_dev.dv_xname, error);
         return error;
     }
@@ -1960,7 +1960,7 @@ iwn_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
         sc->agg_queue_mask = 0;
         error = that->iwn_cmd(sc, IWN_CMD_RXON, &sc->rxon, sc->rxonsz, 1);
         if (error != 0)
-            XYLog("%s: RXON command failed\n",
+            XYLogE("%s: RXON command failed\n",
                 sc->sc_dev.dv_xname);
     }
 
@@ -1974,7 +1974,7 @@ iwn_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
             ieee80211_node_cleanup(ic, ic->ic_bss);
         }
         if (ifp->if_flags & IFF_DEBUG)
-            XYLog("%s: %s -> %s\n", ifp->if_xname,
+            XYLogE("%s: %s -> %s\n", ifp->if_xname,
                 ieee80211_state_name[ic->ic_state],
                 ieee80211_state_name[nstate]);
         ic->ic_state = nstate;
@@ -2171,7 +2171,7 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
         BUS_DMASYNC_POSTREAD);
 
     if (stat->cfg_phy_len > IWN_STAT_MAXLEN) {
-        XYLog("%s: invalid RX statistic header\n",
+        XYLogE("%s: invalid RX statistic header\n",
             sc->sc_dev.dv_xname);
         return;
     }
@@ -3261,12 +3261,12 @@ iwn_fatal_intr(struct iwn_softc *sc)
     if (sc->errptr < IWN_FW_DATA_BASE ||
         sc->errptr + sizeof (dump) >
         IWN_FW_DATA_BASE + sc->fw_data_maxsz) {
-        XYLog("%s: bad firmware error log address 0x%08x\n",
+        XYLogE("%s: bad firmware error log address 0x%08x\n",
             sc->sc_dev.dv_xname, sc->errptr);
         return;
     }
     if (iwn_nic_lock(sc) != 0) {
-        XYLog("%s: could not read firmware error log\n",
+        XYLogE("%s: could not read firmware error log\n",
             sc->sc_dev.dv_xname);
         return;
     }
@@ -3276,34 +3276,34 @@ iwn_fatal_intr(struct iwn_softc *sc)
     iwn_nic_unlock(sc);
 
     if (dump.valid == 0) {
-        XYLog("%s: firmware error log is empty\n",
+        XYLogE("%s: firmware error log is empty\n",
             sc->sc_dev.dv_xname);
         return;
     }
-    XYLog("firmware error log:\n");
-    XYLog("  error type      = \"%s\" (0x%08X)\n",
+    XYLogE("firmware error log:\n");
+    XYLogE("  error type      = \"%s\" (0x%08X)\n",
         (dump.id < nitems(iwn_fw_errmsg)) ?
         iwn_fw_errmsg[dump.id] : "UNKNOWN",
         dump.id);
-    XYLog("  program counter = 0x%08X\n", dump.pc);
-    XYLog("  source line     = 0x%08X\n", dump.src_line);
-    XYLog("  error data      = 0x%08X%08X\n",
+    XYLogE("  program counter = 0x%08X\n", dump.pc);
+    XYLogE("  source line     = 0x%08X\n", dump.src_line);
+    XYLogE("  error data      = 0x%08X%08X\n",
         dump.error_data[0], dump.error_data[1]);
-    XYLog("  branch link     = 0x%08X%08X\n",
+    XYLogE("  branch link     = 0x%08X%08X\n",
         dump.branch_link[0], dump.branch_link[1]);
-    XYLog("  interrupt link  = 0x%08X%08X\n",
+    XYLogE("  interrupt link  = 0x%08X%08X\n",
         dump.interrupt_link[0], dump.interrupt_link[1]);
-    XYLog("  time            = %u\n", dump.time[0]);
+    XYLogE("  time            = %u\n", dump.time[0]);
 
     /* Dump driver status (TX and RX rings) while we're here. */
-    XYLog("driver status:\n");
+    XYLogE("driver status:\n");
     for (i = 0; i < sc->ntxqs; i++) {
         struct iwn_tx_ring *ring = &sc->txq[i];
-        XYLog("  tx ring %2d: qid=%-2d cur=%-3d queued=%-3d\n",
+        XYLogE("  tx ring %2d: qid=%-2d cur=%-3d queued=%-3d\n",
             i, ring->qid, ring->cur, ring->queued);
     }
-    XYLog("  rx ring: cur=%d\n", sc->rxq.cur);
-    XYLog("  802.11 state %d\n", sc->sc_ic.ic_state);
+    XYLogE("  rx ring: cur=%d\n", sc->rxq.cur);
+    XYLogE("  802.11 state %d\n", sc->sc_ic.ic_state);
 }
 #endif
 
@@ -3357,11 +3357,11 @@ iwn_intr(OSObject *object, IOInterruptEventSource* sender, int count)
             task_add(systq, &sc->init_task);
     }
     if (r1 & IWN_INT_CT_REACHED) {
-        XYLog("%s: critical temperature reached!\n",
+        XYLogE("%s: critical temperature reached!\n",
             sc->sc_dev.dv_xname);
     }
     if (r1 & (IWN_INT_SW_ERR | IWN_INT_HW_ERR)) {
-        XYLog("%s: fatal firmware error\n", sc->sc_dev.dv_xname);
+        XYLogE("%s: fatal firmware error\n", sc->sc_dev.dv_xname);
 
         /* Force a complete recalibration on next init. */
         sc->sc_flags &= ~IWN_FLAG_CALIB_DONE;
@@ -3810,7 +3810,7 @@ iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni)
 
     nsegs = bus_dmamap_packet(data->map, m, &segs[0], IWN_MAX_SCATTER - 1, false);
     if (nsegs == 0) {
-        XYLog("%s: can't map mbuf (error %d)\n", DEVNAME(sc),
+        XYLogE("%s: can't map mbuf (error %d)\n", DEVNAME(sc),
               nsegs);
         mbuf_freem(m);
         return ENOMEM;
@@ -3952,7 +3952,7 @@ iwn_watchdog(struct _ifnet *ifp)
 
     if (sc->sc_tx_timer > 0) {
         if (--sc->sc_tx_timer == 0) {
-            XYLog("%s: device timeout\n", sc->sc_dev.dv_xname);
+            XYLogE("%s: device timeout\n", sc->sc_dev.dv_xname);
             that->iwn_stop(ifp);
             task_add(systq, &sc->init_task);
             ifp->netStat->outputErrors++;
@@ -5426,7 +5426,7 @@ iwn_config(struct iwn_softc *sc)
         sc->rxon.ofdm_mask, sc->rxon.rxchain));
     error = iwn_cmd(sc, IWN_CMD_RXON, &sc->rxon, sc->rxonsz, 0);
     if (error != 0) {
-        XYLog("%s: RXON command failed\n", sc->sc_dev.dv_xname);
+        XYLogE("%s: RXON command failed\n", sc->sc_dev.dv_xname);
         return error;
     }
 
@@ -5445,7 +5445,7 @@ iwn_config(struct iwn_softc *sc)
     }
 
     if ((error = iwn_set_critical_temp(sc)) != 0) {
-        XYLog("%s: could not set critical temperature\n",
+        XYLogE("%s: could not set critical temperature\n",
             sc->sc_dev.dv_xname);
         return error;
     }
@@ -5875,7 +5875,7 @@ iwn_auth(struct iwn_softc *sc, int arg)
         sc->rxon.ofdm_mask));
     error = iwn_cmd(sc, IWN_CMD_RXON, &sc->rxon, sc->rxonsz, 1);
     if (error != 0) {
-        XYLog("%s: RXON command failed\n", sc->sc_dev.dv_xname);
+        XYLogE("%s: RXON command failed\n", sc->sc_dev.dv_xname);
         return error;
     }
 
@@ -6771,7 +6771,7 @@ iwn5000_post_alive(struct iwn_softc *sc)
         /* Perform crystal calibration. */
         error = iwn5000_crystal_calib(sc);
         if (error != 0) {
-            XYLog("%s: crystal calibration failed\n",
+            XYLogE("%s: crystal calibration failed\n",
                 sc->sc_dev.dv_xname);
             return error;
         }
@@ -6883,7 +6883,7 @@ iwn4965_load_firmware(struct iwn_softc *sc)
 
     /* Wait at most one second for first alive notification. */
     if ((error = that->tsleep_nsec(sc, PCATCH, "iwninit", SEC_TO_NSEC(1))) != 0) {
-        XYLog("%s: timeout waiting for adapter to initialize\n",
+        XYLogE("%s: timeout waiting for adapter to initialize\n",
             sc->sc_dev.dv_xname);
         return error;
     }
@@ -7000,7 +7000,7 @@ iwn_read_firmware_leg(struct iwn_softc *sc, struct iwn_fw_info *fw)
 
     /* Check firmware API version. */
     if (IWN_FW_API(rev) <= 1) {
-        XYLog("%s: bad firmware, need API version >=2\n",
+        XYLogE("%s: bad firmware, need API version >=2\n",
             sc->sc_dev.dv_xname);
         return EINVAL;
     }
@@ -7057,7 +7057,7 @@ iwn_read_firmware_tlv(struct iwn_softc *sc, struct iwn_fw_info *fw,
     }
     hdr = (const struct iwn_fw_tlv_hdr *)fw->data;
     if (hdr->signature != htole32(IWN_FW_SIGNATURE)) {
-        XYLog("%s: bad firmware signature 0x%08x\n",
+        XYLogE("%s: bad firmware signature 0x%08x\n",
             sc->sc_dev.dv_xname, letoh32(hdr->signature));
         return EINVAL;
     }
@@ -7114,7 +7114,7 @@ iwn_read_firmware_tlv(struct iwn_softc *sc, struct iwn_fw_info *fw,
             break;
         case IWN_FW_TLV_ENH_SENS:
             if (len !=  0) {
-                XYLog("%s: TLV type %d has invalid size %u\n",
+                XYLogE("%s: TLV type %d has invalid size %u\n",
                     sc->sc_dev.dv_xname, letoh16(tlv->type),
                     len);
                 goto next;
@@ -7123,7 +7123,7 @@ iwn_read_firmware_tlv(struct iwn_softc *sc, struct iwn_fw_info *fw,
             break;
         case IWN_FW_TLV_PHY_CALIB:
             if (len != sizeof(uint32_t)) {
-                XYLog("%s: TLV type %d has invalid size %u\n",
+                XYLogE("%s: TLV type %d has invalid size %u\n",
                     sc->sc_dev.dv_xname, letoh16(tlv->type),
                     len);
                 goto next;
@@ -7179,13 +7179,13 @@ iwn_read_firmware(struct iwn_softc *sc)
     fwData = getFWDescByName(sc->fwname);
     if (fwData == NULL) {
         error = EINVAL;
-        XYLog("%s resource load fail.\n", sc->fwname);
+        XYLogE("%s resource load fail.\n", sc->fwname);
         return error;
     }
     fw->size = fwData->getLength() * 4;
     fw->data = (u_char *)malloc(fw->size, 1, 1);
     uncompressFirmware((u_char *)fw->data, (uint *)&fw->size, (u_char *)fwData->getBytesNoCopy(), fwData->getLength());
-    XYLog("load firmware %s done\n", sc->fwname);
+    XYLogE("load firmware %s done\n", sc->fwname);
     OSSafeReleaseNULL(fwData);
     
     if (fw->size < sizeof (uint32_t)) {
@@ -7238,7 +7238,7 @@ iwn_clock_wait(struct iwn_softc *sc)
             return 0;
         DELAY(10);
     }
-    XYLog("%s: timeout waiting for clock stabilization\n",
+    XYLogE("%s: timeout waiting for clock stabilization\n",
         sc->sc_dev.dv_xname);
     return ETIMEDOUT;
 }
@@ -7309,7 +7309,7 @@ iwn_apm_stop_master(struct iwn_softc *sc)
             return;
         DELAY(10);
     }
-    XYLog("%s: timeout waiting for master\n", sc->sc_dev.dv_xname);
+    XYLogE("%s: timeout waiting for master\n", sc->sc_dev.dv_xname);
 }
 
 void ItlIwn::
@@ -7534,7 +7534,7 @@ iwn_hw_init(struct iwn_softc *sc)
     }
     /* Wait at most one second for firmware alive notification. */
     if ((error = tsleep_nsec(sc, PCATCH, "iwninit", SEC_TO_NSEC(1))) != 0) {
-        XYLog("%s: timeout waiting for adapter to initialize\n",
+        XYLogE("%s: timeout waiting for adapter to initialize\n",
             sc->sc_dev.dv_xname);
         return error;
     }

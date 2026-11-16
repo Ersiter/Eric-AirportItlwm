@@ -189,7 +189,7 @@ ieee80211_channel_init(struct _ifnet *ifp)
              * Verify driver passed us valid data.
              */
             if (i != ieee80211_chan2ieee(ic, c)) {
-                XYLog("%s: bad channel ignored; "
+                XYLogE("%s: bad channel ignored; "
                       "freq %u flags %x number %u\n",
                       ifp->if_xname, c->ic_freq, c->ic_flags,
                       i);
@@ -948,7 +948,7 @@ ieee80211_watchdog(struct _ifnet *ifp)
              ic->ic_state == IEEE80211_S_ASSOC)) {
             struct ieee80211_node *ni;
             if (ifp->if_flags & IFF_DEBUG)
-                XYLog("%s: %s timed out for %s\n",
+                XYLogE("%s: %s timed out for %s\n",
                       ifp->if_xname,
                       ic->ic_state == IEEE80211_S_ASSOC ?
                       "association" : "authentication",

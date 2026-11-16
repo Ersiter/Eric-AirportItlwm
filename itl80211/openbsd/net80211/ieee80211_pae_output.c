@@ -147,7 +147,7 @@ ieee80211_send_eapol_key(struct ieee80211com *ic, mbuf_t m,
     
     error = ifq_enqueue(&ifp->if_snd, m);
     if (error) {
-        XYLog("%s enqueue fail!!\n", __FUNCTION__);
+        XYLogE("%s enqueue fail!!\n", __FUNCTION__);
         return (error);
     }
     (*ifp->if_start)(ifp);

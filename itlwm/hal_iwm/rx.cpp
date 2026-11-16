@@ -308,7 +308,7 @@ iwm_rx_addbuf(struct iwm_softc *sc, int size, int idx)
     data->map->dm_nsegs = bus_dmamap_packet(data->map, m, &seg, 1, true);
 //    XYLog("map rx dm_nsegs=%d\n", data->map->dm_nsegs);
     if (data->map->dm_nsegs == 0) {
-        XYLog("RX Map new address FAIL!!!!\n");
+        XYLogE("RX Map new address FAIL!!!!\n");
         /* XXX */
         if (fatal)
             panic("iwm: could not load RX mbuf");
@@ -1196,7 +1196,7 @@ iwm_rx_pkt(struct iwm_softc *sc, struct iwm_rx_data *data, struct mbuf_list *ml)
                              IWM_CT_KILL_NOTIFICATION): {
                 struct iwm_ct_kill_notif *notif;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwm_ct_kill_notif *);
-                XYLog("%s: device at critical temperature (%u degC), "
+                XYLogE("%s: device at critical temperature (%u degC), "
                        "stopping device\n",
                        DEVNAME(sc), le16toh(notif->temperature));
                 sc->sc_flags |= IWM_FLAG_HW_ERR;
@@ -1296,7 +1296,7 @@ iwm_rx_pkt(struct iwm_softc *sc, struct iwm_rx_data *data, struct mbuf_list *ml)
             case IWM_REPLY_ERROR: {
                 struct iwm_error_resp *resp;
                 SYNC_RESP_STRUCT(resp, pkt, struct iwm_error_resp *);
-                XYLog("%s: firmware error 0x%x, cmd 0x%x\n",
+                XYLogE("%s: firmware error 0x%x, cmd 0x%x\n",
                       DEVNAME(sc), le32toh(resp->error_type),
                       resp->cmd_id);
                 break;

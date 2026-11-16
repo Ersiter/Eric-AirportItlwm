@@ -384,7 +384,7 @@ iwm_apm_init(struct iwm_softc *sc)
     if (!iwm_poll_bit(sc, IWM_CSR_GP_CNTRL,
                       IWM_CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY,
                       IWM_CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY, 25000)) {
-        XYLog("%s: timeout waiting for clock stabilization\n",
+        XYLogE("%s: timeout waiting for clock stabilization\n",
               DEVNAME(sc));
         err = ETIMEDOUT;
         goto out;
@@ -446,7 +446,7 @@ iwm_apm_init(struct iwm_softc *sc)
     }
 out:
     if (err)
-        XYLog("%s: apm init error %d\n", DEVNAME(sc), err);
+        XYLogE("%s: apm init error %d\n", DEVNAME(sc), err);
     return err;
 }
 
@@ -469,7 +469,7 @@ iwm_apm_stop(struct iwm_softc *sc)
     if (!iwm_poll_bit(sc, IWM_CSR_RESET,
                       IWM_CSR_RESET_REG_FLAG_MASTER_DISABLED,
                       IWM_CSR_RESET_REG_FLAG_MASTER_DISABLED, 100))
-        XYLog("%s: timeout waiting for master\n", DEVNAME(sc));
+        XYLogE("%s: timeout waiting for master\n", DEVNAME(sc));
     
     /*
      * Clear "initialization complete" bit to move adapter from

@@ -954,7 +954,7 @@ iwm_scan(struct iwm_softc *sc)
     if (sc->sc_flags & IWM_FLAG_BGSCAN) {
         err = iwm_scan_abort(sc);
         if (err) {
-            XYLog("%s: could not abort background scan\n",
+            XYLogE("%s: could not abort background scan\n",
                   DEVNAME(sc));
             return err;
         }
@@ -965,7 +965,7 @@ iwm_scan(struct iwm_softc *sc)
     else
         err = iwm_lmac_scan(sc, 0);
     if (err && err != 1) {
-        XYLog("%s: %d could not initiate scan, err=%d\n", DEVNAME(sc), __LINE__, err);
+        XYLogE("%s: %d could not initiate scan, err=%d\n", DEVNAME(sc), __LINE__, err);
         return err;
     }
     
@@ -978,7 +978,7 @@ iwm_scan(struct iwm_softc *sc)
     
     sc->sc_flags |= IWM_FLAG_SCANNING;
     if (ifp->if_flags & IFF_DEBUG)
-        XYLog("%s: %s -> %s\n", ifp->if_xname,
+        XYLogE("%s: %s -> %s\n", ifp->if_xname,
               ieee80211_state_name[ic->ic_state],
               ieee80211_state_name[IEEE80211_S_SCAN]);
     if ((sc->sc_flags & IWM_FLAG_BGSCAN) == 0) {

@@ -267,7 +267,7 @@ setCIPHER_KEY(OSObject *object, struct apple80211_key *key)
         XYLog("Set key request: len=%d cipher_type=%d flags=%d index=%d key=%s rsc_len=%d rsc=%s ea=%s\n",
               key->key_len, key->key_cipher_type, key->key_flags, key->key_index, keydump, key->key_rsc_len, rscdump, eadump);
     else
-        XYLog("Set key request, but failed to allocate memory for hexdump\n");
+        XYLogE("Set key request, but failed to allocate memory for hexdump\n");
     
     if (keydump)
         IOFree((void*)keydump, 3 * key->key_len + 1);
@@ -531,7 +531,7 @@ IOReturn AirportItlwm::
 getROAM_PROFILE(OSObject *object, struct apple80211_roam_profile_band_data *data)
 {
     if (roamProfile == NULL) {
-        XYLog("%s no roam profile, return error\n", __FUNCTION__);
+        XYLogE("%s no roam profile, return error\n", __FUNCTION__);
         return kIOReturnError;
     }
     memcpy(data, roamProfile, sizeof(struct apple80211_roam_profile_band_data));
@@ -1511,7 +1511,7 @@ setVIRTUAL_IF_CREATE(OSObject *object, struct apple80211_virt_if_create_data* da
         setInfraChannel(&chann);
         fAWDLInterface = inf;
     } else {
-        XYLog("%s unhandled virtual interface role type: %d\n", __FUNCTION__, data->role);
+        XYLogE("%s unhandled virtual interface role type: %d\n", __FUNCTION__, data->role);
         return kIOReturnError;
     }
     return kIOReturnSuccess;
@@ -1546,6 +1546,6 @@ getLINK_CHANGED_EVENT_DATA(OSObject *object, struct apple80211_link_changed_even
         ed->reason = APPLE80211_LINK_DOWN_REASON_DEAUTH;
     } else
         ed->rssi = -(0 - IWM_MIN_DBM - ic->ic_bss->ni_rssi);
-    XYLog("Link %s, reason: %d, voluntary: %d\n", ed->isLinkDown ? "down" : "up", ed->reason, ed->voluntary);
+    XYLogE("Link %s, reason: %d, voluntary: %d\n", ed->isLinkDown ? "down" : "up", ed->reason, ed->voluntary);
     return kIOReturnSuccess;
 }

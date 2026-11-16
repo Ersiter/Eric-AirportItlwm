@@ -281,14 +281,14 @@ iwm_read_firmware(struct iwm_softc *sc, enum iwm_ucode_type ucode_type)
 //    fw->fw_rawsize = context.resource->getLength();
     fwData = getFWDescByName(sc->sc_fwname);
     if (fwData == NULL) {
-        XYLog("%s resource load fail.\n", sc->sc_fwname);
+        XYLogE("%s resource load fail.\n", sc->sc_fwname);
         err = EINVAL;
         goto out;
     }
     fw->fw_rawsize = fwData->getLength() * 4;
     fw->fw_rawdata = malloc(fw->fw_rawsize, 1, 1);
     uncompressFirmware((u_char *)fw->fw_rawdata, (uint *)&fw->fw_rawsize, (u_char *)fwData->getBytesNoCopy(), fwData->getLength());
-    XYLog("load firmware %s done\n", sc->sc_fwname);
+    XYLogE("load firmware %s done\n", sc->sc_fwname);
     sc->sc_capaflags = 0;
     sc->sc_capa_n_scan_channels = IWM_DEFAULT_SCAN_CHANNELS;
     memset(sc->sc_enabled_capa, 0, sizeof(sc->sc_enabled_capa));
@@ -300,7 +300,7 @@ iwm_read_firmware(struct iwm_softc *sc, enum iwm_ucode_type ucode_type)
     uhdr = (struct iwm_tlv_ucode_header *)fw->fw_rawdata;
     if (*(uint32_t *)fw->fw_rawdata != 0
         || le32toh(uhdr->magic) != IWM_TLV_UCODE_MAGIC) {
-        XYLog("%s: invalid firmware %s\n",
+        XYLogE("%s: invalid firmware %s\n",
               DEVNAME(sc), sc->sc_fwname);
         err = EINVAL;
         goto out;
@@ -615,7 +615,7 @@ iwm_read_firmware(struct iwm_softc *sc, enum iwm_ucode_type ucode_type)
     
 parse_out:
     if (err) {
-        XYLog("%s: firmware parse error %d, "
+        XYLogE("%s: firmware parse error %d, "
               "section type %d\n", DEVNAME(sc), err, tlv_type);
     }
     
@@ -830,7 +830,7 @@ iwm_firmware_load_chunk(struct iwm_softc *sc, uint32_t dst_addr,
     }
     
     if (!sc->sc_fw_chunk_done)
-        XYLog("%s: fw chunk addr 0x%x len %d failed to load\n",
+        XYLogE("%s: fw chunk addr 0x%x len %d failed to load\n",
               DEVNAME(sc), dst_addr, byte_cnt);
     
     if (dst_addr >= IWM_FW_MEM_EXTENDED_START &&
@@ -944,7 +944,7 @@ iwm_load_cpu_sections_8000(struct iwm_softc *sc, struct iwm_fw_sects *fws,
         iwm_nic_unlock(sc);
     } else {
         err = EBUSY;
-        XYLog("%s: could not finalize firmware loading (error %d)\n",
+        XYLogE("%s: could not finalize firmware loading (error %d)\n",
               DEVNAME(sc), err);
         return err;
     }
@@ -1020,7 +1020,7 @@ iwm_start_fw(struct iwm_softc *sc, enum iwm_ucode_type ucode_type)
     
     err = iwm_nic_init(sc);
     if (err) {
-        XYLog("%s: unable to init nic\n", DEVNAME(sc));
+        XYLogE("%s: unable to init nic\n", DEVNAME(sc));
         return err;
     }
     
@@ -1090,14 +1090,14 @@ iwm_load_ucode_wait_alive(struct iwm_softc *sc,
     if (fw->paging_mem_size) {
         err = iwm_save_fw_paging(sc, fw);
         if (err) {
-            XYLog("%s: failed to save the FW paging image\n",
+            XYLogE("%s: failed to save the FW paging image\n",
                   DEVNAME(sc));
             return err;
         }
         
         err = iwm_send_paging_cmd(sc, fw);
         if (err) {
-            XYLog("%s: failed to send the paging cmd\n",
+            XYLogE("%s: failed to send the paging cmd\n",
                   DEVNAME(sc));
             iwm_free_fw_paging(sc);
             return err;
@@ -1123,14 +1123,14 @@ iwm_run_init_mvm_ucode(struct iwm_softc *sc, int justnvm)
     sc->sc_init_complete = 0;
     err = iwm_load_ucode_wait_alive(sc, IWM_UCODE_TYPE_INIT);
     if (err) {
-        XYLog("%s: failed to load init firmware\n", DEVNAME(sc));
+        XYLogE("%s: failed to load init firmware\n", DEVNAME(sc));
         return err;
     }
     
     if (sc->sc_device_family < IWM_DEVICE_FAMILY_8000) {
         err = iwm_send_bt_init_conf(sc);
         if (err) {
-            XYLog("%s: could not init bt coex (error %d)\n",
+            XYLogE("%s: could not init bt coex (error %d)\n",
                   DEVNAME(sc), err);
             return err;
         }
@@ -1139,7 +1139,7 @@ iwm_run_init_mvm_ucode(struct iwm_softc *sc, int justnvm)
     if (justnvm) {
         err = iwm_nvm_init(sc);
         if (err) {
-            XYLog("%s: failed to read nvm\n", DEVNAME(sc));
+            XYLogE("%s: failed to read nvm\n", DEVNAME(sc));
             return err;
         }
         

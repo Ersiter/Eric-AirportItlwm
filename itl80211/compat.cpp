@@ -25,6 +25,21 @@
 
 OSDefineMetaClassAndStructors(pci_intr_handle, OSObject)
 
+// Verbose log tier (XYLog, see linux/types.h): on in Debug builds, off in Release builds; itlwm_log=1/0 overrides.
+#ifdef DEBUG
+int itlwm_log_level = 1;
+#else
+int itlwm_log_level = 0;
+#endif
+
+static struct ItlwmLogBootArg {
+    ItlwmLogBootArg() {
+        int v;
+        if (PE_parse_boot_argn("itlwm_log", &v, sizeof(v)))
+            itlwm_log_level = v > 0;
+    }
+} itlwm_log_boot_arg;
+
 int pci_get_capability(pci_chipset_tag_t chipsettag, pcitag_t pcitag, int capid, int *offsetp, pcireg_t *valuep) {
 	uint8_t offset;
 	UInt32 value = pcitag->findPCICapability(capid, &offset);

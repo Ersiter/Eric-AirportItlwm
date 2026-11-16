@@ -249,7 +249,7 @@ static void build_rateset(struct ieee80211_ra_node *rn, enum ieee80211_phymode m
             }
             break;
         default:
-            XYLog("%s invalid mode=%d\n", __FUNCTION__, mode);
+            XYLogE("%s invalid mode=%d\n", __FUNCTION__, mode);
             break;
     }
 }

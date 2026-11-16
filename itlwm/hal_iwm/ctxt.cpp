@@ -152,7 +152,7 @@ iwm_get_channel_width(struct ieee80211com *ic, struct ieee80211_channel *c, bool
         case IEEE80211_CHAN_WIDTH_160:
             return IWM_PHY_VHT_CHANNEL_MODE160;
         default:
-            XYLog("Invalid channel width=%u\n", ic->ic_bss->ni_chw);
+            XYLogE("Invalid channel width=%u\n", ic->ic_bss->ni_chw);
             return ret;
     }
 }
@@ -182,7 +182,7 @@ iwm_get_ctrl_pos(struct ieee80211com *ic, struct ieee80211_channel *c, bool awdl
         case  70:
             return IWM_PHY_VHT_CTRL_POS_4_ABOVE;
         default:
-            XYLog("Invalid channel definition freq=%d %d\n", ic->ic_bss->ni_chan->ic_freq, offset);
+            XYLogE("Invalid channel definition freq=%d %d\n", ic->ic_bss->ni_chan->ic_freq, offset);
             /* fall through */
         case 0:
             /*

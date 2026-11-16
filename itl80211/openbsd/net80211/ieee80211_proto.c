@@ -972,7 +972,7 @@ ieee80211_he_negotiate(struct ieee80211com *ic, struct ieee80211_node *ni)
         (!IEEE80211_IS_CHAN_6GHZ(ni->ni_chan) &&
          !(ni->ni_flags & IEEE80211_NODE_HT)) ||
         !(ni->ni_flags & IEEE80211_NODE_QOS)) {
-        XYLog("HE rejected: requested=%u flags=%08x modecaps=%08x local=%08x user=%08x reg=%02x op=%08x basic=%04x peer80=%04x/%04x local80=%04x/%04x\n",
+        XYLogE("HE rejected: requested=%u flags=%08x modecaps=%08x local=%08x user=%08x reg=%02x op=%08x basic=%04x peer80=%04x/%04x local80=%04x/%04x\n",
             ni->ni_he_requested, ni->ni_flags, ic->ic_modecaps, ic->ic_flags,
             ic->ic_userflags, restrictions, ni->ni_he_oper_params,
             ni->ni_he_oper_nss_set,
@@ -1576,7 +1576,7 @@ ieee80211_auth_open(struct ieee80211com *ic, const struct ieee80211_frame *wh,
 		}
 		if (status != 0) {
 			if (ifp->if_flags & IFF_DEBUG)
-				XYLog("%s: open authentication failed "
+				XYLogE("%s: open authentication failed "
 				    "(status %d) for %s\n", ifp->if_xname,
 				    status,
 				    ether_sprintf((u_int8_t *)wh->i_addr3));
@@ -1946,7 +1946,7 @@ ieee80211_newstate(struct ieee80211com *ic, enum ieee80211_state nstate,
 
 	ostate = ic->ic_state;
 	if (ifp->if_flags & IFF_DEBUG)
-		XYLog("%s: %s -> %s\n", ifp->if_xname,
+		XYLogE("%s: %s -> %s\n", ifp->if_xname,
 		    ieee80211_state_name[ostate], ieee80211_state_name[nstate]);
 	ic->ic_state = nstate;			/* state transition */
 	ni = ic->ic_bss;			/* NB: no reference held */
@@ -2103,7 +2103,7 @@ justcleanup:
 		switch (ostate) {
 		case IEEE80211_S_INIT:
 			if (ifp->if_flags & IFF_DEBUG)
-				XYLog("%s: invalid transition %s -> %s\n",
+				XYLogE("%s: invalid transition %s -> %s\n",
 				    ifp->if_xname, ieee80211_state_name[ostate],
 				    ieee80211_state_name[nstate]);
 			break;
@@ -2152,7 +2152,7 @@ justcleanup:
 		case IEEE80211_S_SCAN:
 		case IEEE80211_S_ASSOC:
 			if (ifp->if_flags & IFF_DEBUG)
-				XYLog("%s: invalid transition %s -> %s\n",
+				XYLogE("%s: invalid transition %s -> %s\n",
 				    ifp->if_xname, ieee80211_state_name[ostate],
 				    ieee80211_state_name[nstate]);
 			break;
@@ -2176,7 +2176,7 @@ justcleanup:
 		case IEEE80211_S_AUTH:
 		case IEEE80211_S_RUN:
 			if (ifp->if_flags & IFF_DEBUG)
-				XYLog("%s: invalid transition %s -> %s\n",
+				XYLogE("%s: invalid transition %s -> %s\n",
 				    ifp->if_xname, ieee80211_state_name[ostate],
 				    ieee80211_state_name[nstate]);
 			break;

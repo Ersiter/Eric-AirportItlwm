@@ -214,7 +214,7 @@ void AirportItlwmSkywalkInterface::setPTK(const u_int8_t *key, size_t key_len) {
         memcpy(k->k_key, key, k->k_len);
         /* install the PTK */
         if ((*ic->ic_set_key)(ic, ni, k) != 0) {
-            XYLog("setting PTK failed\n");
+            XYLogE("setting PTK failed\n");
             return;
         }
         else
@@ -254,7 +254,7 @@ void AirportItlwmSkywalkInterface::setGTK(const u_int8_t *gtk, size_t key_len, u
             memcpy(k->k_key, gtk, k->k_len);
             /* install the GTK */
             if ((*ic->ic_set_key)(ic, ni, k) != 0) {
-                XYLog("setting GTK failed\n");
+                XYLogE("setting GTK failed\n");
                 return;
             }
             else
@@ -269,7 +269,7 @@ void AirportItlwmSkywalkInterface::setGTK(const u_int8_t *gtk, size_t key_len, u
             ++ni->ni_key_count == 2)
 #endif
         {
-            XYLog("marking port %s valid\n",
+            XYLogE("marking port %s valid\n",
                   ether_sprintf(ni->ni_macaddr));
             ni->ni_port_valid = 1;
             ieee80211_set_link_state(ic, LINK_STATE_UP);
@@ -303,7 +303,7 @@ initProvider(IOService *provider, bool setupWCL, const ether_addr *macOverride)
 #endif
     bool ret = IO80211InfraInterface::init();
     if (!ret) {
-        XYLog("%s IO80211InfraInterface init failed\n", __PRETTY_FUNCTION__);
+        XYLogE("%s IO80211InfraInterface init failed\n", __PRETTY_FUNCTION__);
         return false;
     }
     instance = OSDynamicCast(AirportItlwm, provider);
@@ -393,7 +393,7 @@ setCIPHER_KEY(struct apple80211_key *key)
         XYLog("Set key request: len=%d cipher_type=%d flags=%d index=%d key=%s rsc_len=%d rsc=%s ea=%s\n",
               key->key_len, key->key_cipher_type, key->key_flags, key->key_index, keydump, key->key_rsc_len, rscdump, eadump);
     else
-        XYLog("Set key request, but failed to allocate memory for hexdump\n");
+        XYLogE("Set key request, but failed to allocate memory for hexdump\n");
     
     if (keydump)
         IOFree((void*)keydump, 3 * key->key_len + 1);
@@ -989,7 +989,7 @@ getLINK_CHANGED_EVENT_DATA(struct apple80211_link_changed_event_data *ed)
         ed->reason = APPLE80211_LINK_DOWN_REASON_DEAUTH;
     } else
         ed->rssi = -(0 - IWM_MIN_DBM - ieee80211_mld_active_node(ic)->ni_rssi);
-    XYLog("Link %s, reason: %d, voluntary: %d\n", ed->isLinkDown ? "down" : "up", ed->reason, ed->voluntary);
+    XYLogE("Link %s, reason: %d, voluntary: %d\n", ed->isLinkDown ? "down" : "up", ed->reason, ed->voluntary);
     return kIOReturnSuccess;
 }
 

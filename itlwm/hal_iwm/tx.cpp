@@ -388,7 +388,7 @@ iwm_enable_txq(struct iwm_softc *sc, int sta_id, int qid, int fifo, int ssn, int
     err = iwm_send_cmd_pdu(sc, IWM_SCD_QUEUE_CFG, 0,
                            sizeof(cmd), &cmd);
     if (err)
-        XYLog("%s failed error=%d\n", __FUNCTION__, err);
+        XYLogE("%s failed error=%d\n", __FUNCTION__, err);
     
     return err;
 }

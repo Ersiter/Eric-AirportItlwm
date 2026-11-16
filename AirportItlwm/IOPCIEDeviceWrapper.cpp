@@ -86,7 +86,7 @@ probe(IOService *provider, SInt32 *score)
         if (IwxBE::pciFamily(device->configRead16(kIOPCIConfigDeviceID)) != IwxBE::None) {
             IOReturn ret = device->configureInterrupts(kIOInterruptTypePCIMessagedX, 1, 1, 0);
             if (ret != kIOReturnSuccess) {
-                XYLog("BE MSI-X allocation failed: 0x%x\n", ret);
+                XYLogE("BE MSI-X allocation failed: 0x%x\n", ret);
                 fHalService->release();
                 fHalService = NULL;
                 return NULL;

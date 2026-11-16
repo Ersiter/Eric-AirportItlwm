@@ -336,7 +336,7 @@ bool AirportItlwm::start(IOService *provider)
     const IONetworkMedium *primaryMedium;
     if (!createMediumTables(&primaryMedium) ||
         !setCurrentMedium(primaryMedium) || !setSelectedMedium(primaryMedium)) {
-        XYLog("setup medium fail\n");
+        XYLogE("setup medium fail\n");
         releaseAll();
         return false;
     }
@@ -361,12 +361,12 @@ bool AirportItlwm::start(IOService *provider)
         const char *blocked = AirportItlwmAWDLInterface::nativeTableMismatch();
         setProperty("AWDLBuildCheck", blocked ? blocked : "verified");
         if (blocked) {
-            XYLog("AWDL disabled: %s\n", blocked);
+            XYLogE("AWDL disabled: %s\n", blocked);
             fAWDLEnabled = false;
         }
     }
     if (fAWDLEnabled) {
-        XYLog("experimental AWDL enabled\n");
+        XYLogE("experimental AWDL enabled\n");
         fHalService->get80211Controller()->ic_vendor_action_handler = awdlActionFrameHandler;
         fHalService->get80211Controller()->ic_awdl_data_handler = awdlDataFrameHandler;
         fHalService->get80211Controller()->ic_awdl_ba_accept =
@@ -375,14 +375,14 @@ bool AirportItlwm::start(IOService *provider)
 #endif
 
     if (!fHalService->attach(pciNub)) {
-        XYLog("attach fail\n");
+        XYLogE("attach fail\n");
         super::stop(pciNub);
         releaseAll();
         return false;
     }
     fWatchdogWorkLoop = _fWorkloop;
     if (fWatchdogWorkLoop == NULL) {
-        XYLog("init watchdog workloop fail\n");
+        XYLogE("init watchdog workloop fail\n");
         fHalService->detach(pciNub);
         super::stop(pciNub);
         releaseAll();
@@ -391,7 +391,7 @@ bool AirportItlwm::start(IOService *provider)
     fWatchdogWorkLoop->retain();
     watchdogTimer = IOTimerEventSource::timerEventSource(this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &AirportItlwm::watchdogAction));
     if (!watchdogTimer) {
-        XYLog("init watchdog fail\n");
+        XYLogE("init watchdog fail\n");
         fHalService->detach(pciNub);
         super::stop(pciNub);
         releaseAll();
@@ -416,7 +416,7 @@ bool AirportItlwm::start(IOService *provider)
 #else
     if (!fNetIf->init(this)) {
 #endif
-        XYLog("Skywalk interface init fail\n");
+        XYLogE("Skywalk interface init fail\n");
         super::stop(provider);
         releaseAll();
         return false;
@@ -426,20 +426,20 @@ bool AirportItlwm::start(IOService *provider)
 
 #ifndef AIRPORT_WCL
     if (!initCCLogs()) {
-        XYLog("CCLog init fail\n");
+        XYLogE("CCLog init fail\n");
         super::stop(provider);
         releaseAll();
         return false;
     }
 #endif
     if (!fNetIf->attach(this)) {
-        XYLog("attach to service fail\n");
+        XYLogE("attach to service fail\n");
         super::stop(provider);
         releaseAll();
         return false;
     }
     if (!attachInterface(fNetIf, this)) {
-        XYLog("attach to interface fail\n");
+        XYLogE("attach to interface fail\n");
         super::stop(provider);
         releaseAll();
         return false;
@@ -451,14 +451,14 @@ bool AirportItlwm::start(IOService *provider)
                                              true
 #endif
                                              )) {
-        XYLog("attach to IONetworkController interface fail\n");
+        XYLogE("attach to IONetworkController interface fail\n");
         super::stop(provider);
         releaseAll();
         return false;
     }
     memset(&registInfo, 0, sizeof(registInfo));
     if (!fNetIf->initRegistrationInfo(&registInfo, 1, sizeof(registInfo))) {
-        XYLog("initRegistrationInfo fail\n");
+        XYLogE("initRegistrationInfo fail\n");
         super::stop(provider);
         releaseAll();
         return false;
@@ -483,7 +483,7 @@ bool AirportItlwm::start(IOService *provider)
 
 #else
     if (!fNetIf->initRegistrationInfo(&registInfo, 1, sizeof(registInfo))) {
-        XYLog("initRegistrationInfo fail\n");
+        XYLogE("initRegistrationInfo fail\n");
         super::stop(provider);
         releaseAll();
         return false;
@@ -634,7 +634,7 @@ bool AirportItlwm::configureInterface(IONetworkInterface *netif)
     struct _ifnet *ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
 
     if (super::configureInterface(netif) == false) {
-        XYLog("super failed\n");
+        XYLogE("super failed\n");
         return false;
     }
 #ifdef AIRPORT_WCL
@@ -713,7 +713,7 @@ bool AirportItlwm::createMediumTables(const IONetworkMedium **primary)
 
     OSDictionary *mediumDict = OSDictionary::withCapacity(2);
     if (mediumDict == NULL) {
-        XYLog("Cannot allocate OSDictionary\n");
+        XYLogE("Cannot allocate OSDictionary\n");
         return false;
     }
 
@@ -729,7 +729,7 @@ bool AirportItlwm::createMediumTables(const IONetworkMedium **primary)
 
     bool result = publishMediumDictionary(mediumDict);
     if (!result) {
-        XYLog("Cannot publish medium dictionary!\n");
+        XYLogE("Cannot publish medium dictionary!\n");
     }
 
     mediumDict->release();

@@ -110,10 +110,28 @@
 
 #define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
 
-#define XYLog(fmt, x...)\
+// Two log tiers. XYLogE is always written: errors, firmware error dumps and the lines that say what the device is doing
+// (firmware loaded, state changes, roaming, link changes). XYLog is the verbose tier: Debug builds write it, Release
+// builds only with the boot argument itlwm_log=1.
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern int itlwm_log_level;
+#ifdef __cplusplus
+}
+#endif
+
+#define XYLogE(fmt, x...)\
 do\
 {\
 kprintf("%s: " fmt, "itlwm", ##x);\
+}while(0)
+
+#define XYLog(fmt, x...)\
+do\
+{\
+if (__builtin_expect(itlwm_log_level > 0, 0))\
+    XYLogE(fmt, ##x);\
 }while(0)
 
 typedef UInt8  u8;

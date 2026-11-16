@@ -17,7 +17,7 @@
 IOReturn AirportItlwm::
 getIE(OSObject *object, struct apple80211_ie_data *data)
 {
-    XYLog("%s %s Error\n", __FUNCTION__,  INTERFACE_NAME(object));
+    XYLogE("%s %s Error\n", __FUNCTION__,  INTERFACE_NAME(object));
     return kIOReturnError;
 }
 
@@ -36,7 +36,7 @@ setIE(OSObject *object, struct apple80211_ie_data *data)
 IOReturn AirportItlwm::
 setP2P_SCAN(OSObject *object, struct apple80211_scan_data *data)
 {
-    XYLog("%s %s ssid=%s bssid=%s channel=%d phy_mode=%d scan_type=%d\n", __FUNCTION__, INTERFACE_NAME(object), data->ssid, ether_sprintf(data->bssid.octet), data->num_channels, data->phy_mode, data->scan_type);
+    XYLogE("%s %s ssid=%s bssid=%s channel=%d phy_mode=%d scan_type=%d\n", __FUNCTION__, INTERFACE_NAME(object), data->ssid, ether_sprintf(data->bssid.octet), data->num_channels, data->phy_mode, data->scan_type);
 
     return kIOReturnSuccess;
 }

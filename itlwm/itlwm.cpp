@@ -111,7 +111,7 @@ bool itlwm::configureInterface(IONetworkInterface *netif)
     struct _ifnet *ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
     
     if (super::configureInterface(netif) == false) {
-        XYLog("super failed\n");
+        XYLogE("super failed\n");
         return false;
     }
     
@@ -146,7 +146,7 @@ bool itlwm::createMediumTables(const IONetworkMedium **primary)
     
     OSDictionary *mediumDict = OSDictionary::withCapacity(1);
     if (mediumDict == NULL) {
-        XYLog("Cannot allocate OSDictionary\n");
+        XYLogE("Cannot allocate OSDictionary\n");
         return false;
     }
     
@@ -159,7 +159,7 @@ bool itlwm::createMediumTables(const IONetworkMedium **primary)
     
     bool result = publishMediumDictionary(mediumDict);
     if (!result) {
-        XYLog("Cannot publish medium dictionary!\n");
+        XYLogE("Cannot publish medium dictionary!\n");
     }
 
     mediumDict->release();
@@ -328,7 +328,7 @@ bool itlwm::start(IOService *provider)
     const IONetworkMedium *primaryMedium;
     if (!createMediumTables(&primaryMedium) ||
         !setCurrentMedium(primaryMedium) || !setSelectedMedium(primaryMedium)) {
-        XYLog("setup medium fail\n");
+        XYLogE("setup medium fail\n");
         releaseAll();
         return false;
     }
@@ -340,13 +340,13 @@ bool itlwm::start(IOService *provider)
         fHalService->get80211Controller()->ic_userflags |= IEEE80211_F_NOHT40;
     
     if (!fHalService->attach(pciNub)) {
-        XYLog("attach fail\n");
+        XYLogE("attach fail\n");
         super::stop(pciNub);
         releaseAll();
         return false;
     }
     if (!attachInterface((IONetworkInterface **)&fNetIf, true)) {
-        XYLog("attach to interface fail\n");
+        XYLogE("attach to interface fail\n");
         fHalService->detach(pciNub);
         super::stop(pciNub);
         releaseAll();
@@ -354,7 +354,7 @@ bool itlwm::start(IOService *provider)
     }
     fWatchdogWorkLoop = IOWorkLoop::workLoop();
     if (fWatchdogWorkLoop == NULL) {
-        XYLog("init watchdog workloop fail\n");
+        XYLogE("init watchdog workloop fail\n");
         fHalService->detach(pciNub);
         super::stop(pciNub);
         releaseAll();
@@ -362,7 +362,7 @@ bool itlwm::start(IOService *provider)
     }
     watchdogTimer = IOTimerEventSource::timerEventSource(this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &itlwm::watchdogAction));
     if (!watchdogTimer) {
-        XYLog("init watchdog fail\n");
+        XYLogE("init watchdog fail\n");
         fHalService->detach(pciNub);
         super::stop(pciNub);
         releaseAll();

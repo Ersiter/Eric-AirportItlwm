@@ -242,7 +242,7 @@ iwm_nic_lock(struct iwm_softc *sc)
         return 1;
     }
 
-    XYLog("%s: acquiring device failed\n", DEVNAME(sc));
+    XYLogE("%s: acquiring device failed\n", DEVNAME(sc));
     return 0;
 }
 
@@ -310,7 +310,7 @@ bool allocDmaMemory2(bus_dma_tag_t tag, struct iwm_dma_info *dma, size_t size, i
     bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous | kIOMapInhibitCache, size, DMA_BIT_MASK(36));
     
     if (bmd == NULL) {
-        XYLog("%s alloc DMA memory failed.\n", __FUNCTION__);
+        XYLogE("%s alloc DMA memory failed.\n", __FUNCTION__);
         return false;
     }
     
@@ -318,7 +318,7 @@ bool allocDmaMemory2(bus_dma_tag_t tag, struct iwm_dma_info *dma, size_t size, i
     IODMACommand *cmd = IODMACommand::withSpecification(kIODMACommandOutputHost64, 64, 0, IODMACommand::kMapped, 0, alignment);
     
     if (cmd == NULL) {
-        XYLog("%s alloc IODMACommand memory failed.\n", __FUNCTION__);
+        XYLogE("%s alloc IODMACommand memory failed.\n", __FUNCTION__);
         bmd->complete();
         bmd->release();
         return false;

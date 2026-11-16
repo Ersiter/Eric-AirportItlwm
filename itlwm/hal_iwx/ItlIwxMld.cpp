@@ -114,7 +114,7 @@ iwx_mld_log_failure(struct iwx_softc *sc, const char *operation,
 {
     if (sc->sc_flags & IWX_FLAG_SHUTDOWN)
         return;
-    XYLog("%s: %s failed at %s: error=%d cmd=0x%08x detail=%d\n",
+    XYLogE("%s: %s failed at %s: error=%d cmd=0x%08x detail=%d\n",
         __FUNCTION__, operation, stage, error, command, detail);
 }
 
@@ -373,7 +373,7 @@ iwx_mld_update_active_links(struct iwx_softc *sc, uint8_t link_mask,
         }
         removed_done |= 1U << i;
     }
-    XYLog("%s: active links 0x%x -> 0x%x, primary %u, EMLSR %d\n", __FUNCTION__,
+    XYLogE("%s: active links 0x%x -> 0x%x, primary %u, EMLSR %d\n", __FUNCTION__,
         old_links, link_mask, primary_link, emlsr_active);
     sc->sc_mld_active_links = link_mask;
     sc->sc_mld_active_sta_mask = new_sta_mask;
@@ -788,7 +788,7 @@ iwx_mld_note_emlsr_exit(struct iwx_softc *sc, int reason)
             IWX_MLD_EMLSR_PREVENT_SHORT : IWX_MLD_EMLSR_PREVENT_LONG;
     sc->sc_mld_emlsr_blocked |= IWX_MLD_EMLSR_BLOCKED_PREVENTION;
     sc->sc_mld_emlsr_prevent_until = now + delay;
-    XYLog("%s: preventing EMLSR for %u s after exit %s\n", __FUNCTION__, delay,
+    XYLogE("%s: preventing EMLSR for %u s after exit %s\n", __FUNCTION__, delay,
         iwx_mld_emlsr_exit_name(reason));
 }
 
@@ -813,7 +813,7 @@ iwx_mld_exit_emlsr(struct iwx_softc *sc, int reason)
             keep = i;
         }
     }
-    XYLog("%s: leaving EMLSR, reason %s, keeping link %u\n", __FUNCTION__,
+    XYLogE("%s: leaving EMLSR, reason %s, keeping link %u\n", __FUNCTION__,
         iwx_mld_emlsr_exit_name(reason), keep);
     iwx_mld_schedule_active_links(sc, 1U << keep, keep, false, false);
     iwx_mld_note_emlsr_exit(sc, reason);
@@ -1757,7 +1757,7 @@ iwx_mld_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in,
     }
 
     /* What the firmware is given, for when it asserts on this command. */
-    XYLog("%s: action %u assoc %d aid %u he %u eht %u eml timeout %u sync delay %u "
+    XYLogE("%s: action %u assoc %d aid %u he %u eht %u eml timeout %u sync delay %u "
         "filter 0x%x mld %d\n", __FUNCTION__, action, assoc,
         le16toh(cmd.client.assoc_id), le16toh(cmd.he_support),
         le32toh(cmd.eht_support), cmd.client.esr_transition_timeout,
@@ -2318,7 +2318,7 @@ fail:
     if (generation == sc->sc_generation) {
         cleanup_err = iwx_mld_deauth(sc);
         if (cleanup_err)
-            XYLog("%s: MLD AUTH cleanup failed (%d), original error %d\n",
+            XYLogE("%s: MLD AUTH cleanup failed (%d), original error %d\n",
                 sc->sc_dev.dv_xname, cleanup_err, err);
     }
     return err;
@@ -2338,7 +2338,7 @@ iwx_mld_log_links(struct iwx_softc *sc)
     const bool mlo = ic->ic_wcl_peer_is_mlo;
 
     if (mlo)
-        XYLog("%s: %d link(s), AP EML capabilities 0x%04x (EMLSR %s), driver EMLSR %s, "
+        XYLogE("%s: %d link(s), AP EML capabilities 0x%04x (EMLSR %s), driver EMLSR %s, "
             "active links 0x%x\n", __FUNCTION__, ic->ic_mld_link_count,
             ic->ic_bss->ni_mld_eml_capa,
             ic->ic_mld_emlsr_peer_supported ? "offered" : "not offered",

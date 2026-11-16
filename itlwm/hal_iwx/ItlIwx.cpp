@@ -1533,7 +1533,7 @@ iwx_clear_persistence_bit(struct iwx_softc *sc)
         uint32_t wprot_val = iwx_read_prph_unlocked(sc, wprot);
         
         if (wprot_val & IWX_PREG_WFPM_ACCESS) {
-            XYLog("Error, can not clear persistence bit\n");
+            XYLogE("Error, can not clear persistence bit\n");
             return;
         }
         iwx_write_prph_unlocked(sc, IWX_HPM_DEBUG,
@@ -1695,7 +1695,7 @@ iwx_read_firmware(struct iwx_softc *sc)
         sc->sc_hw_rev = (sc->sc_hw_rev & ~0xc) | (step << 2);
     }
     if (!IwxBE::makePrefix(sc->sc_be, mac, step, sc->sc_hw_rf_id)) {
-        XYLog("BE unsupported MAC/RF: rev=0x%x rfid=0x%x\n", sc->sc_hw_rev, sc->sc_hw_rf_id);
+        XYLogE("BE unsupported MAC/RF: rev=0x%x rfid=0x%x\n", sc->sc_hw_rev, sc->sc_hw_rf_id);
         return ENOTSUP;
     }
     sc->sc_pcitag->setProperty("AirportItlwm-FirmwarePrefix", sc->sc_be.prefix);
@@ -1703,7 +1703,7 @@ iwx_read_firmware(struct iwx_softc *sc)
     int err = ENOENT;
     for (unsigned index = 0; IwxBE::candidate(sc->sc_be, index); ++index) {
         sc->sc_fwname = sc->sc_be.firmware;
-        XYLog("BE firmware candidate %s PNVM %s\n", sc->sc_fwname, sc->sc_be.pnvm);
+        XYLogE("BE firmware candidate %s PNVM %s\n", sc->sc_fwname, sc->sc_be.pnvm);
         if (getFWDescByName(sc->sc_fwname) == NULL || getFWDescByName(sc->sc_be.pnvm) == NULL) {
             XYLog("BE candidate resource pair unavailable\n");
             continue;
@@ -1773,13 +1773,13 @@ iwx_read_firmware_file(struct iwx_softc *sc)
     fwData = getFWDescByName(sc->sc_fwname);
     if (fwData == NULL) {
         err = EINVAL;
-        XYLog("%s resource load fail.\n", sc->sc_fwname);
+        XYLogE("%s resource load fail.\n", sc->sc_fwname);
         goto out;
     }
     fw->fw_rawsize = fwData->getLength() * 4;
     fw->fw_rawdata = malloc(fw->fw_rawsize, 1, 1);
     uncompressFirmware((u_char *)fw->fw_rawdata, (uint *)&fw->fw_rawsize, (u_char *)fwData->getBytesNoCopy(), fwData->getLength());
-    XYLog("load firmware %s done\n", sc->sc_fwname);
+    XYLogE("load firmware %s done\n", sc->sc_fwname);
     
     sc->sc_capaflags = 0;
     sc->sc_capa_n_scan_channels = IWX_DEFAULT_SCAN_CHANNELS;
@@ -1793,7 +1793,7 @@ iwx_read_firmware_file(struct iwx_softc *sc)
     uhdr = (struct iwx_tlv_ucode_header *)fw->fw_rawdata;
     if (*(uint32_t *)fw->fw_rawdata != 0
         || le32toh(uhdr->magic) != IWX_TLV_UCODE_MAGIC) {
-        XYLog("%s: invalid firmware %s\n",
+        XYLogE("%s: invalid firmware %s\n",
               DEVNAME(sc), sc->sc_fwname);
         err = EINVAL;
         goto out;
@@ -2132,7 +2132,7 @@ iwx_read_firmware_file(struct iwx_softc *sc)
                 }
                 sc->sc_capa_num_stations = le32toh(*(uint32_t *)tlv_data);
                 if (sc->sc_capa_num_stations > IWX_STATION_COUNT_MAX) {
-                    XYLog("%d is an invalid number of station\n",
+                    XYLogE("%d is an invalid number of station\n",
                           sc->sc_capa_num_stations);
                     err = EINVAL;
                     goto parse_out;
@@ -2180,11 +2180,11 @@ iwx_read_firmware_file(struct iwx_softc *sc)
     
     KASSERT(err == 0, "err == 0");
     
-    XYLog("firmware parse done: %s %s\n", sc->sc_fwname, sc->sc_fwver);
+    XYLogE("firmware parse done: %s %s\n", sc->sc_fwname, sc->sc_fwver);
     
 parse_out:
     if (err) {
-        XYLog("%s: firmware parse error %d, "
+        XYLogE("%s: firmware parse error %d, "
               "section type %d\n", DEVNAME(sc), err, tlv_type);
     }
     
@@ -2233,7 +2233,7 @@ iwx_pnvm_handle_section(struct iwx_softc *sc, const uint8_t *data, size_t len)
         tlv_type = le32toh(tlv->type);
         
         if (len < tlv_len) {
-            XYLog("invalid TLV len: %zd/%u\n",
+            XYLogE("invalid TLV len: %zd/%u\n",
                   len, tlv_len);
             err = -EINVAL;
             goto out;
@@ -2244,7 +2244,7 @@ iwx_pnvm_handle_section(struct iwx_softc *sc, const uint8_t *data, size_t len)
         switch (tlv_type) {
             case IWX_UCODE_TLV_PNVM_VERSION:
                 if (tlv_len < sizeof(__le32)) {
-                    XYLog("Invalid size for IWL_UCODE_TLV_PNVM_VERSION (expected %zd, got %d)\n",
+                    XYLogE("Invalid size for IWL_UCODE_TLV_PNVM_VERSION (expected %zd, got %d)\n",
                           sizeof(__le32), tlv_len);
                     break;
                 }
@@ -2256,7 +2256,7 @@ iwx_pnvm_handle_section(struct iwx_softc *sc, const uint8_t *data, size_t len)
                 break;
             case IWX_UCODE_TLV_HW_TYPE:
                 if (tlv_len < 2 * sizeof(__le16)) {
-                    XYLog("Invalid size for IWL_UCODE_TLV_HW_TYPE (expected %zd, got %d)\n",
+                    XYLogE("Invalid size for IWL_UCODE_TLV_HW_TYPE (expected %zd, got %d)\n",
                           2 * sizeof(__le16), tlv_len);
                     break;
                 }
@@ -2348,7 +2348,7 @@ done:
         goto out;
     }
     
-    XYLog("loaded PNVM version %08x\n", sha1);
+    XYLogE("loaded PNVM version %08x\n", sha1);
     
     prph_sc_ctrl = &((struct iwx_prph_scratch *)sc->prph_scratch_dma.vaddr)->ctrl_cfg;
     
@@ -2422,13 +2422,13 @@ iwx_read_pnvm(struct iwx_softc *sc)
 
     if (fwData == NULL) {
         err = EINVAL;
-        XYLog("%s resource load fail.\n", pnvm_name);
+        XYLogE("%s resource load fail.\n", pnvm_name);
         goto out;
     }
     fw->pnvm_rawsize = fwData->getLength() * 20;
     fw->pnvm_rawdata = malloc(fw->pnvm_rawsize, 1, 1);
     uncompressFirmware((u_char *)fw->pnvm_rawdata, (uint *)&fw->pnvm_rawsize, (u_char *)fwData->getBytesNoCopy(), fwData->getLength());
-    XYLog("load firmware %s done %zu\n", pnvm_name, fw->pnvm_rawsize);
+    XYLogE("load firmware %s done %zu\n", pnvm_name, fw->pnvm_rawsize);
     
     XYLog("Parsing PNVM file\n");
     
@@ -2445,7 +2445,7 @@ iwx_read_pnvm(struct iwx_softc *sc)
         tlv_type = le32toh(tlv->type);
 
         if (len < tlv_len || roundup(tlv_len, 4) > len) {
-            XYLog("invalid TLV len: %zd/%u\n",
+            XYLogE("invalid TLV len: %zd/%u\n",
                 len, tlv_len);
             err = -EINVAL;
             goto out;
@@ -2691,7 +2691,7 @@ iwx_nic_lock(struct iwx_softc *sc)
         return 1;
     }
     
-    XYLog("%s: acquiring device failed\n", DEVNAME(sc));
+    XYLogE("%s: acquiring device failed\n", DEVNAME(sc));
     return 0;
 }
 
@@ -2761,12 +2761,12 @@ bool allocDmaMemory2(bus_dma_tag_t tag, struct iwx_dma_info *dma, size_t size, i
     bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous | kIOMapInhibitCache, size, DMA_BIT_MASK(64));
     
     if (bmd == NULL) {
-        XYLog("%s alloc DMA memory failed.\n", __FUNCTION__);
+        XYLogE("%s alloc DMA memory failed.\n", __FUNCTION__);
         return false;
     }
     
     if (bmd->prepare() != kIOReturnSuccess) {
-        XYLog("%s prepare DMA memory failed.\n", __FUNCTION__);
+        XYLogE("%s prepare DMA memory failed.\n", __FUNCTION__);
         bmd->release();
         bmd = NULL;
         return false;
@@ -2774,7 +2774,7 @@ bool allocDmaMemory2(bus_dma_tag_t tag, struct iwx_dma_info *dma, size_t size, i
     IODMACommand *cmd = IODMACommand::withSpecification(kIODMACommandOutputHost64, 64, 0, IODMACommand::kMapped, 0, alignment);
     
     if (cmd == NULL) {
-        XYLog("%s alloc IODMACommand memory failed.\n", __FUNCTION__);
+        XYLogE("%s alloc IODMACommand memory failed.\n", __FUNCTION__);
         bmd->complete();
         bmd->release();
         return false;
@@ -3448,14 +3448,14 @@ iwx_apm_init(struct iwx_softc *sc)
      * and accesses to uCode SRAM.
      */
     if (!iwx_poll_bit(sc, IWX_CSR_GP_CNTRL, ready, ready, 25000)) {
-        XYLog("%s: timeout waiting for clock stabilization\n",
+        XYLogE("%s: timeout waiting for clock stabilization\n",
               DEVNAME(sc));
         err = ETIMEDOUT;
         goto out;
     }
 out:
     if (err)
-        XYLog("%s: apm init error %d\n", DEVNAME(sc), err);
+        XYLogE("%s: apm init error %d\n", DEVNAME(sc), err);
     return err;
 }
 
@@ -3479,14 +3479,14 @@ iwx_apm_stop(struct iwx_softc *sc)
         if (!iwx_poll_bit(sc, IWX_CSR_GP_CNTRL,
                          IWX_CSR_GP_CNTRL_REG_FLAG_BUS_MASTER_DISABLE_STATUS,
                          IWX_CSR_GP_CNTRL_REG_FLAG_BUS_MASTER_DISABLE_STATUS, 5000))
-            XYLog("%s: timeout waiting for master\n", DEVNAME(sc));
+            XYLogE("%s: timeout waiting for master\n", DEVNAME(sc));
         DELAY(20000);
     } else {
         IWX_SETBITS(sc, IWX_CSR_RESET, IWX_CSR_RESET_REG_FLAG_STOP_MASTER);
         if (!iwx_poll_bit(sc, IWX_CSR_RESET,
                          IWX_CSR_RESET_REG_FLAG_MASTER_DISABLED,
                          IWX_CSR_RESET_REG_FLAG_MASTER_DISABLED, 100))
-            XYLog("%s: timeout waiting for master\n", DEVNAME(sc));
+            XYLogE("%s: timeout waiting for master\n", DEVNAME(sc));
     }
     
     /*
@@ -3652,7 +3652,7 @@ iwx_start_hw(struct iwx_softc *sc)
         if (!iwx_poll_bit(sc, IWX_CSR_GP_CNTRL,
                           IWX_CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY,
                           IWX_CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY, 25000)) {
-            XYLog("%s: timeout waiting for clock stabilization\n",
+            XYLogE("%s: timeout waiting for clock stabilization\n",
                   DEVNAME(sc));
             return ETIMEDOUT;
         }
@@ -3732,7 +3732,7 @@ iwx_stop_device(struct iwx_softc *sc)
 
     err = iwx_prepare_card_hw(sc);
     if (err)
-        XYLog("%s: unable to retake hardware ownership after reset (error %d)\n",
+        XYLogE("%s: unable to retake hardware ownership after reset (error %d)\n",
               DEVNAME(sc), err);
 
     /*
@@ -3959,7 +3959,7 @@ iwx_tvqm_alloc_txq(struct iwx_softc *sc, int tid, int ssn)
             return queue;
 #endif
         if (queue < 0)
-            XYLog("Failed allocating TXQ of size %d for sta %d tid %d, ret: %d\n",
+            XYLogE("Failed allocating TXQ of size %d for sta %d tid %d, ret: %d\n",
                   size, IWX_STATION_ID, tid, queue);
         size /= 2;
     } while (queue < 0 && size >= 16);
@@ -4108,7 +4108,7 @@ iwx_tvqm_enable_txq(struct iwx_softc *sc, int tid, int ssn, uint32_t size, int s
 
     pkt = hcmd.resp_pkt;
     if (!pkt || (pkt->hdr.group_id & IWX_CMD_FAILED_MSK)) {
-        XYLog("SCD_QUEUE_CFG command failed\n");
+        XYLogE("SCD_QUEUE_CFG command failed\n");
         err = -EIO;
         goto fail;
     }
@@ -4125,7 +4125,7 @@ iwx_tvqm_enable_txq(struct iwx_softc *sc, int tid, int ssn, uint32_t size, int s
     wr_idx = le16toh(resp->write_pointer);
 queue_assigned:
     if (fwqid >= ARRAY_SIZE(sc->txq)) {
-        XYLog("queue index %d unsupported", fwqid);
+        XYLogE("queue index %d unsupported", fwqid);
         err = -EIO;
         goto fail;
     }
@@ -5107,7 +5107,7 @@ iwx_mac_ctxt_task(void *arg)
     } else
         err = that->iwx_config_he_sta(sc, &in->in_ni);
     if (err) {
-        XYLog("%s context update failed: %d\n",
+        XYLogE("%s context update failed: %d\n",
             sc->sc_use_mld_api ? "MLD link" : "HE", err);
         splx(s);
         return;
@@ -5156,7 +5156,7 @@ iwx_chan_ctxt_task(void *arg)
     err = that->iwx_phy_ctxt_update(sc, in->in_phyctxt,
                                     in->in_phyctxt->channel, chains, chains, 0);
     if (err) {
-        XYLog("%s: failed to update PHY (error %d)\n",
+        XYLogE("%s: failed to update PHY (error %d)\n",
               __FUNCTION__, err);
         //        refcnt_rele_wake(&sc->task_refs);
         splx(s);
@@ -5164,7 +5164,7 @@ iwx_chan_ctxt_task(void *arg)
     }
     err = that->iwx_rs_init(sc, in, true);
     if (err) {
-        XYLog("%s: could not update rate scaling (error %d)\n",
+        XYLogE("%s: could not update rate scaling (error %d)\n",
               __FUNCTION__, err);
         //        refcnt_rele_wake(&sc->task_refs);
         splx(s);
@@ -5667,7 +5667,7 @@ iwx_start_fw(struct iwx_softc *sc)
     
     err = iwx_nic_init(sc);
     if (err) {
-        XYLog("%s: unable to init nic\n", DEVNAME(sc));
+        XYLogE("%s: unable to init nic\n", DEVNAME(sc));
         return err;
     }
     
@@ -5762,7 +5762,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
     sc->sc_init_complete = 0;
     err = iwx_load_ucode_wait_alive(sc);
     if (err) {
-        XYLog("%s: failed to load init firmware\n", DEVNAME(sc));
+        XYLogE("%s: failed to load init firmware\n", DEVNAME(sc));
         return err;
     }
     
@@ -5818,7 +5818,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
     if (sc->sc_tx_with_siso_diversity) {
         err = iwx_send_phy_cfg_cmd(sc);
         if (err) {
-            XYLog("%s: could not send init phy config (error %d)\n",
+            XYLogE("%s: could not send init phy config (error %d)\n",
                   DEVNAME(sc), err);
             return err;
         }
@@ -5832,7 +5832,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
     if (readnvm) {
         err = iwx_nvm_get(sc);
         if (err) {
-            XYLog("%s: failed to read nvm\n", DEVNAME(sc));
+            XYLogE("%s: failed to read nvm\n", DEVNAME(sc));
             return err;
         }
         if (IEEE80211_ADDR_EQ(etheranyaddr, sc->sc_ic.ic_myaddr))
@@ -7483,7 +7483,7 @@ iwx_get_channel_width(struct ieee80211com *ic, struct ieee80211_channel *c)
         case IEEE80211_CHAN_WIDTH_320:
             return IWX_PHY_VHT_CHANNEL_MODE320;
         default:
-            XYLog("Invalid channel width=%u\n", ic->ic_bss->ni_chw);
+            XYLogE("Invalid channel width=%u\n", ic->ic_bss->ni_chw);
             return ret;
     }
 }
@@ -7502,7 +7502,7 @@ iwx_get_ctrl_pos(struct ieee80211com *ic, struct ieee80211_channel *c)
         return IWX_PHY_VHT_CTRL_POS_1_BELOW;
     int distance = abs(offset);
     if (distance < 10 || distance > 150 || (distance - 10) % 20 != 0) {
-        XYLog("Invalid channel definition freq=%d center=%d offset=%d\n",
+        XYLogE("Invalid channel definition freq=%d center=%d offset=%d\n",
             ic->ic_bss->ni_chan->ic_freq, center_freq, offset);
         return IWX_PHY_VHT_CTRL_POS_1_BELOW;
     }
@@ -8636,7 +8636,7 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     
     nsegs = bus_dmamap_packet(data->map, m, &segs[0], IWX_TFH_NUM_TBS - 2, false);
     if (nsegs == 0) {
-        XYLog("%s: can't map mbuf (error %d)\n", DEVNAME(sc),
+        XYLogE("%s: can't map mbuf (error %d)\n", DEVNAME(sc),
               nsegs);
         mbuf_freem(m);
         return ENOMEM;
@@ -8827,7 +8827,7 @@ iwx_flush_sta(struct iwx_softc *sc, struct iwx_node *in)
     
     err = iwx_flush_sta_tids(sc, IWX_STATION_ID, 0xffff);
     if (err) {
-        XYLog("%s: could not flush Tx path (error %d)\n",
+        XYLogE("%s: could not flush Tx path (error %d)\n",
                __FUNCTION__, err);
         goto done;
     }
@@ -9221,7 +9221,7 @@ iwx_rm_sta(struct iwx_softc *sc, struct iwx_node *in)
 
     err = iwx_flush_sta(sc, in);
     if (err) {
-        XYLog("%s: could not flush Tx path (error %d)\n",
+        XYLogE("%s: could not flush Tx path (error %d)\n",
             __FUNCTION__, err);
         return err;
     }
@@ -10436,7 +10436,7 @@ iwx_mac_ctxt_cmd_common(struct iwx_softc *sc, struct iwx_node *in,
                     cmd->protection_flags = htole32(ht_flag);
                 break;
             default:
-                XYLog("Illegal protection mode %d\n", htprot);
+                XYLogE("Illegal protection mode %d\n", htprot);
                 break;
         }
         
@@ -10742,7 +10742,7 @@ iwx_scan(struct iwx_softc *sc)
     if (sc->sc_flags & IWX_FLAG_BGSCAN) {
         err = iwx_scan_abort(sc);
         if (err) {
-            XYLog("%s: could not abort background scan\n",
+            XYLogE("%s: could not abort background scan\n",
                   DEVNAME(sc));
             return err;
         }
@@ -10771,7 +10771,7 @@ iwx_scan(struct iwx_softc *sc)
     
     sc->sc_flags |= IWX_FLAG_SCANNING;
     if (ifp->if_flags & IFF_DEBUG)
-        XYLog("%s: %s -> %s\n", ifp->if_xname,
+        XYLogE("%s: %s -> %s\n", ifp->if_xname,
               ieee80211_state_name[ic->ic_state],
               ieee80211_state_name[IEEE80211_S_SCAN]);
     if ((sc->sc_flags & IWX_FLAG_BGSCAN) == 0) {
@@ -12962,7 +12962,7 @@ fail:
             cleanup = iwx_phy_ctxt_cmd(sc, &sc->sc_listener_phy, 1, 1,
                 IWX_FW_CTXT_ACTION_REMOVE, 0);
         if (cleanup && generation == sc->sc_generation) {
-            XYLog("%s: listener cleanup failed %d\n", DEVNAME(sc), cleanup);
+            XYLogE("%s: listener cleanup failed %d\n", DEVNAME(sc), cleanup);
             iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
         }
     }
@@ -13726,7 +13726,7 @@ iwx_enable_mgmt_queue(struct iwx_softc *sc)
                          sc->first_data_qid, IWX_MGMT_TID,
                          sc->txq[sc->first_data_qid].ring_count);
     if (err) {
-        XYLog("%s: could not enable MGMT Tx queue %d (error %d)\n",
+        XYLogE("%s: could not enable MGMT Tx queue %d (error %d)\n",
               DEVNAME(sc), sc->first_data_qid, err);
         return err;
     }
@@ -13898,7 +13898,7 @@ static uint16_t rs_fw_he_ieee80211_mcs_to_rs_mcs(uint16_t mcs)
         return 0;
     }
 
-    XYLog("invalid HE MCS %d\n", mcs);
+    XYLogE("invalid HE MCS %d\n", mcs);
     return 0;
 }
 
@@ -14623,7 +14623,7 @@ iwx_auth(struct iwx_softc *sc)
     
     err = iwx_mac_ctxt_cmd(sc, in, IWX_FW_CTXT_ACTION_ADD, 0);
     if (err) {
-        XYLog("%s: could not add MAC context (error %d)\n",
+        XYLogE("%s: could not add MAC context (error %d)\n",
               DEVNAME(sc), err);
         return err;
     }
@@ -14631,7 +14631,7 @@ iwx_auth(struct iwx_softc *sc)
     
     err = iwx_binding_cmd(sc, in, IWX_FW_CTXT_ACTION_ADD);
     if (err) {
-        XYLog("%s: could not add binding (error %d)\n",
+        XYLogE("%s: could not add binding (error %d)\n",
               DEVNAME(sc), err);
         goto rm_mac_ctxt;
     }
@@ -14639,7 +14639,7 @@ iwx_auth(struct iwx_softc *sc)
     
     err = iwx_add_sta_cmd(sc, in, 0);
     if (err) {
-        XYLog("%s: could not add sta (error %d)\n",
+        XYLogE("%s: could not add sta (error %d)\n",
               DEVNAME(sc), err);
         goto rm_binding;
     }
@@ -14733,7 +14733,7 @@ iwx_deauth(struct iwx_softc *sc)
     if (sc->sc_flags & IWX_FLAG_BINDING_ACTIVE) {
         err = iwx_binding_cmd(sc, in, IWX_FW_CTXT_ACTION_REMOVE);
         if (err) {
-            XYLog("%s: could not remove binding (error %d)\n",
+            XYLogE("%s: could not remove binding (error %d)\n",
                   DEVNAME(sc), err);
             return err;
         }
@@ -14743,7 +14743,7 @@ iwx_deauth(struct iwx_softc *sc)
     if (sc->sc_flags & IWX_FLAG_MAC_ACTIVE) {
         err = iwx_mac_ctxt_cmd(sc, in, IWX_FW_CTXT_ACTION_REMOVE, 0);
         if (err) {
-            XYLog("%s: could not remove MAC context (error %d)\n",
+            XYLogE("%s: could not remove MAC context (error %d)\n",
                   DEVNAME(sc), err);
             return err;
         }
@@ -14801,7 +14801,7 @@ iwx_run(struct iwx_softc *sc)
         err = iwx_phy_ctxt_update(sc, &sc->sc_phyctxt[0],
                                   in->in_ni.ni_chan, chains, chains, 0);
         if (err) {
-            XYLog("%s: failed to update PHY\n",
+            XYLogE("%s: failed to update PHY\n",
                   DEVNAME(sc));
             return err;
         }
@@ -14810,27 +14810,27 @@ iwx_run(struct iwx_softc *sc)
     /* We have now been assigned an associd by the AP. */
     err = iwx_mac_ctxt_cmd(sc, in, IWX_FW_CTXT_ACTION_MODIFY, 1);
     if (err) {
-        XYLog("%s: failed to update MAC\n", DEVNAME(sc));
+        XYLogE("%s: failed to update MAC\n", DEVNAME(sc));
         return err;
     }
     
     err = iwx_sf_config(sc, IWX_SF_FULL_ON);
     if (err) {
-        XYLog("%s: could not set sf full on (error %d)\n",
+        XYLogE("%s: could not set sf full on (error %d)\n",
               DEVNAME(sc), err);
         return err;
     }
     
     err = iwx_allow_mcast(sc);
     if (err) {
-        XYLog("%s: could not allow mcast (error %d)\n",
+        XYLogE("%s: could not allow mcast (error %d)\n",
               DEVNAME(sc), err);
         return err;
     }
     
     err = iwx_power_update_device(sc);
     if (err) {
-        XYLog("%s: could not send power command (error %d)\n",
+        XYLogE("%s: could not send power command (error %d)\n",
               DEVNAME(sc), err);
         return err;
     }
@@ -14849,7 +14849,7 @@ iwx_run(struct iwx_softc *sc)
 #endif
     err = iwx_power_mac_update_mode(sc, in);
     if (err) {
-        XYLog("%s: could not update MAC power (error %d)\n",
+        XYLogE("%s: could not update MAC power (error %d)\n",
               DEVNAME(sc), err);
         return err;
     }
@@ -14857,7 +14857,7 @@ iwx_run(struct iwx_softc *sc)
     if (!isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_DYNAMIC_QUOTA)) {
         err = iwx_update_quotas(sc, in, 1);
         if (err) {
-            XYLog("%s: could not update quotas (error %d)\n",
+            XYLogE("%s: could not update quotas (error %d)\n",
                   DEVNAME(sc), err);
             return err;
         }
@@ -14872,7 +14872,7 @@ iwx_run(struct iwx_softc *sc)
 
     err = iwx_add_sta_cmd(sc, in, 1);
     if (err) {
-        XYLog("%s: could not update sta (error %d)\n",
+        XYLogE("%s: could not update sta (error %d)\n",
               DEVNAME(sc), err);
         return err;
     }
@@ -14882,7 +14882,7 @@ iwx_run(struct iwx_softc *sc)
         return err;
     err = iwx_rs_init(sc, in, true);
     if (err) {
-        XYLog("%s: could not update rate scaling (error %d)\n",
+        XYLogE("%s: could not update rate scaling (error %d)\n",
               DEVNAME(sc), err);
         return err;
     }
@@ -14919,7 +14919,7 @@ iwx_run_stop(struct iwx_softc *sc)
     
     err = iwx_flush_sta(sc, in);
     if (err) {
-        XYLog("%s: could not flush Tx path (error %d)\n",
+        XYLogE("%s: could not flush Tx path (error %d)\n",
               __FUNCTION__, err);
         return err;
     }
@@ -14948,7 +14948,7 @@ iwx_run_stop(struct iwx_softc *sc)
     
     err = iwx_disable_beacon_filter(sc);
     if (err) {
-        XYLog("%s: could not disable beacon filter (error %d)\n",
+        XYLogE("%s: could not disable beacon filter (error %d)\n",
               DEVNAME(sc), err);
         return err;
     }
@@ -14956,7 +14956,7 @@ iwx_run_stop(struct iwx_softc *sc)
     if (!isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_DYNAMIC_QUOTA)) {
         err = iwx_update_quotas(sc, in, 0);
         if (err) {
-            XYLog("%s: could not update quotas (error %d)\n",
+            XYLogE("%s: could not update quotas (error %d)\n",
                   DEVNAME(sc), err);
             return err;
         }
@@ -14964,7 +14964,7 @@ iwx_run_stop(struct iwx_softc *sc)
     
     err = iwx_mac_ctxt_cmd(sc, in, IWX_FW_CTXT_ACTION_MODIFY, 0);
     if (err) {
-        XYLog("%s: failed to update MAC\n", DEVNAME(sc));
+        XYLogE("%s: failed to update MAC\n", DEVNAME(sc));
         return err;
     }
     
@@ -14974,7 +14974,7 @@ iwx_run_stop(struct iwx_softc *sc)
         err = iwx_phy_ctxt_update(sc, &sc->sc_phyctxt[0],
                                   in->in_ni.ni_chan, 1, 1, 0);
         if (err) {
-            XYLog("%s: failed to update PHY\n", DEVNAME(sc));
+            XYLogE("%s: failed to update PHY\n", DEVNAME(sc));
             return err;
         }
     }
@@ -15155,7 +15155,7 @@ iwx_delete_key(struct ieee80211com *ic, struct ieee80211_node *ni,
     if (sc->sc_use_mld_api && k->k_cipher == IEEE80211_CIPHER_CCMP) {
         int err = that->iwx_mld_set_key(sc, ni, k, 1);
         if (err)
-            XYLog("MLD key removal failed: %d\n", err);
+            XYLogE("MLD key removal failed: %d\n", err);
         ieee80211_delete_key(ic, ni, k);
         return;
     }
@@ -15163,7 +15163,7 @@ iwx_delete_key(struct ieee80211com *ic, struct ieee80211_node *ni,
         (k->k_flags & (IEEE80211_KEY_IGTK | IEEE80211_KEY_BIGTK))) {
         int err = that->iwx_mld_set_key(sc, ni, k, 1);
         if (err)
-            XYLog("MLD management key removal failed: %d\n", err);
+            XYLogE("MLD management key removal failed: %d\n", err);
         ieee80211_delete_key(ic, ni, k);
         return;
     }
@@ -15336,7 +15336,7 @@ iwx_newstate_task(void *psc)
         case IEEE80211_S_ASSOC:
             err = that->iwx_rs_init(sc, (iwx_node *)ic->ic_bss, false);
             if (err) {
-                XYLog("%s: could not init rate scaling (error %d)\n",
+                XYLogE("%s: could not init rate scaling (error %d)\n",
                       DEVNAME(sc), err);
                 goto out;
             }
@@ -15878,7 +15878,7 @@ iwx_send_soc_conf(struct iwx_softc *sc)
    cmd_id = iwx_cmd_id(IWX_SOC_CONFIGURATION_CMD, IWX_SYSTEM_GROUP, 0);
    err = iwx_send_cmd_pdu(sc, cmd_id, 0, sizeof(cmd), &cmd);
    if (err)
-       XYLog("%s: failed to set soc latency: %d\n", DEVNAME(sc), err);
+       XYLogE("%s: failed to set soc latency: %d\n", DEVNAME(sc), err);
    return err;
 }
 
@@ -16280,7 +16280,7 @@ iwx_send_temp_report_ths_cmd(struct iwx_softc *sc)
                            IWX_WIDE_ID(IWX_PHY_OPS_GROUP, IWX_TEMP_REPORTING_THRESHOLDS_CMD),
                            0, sizeof(cmd), &cmd);
     if (err)
-        XYLog("%s: TEMP_REPORT_THS_CMD command failed (error %d)\n",
+        XYLogE("%s: TEMP_REPORT_THS_CMD command failed (error %d)\n",
                DEVNAME(sc), err);
     
     return err;
@@ -16321,7 +16321,7 @@ iwx_init_hw(struct iwx_softc *sc)
     
     err = iwx_send_tx_ant_cfg(sc, iwx_fw_valid_tx_ant(sc));
     if (err) {
-        XYLog("%s: could not init tx ant config (error %d)\n",
+        XYLogE("%s: could not init tx ant config (error %d)\n",
                DEVNAME(sc), err);
         goto err;
     }
@@ -16336,7 +16336,7 @@ iwx_init_hw(struct iwx_softc *sc)
     
     err = iwx_send_bt_init_conf(sc);
     if (err) {
-        XYLog("%s: could not init bt coex (error %d)\n",
+        XYLogE("%s: could not init bt coex (error %d)\n",
                DEVNAME(sc), err);
         goto err;
     }
@@ -16354,7 +16354,7 @@ iwx_init_hw(struct iwx_softc *sc)
     /* Add auxiliary station for scanning */
     err = sc->sc_use_mld_api ? 0 : iwx_add_aux_sta(sc);
     if (err) {
-        XYLog("%s: could not add aux station (error %d)\n",
+        XYLogE("%s: could not add aux station (error %d)\n",
               DEVNAME(sc), err);
         goto err;
     }
@@ -16370,7 +16370,7 @@ iwx_init_hw(struct iwx_softc *sc)
         err = iwx_phy_ctxt_cmd(sc, &sc->sc_phyctxt[i], 1, 1,
                                IWX_FW_CTXT_ACTION_ADD, 0);
         if (err) {
-            XYLog("%s: could not add phy context %d (error %d)\n",
+            XYLogE("%s: could not add phy context %d (error %d)\n",
                    DEVNAME(sc), i, err);
             goto err;
         }
@@ -16379,7 +16379,7 @@ iwx_init_hw(struct iwx_softc *sc)
     if (!isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_SET_LTR_GEN2)) {
         err = iwx_config_ltr(sc);
         if (err) {
-            XYLog("%s: PCIe LTR configuration failed (error %d)\n",
+            XYLogE("%s: PCIe LTR configuration failed (error %d)\n",
                   DEVNAME(sc), err);
             goto err;
         }
@@ -16393,7 +16393,7 @@ iwx_init_hw(struct iwx_softc *sc)
     
     err = iwx_power_update_device(sc);
     if (err) {
-        XYLog("%s: could not send power command (error %d)\n",
+        XYLogE("%s: could not send power command (error %d)\n",
                DEVNAME(sc), err);
         goto err;
     }
@@ -16428,7 +16428,7 @@ iwx_init_hw(struct iwx_softc *sc)
             isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_LAR_MULTI_MCC) ?
                 IWX_MCC_SOURCE_GET_CURRENT : IWX_MCC_SOURCE_OLD_FW);
         if (err) {
-            XYLog("%s: could not init LAR (error %d)\n",
+            XYLogE("%s: could not init LAR (error %d)\n",
                    DEVNAME(sc), err);
             goto err;
         }
@@ -16446,7 +16446,7 @@ iwx_init_hw(struct iwx_softc *sc)
             }
             err = iwx_send_update_mcc_cmd(sc, requestedMcc, sourceId);
             if (err) {
-                XYLog("%s: could not restore LAR MCC (error %d)\n",
+                XYLogE("%s: could not restore LAR MCC (error %d)\n",
                        DEVNAME(sc), err);
                 goto err;
             }
@@ -16455,14 +16455,14 @@ iwx_init_hw(struct iwx_softc *sc)
     
     err = iwx_config_umac_scan(sc);
     if (err) {
-        XYLog("%s: could not configure scan (error %d)\n",
+        XYLogE("%s: could not configure scan (error %d)\n",
                DEVNAME(sc), err);
         goto err;
     }
     
     err = iwx_disable_beacon_filter(sc);
     if (err) {
-        XYLog("%s: could not disable beacon filter (error %d)\n",
+        XYLogE("%s: could not disable beacon filter (error %d)\n",
                DEVNAME(sc), err);
         goto err;
     }
@@ -16552,7 +16552,7 @@ iwx_init(struct _ifnet *ifp)
             (sc->sc_flags & (IWX_FLAG_RFKILL | IWX_FLAG_HW_ERR))) {
             return err;
         }
-        XYLog("%s: retrying firmware initialization after error %d\n", DEVNAME(sc), err);
+        XYLogE("%s: retrying firmware initialization after error %d\n", DEVNAME(sc), err);
     }
     
     if (sc->sc_nvm.sku_cap_11n_enable)
@@ -16904,7 +16904,7 @@ iwx_watchdog(struct _ifnet *ifp)
         if (sc->sc_tx_timer[qid] == 0)
             continue;
         if (--sc->sc_tx_timer[qid] == 0) {
-            XYLog("%s: device timeout on queue %d\n", DEVNAME(sc), qid);
+            XYLogE("%s: device timeout on queue %d\n", DEVNAME(sc), qid);
 #ifdef IWX_DEBUG
             int i;
 
@@ -17079,7 +17079,7 @@ iwx_nic_umac_error(struct iwx_softc *sc)
     base = sc->sc_uc.uc_umac_error_event_table;
     
     if (base < (sc->sc_device_family >= IWX_DEVICE_FAMILY_BZ ? 0xd0000U : 0x400000U)) {
-        XYLog("%s: Invalid error log pointer 0x%08x\n",
+        XYLogE("%s: Invalid error log pointer 0x%08x\n",
               DEVNAME(sc), base);
 #ifdef AIRPORT_WCL
         sc->sc_pcitag->setProperty("AirportItlwm-FirmwareErrorUm",
@@ -17089,7 +17089,7 @@ iwx_nic_umac_error(struct iwx_softc *sc)
     }
 
     if (iwx_read_mem(sc, base, &table, sizeof(table)/sizeof(uint32_t))) {
-        XYLog("%s: reading errlog failed\n", DEVNAME(sc));
+        XYLogE("%s: reading errlog failed\n", DEVNAME(sc));
 #ifdef AIRPORT_WCL
         sc->sc_pcitag->setProperty("AirportItlwm-FirmwareErrorUm",
             "read-failed");
@@ -17101,28 +17101,28 @@ iwx_nic_umac_error(struct iwx_softc *sc)
         return;
 
     if (ERROR_START_OFFSET <= table.valid * ERROR_ELEM_SIZE) {
-        XYLog("%s: Start UMAC Error Log Dump:\n", DEVNAME(sc));
-        XYLog("%s: Status: 0x%x, count: %d\n", DEVNAME(sc),
+        XYLogE("%s: Start UMAC Error Log Dump:\n", DEVNAME(sc));
+        XYLogE("%s: Status: 0x%x, count: %d\n", DEVNAME(sc),
               sc->sc_flags, table.valid);
     }
     
-    XYLog("%s: 0x%08X | %s\n", DEVNAME(sc), table.error_id,
+    XYLogE("%s: 0x%08X | %s\n", DEVNAME(sc), table.error_id,
           iwx_desc_lookup(table.error_id));
-    XYLog("%s: 0x%08X | umac branchlink1\n", DEVNAME(sc), table.blink1);
-    XYLog("%s: 0x%08X | umac branchlink2\n", DEVNAME(sc), table.blink2);
-    XYLog("%s: 0x%08X | umac interruptlink1\n", DEVNAME(sc), table.ilink1);
-    XYLog("%s: 0x%08X | umac interruptlink2\n", DEVNAME(sc), table.ilink2);
-    XYLog("%s: 0x%08X | umac data1\n", DEVNAME(sc), table.data1);
-    XYLog("%s: 0x%08X | umac data2\n", DEVNAME(sc), table.data2);
-    XYLog("%s: 0x%08X | umac data3\n", DEVNAME(sc), table.data3);
-    XYLog("%s: 0x%08X | umac major\n", DEVNAME(sc), table.umac_major);
-    XYLog("%s: 0x%08X | umac minor\n", DEVNAME(sc), table.umac_minor);
-    XYLog("%s: 0x%08X | frame pointer\n", DEVNAME(sc),
+    XYLogE("%s: 0x%08X | umac branchlink1\n", DEVNAME(sc), table.blink1);
+    XYLogE("%s: 0x%08X | umac branchlink2\n", DEVNAME(sc), table.blink2);
+    XYLogE("%s: 0x%08X | umac interruptlink1\n", DEVNAME(sc), table.ilink1);
+    XYLogE("%s: 0x%08X | umac interruptlink2\n", DEVNAME(sc), table.ilink2);
+    XYLogE("%s: 0x%08X | umac data1\n", DEVNAME(sc), table.data1);
+    XYLogE("%s: 0x%08X | umac data2\n", DEVNAME(sc), table.data2);
+    XYLogE("%s: 0x%08X | umac data3\n", DEVNAME(sc), table.data3);
+    XYLogE("%s: 0x%08X | umac major\n", DEVNAME(sc), table.umac_major);
+    XYLogE("%s: 0x%08X | umac minor\n", DEVNAME(sc), table.umac_minor);
+    XYLogE("%s: 0x%08X | frame pointer\n", DEVNAME(sc),
           table.frame_pointer);
-    XYLog("%s: 0x%08X | stack pointer\n", DEVNAME(sc),
+    XYLogE("%s: 0x%08X | stack pointer\n", DEVNAME(sc),
           table.stack_pointer);
-    XYLog("%s: 0x%08X | last host cmd\n", DEVNAME(sc), table.cmd_header);
-    XYLog("%s: 0x%08X | isr status reg\n", DEVNAME(sc),
+    XYLogE("%s: 0x%08X | last host cmd\n", DEVNAME(sc), table.cmd_header);
+    XYLogE("%s: 0x%08X | isr status reg\n", DEVNAME(sc),
           table.nic_isr_pref);
 #ifdef AIRPORT_WCL
     char error_umac[384];
@@ -17239,7 +17239,7 @@ iwx_nic_error(struct iwx_softc *sc)
     struct iwx_error_event_table table;
     uint32_t base;
     
-    XYLog("%s: dumping device error log\n", DEVNAME(sc));
+    XYLogE("%s: dumping device error log\n", DEVNAME(sc));
 #ifdef AIRPORT_WCL
     /*
      * dmesg is a ring buffer: the dump below survives only until the next
@@ -17264,7 +17264,7 @@ iwx_nic_error(struct iwx_softc *sc)
 #endif
     base = sc->sc_uc.uc_lmac_error_event_table[0];
     if (base < (sc->sc_device_family >= IWX_DEVICE_FAMILY_BZ ? 0xd0000U : 0x400000U)) {
-        XYLog("%s: Invalid error log pointer 0x%08x\n",
+        XYLogE("%s: Invalid error log pointer 0x%08x\n",
               DEVNAME(sc), base);
 #ifdef AIRPORT_WCL
         sc->sc_pcitag->setProperty("AirportItlwm-FirmwareErrorLmac",
@@ -17276,7 +17276,7 @@ iwx_nic_error(struct iwx_softc *sc)
     }
 
     if (iwx_read_mem(sc, base, &table, sizeof(table)/sizeof(uint32_t))) {
-        XYLog("%s: reading errlog failed\n", DEVNAME(sc));
+        XYLogE("%s: reading errlog failed\n", DEVNAME(sc));
 #ifdef AIRPORT_WCL
         sc->sc_pcitag->setProperty("AirportItlwm-FirmwareErrorLmac",
             "read-failed");
@@ -17287,7 +17287,7 @@ iwx_nic_error(struct iwx_softc *sc)
     }
 
     if (!table.valid) {
-        XYLog("%s: errlog not found, skipping\n", DEVNAME(sc));
+        XYLogE("%s: errlog not found, skipping\n", DEVNAME(sc));
 #ifdef AIRPORT_WCL
         sc->sc_pcitag->setProperty("AirportItlwm-FirmwareErrorLmac",
             "no-errlog");
@@ -17298,51 +17298,51 @@ iwx_nic_error(struct iwx_softc *sc)
     }
 
     if (ERROR_START_OFFSET <= table.valid * ERROR_ELEM_SIZE) {
-        XYLog("%s: Start Error Log Dump:\n", DEVNAME(sc));
-        XYLog("%s: Status: 0x%x, count: %d\n", DEVNAME(sc),
+        XYLogE("%s: Start Error Log Dump:\n", DEVNAME(sc));
+        XYLogE("%s: Status: 0x%x, count: %d\n", DEVNAME(sc),
               sc->sc_flags, table.valid);
     }
     
-    XYLog("%s: 0x%08X | %-28s\n", DEVNAME(sc), table.error_id,
+    XYLogE("%s: 0x%08X | %-28s\n", DEVNAME(sc), table.error_id,
           iwx_desc_lookup(table.error_id));
-    XYLog("%s: %08X | trm_hw_status0\n", DEVNAME(sc),
+    XYLogE("%s: %08X | trm_hw_status0\n", DEVNAME(sc),
           table.trm_hw_status0);
-    XYLog("%s: %08X | trm_hw_status1\n", DEVNAME(sc),
+    XYLogE("%s: %08X | trm_hw_status1\n", DEVNAME(sc),
           table.trm_hw_status1);
-    XYLog("%s: %08X | branchlink2\n", DEVNAME(sc), table.blink2);
-    XYLog("%s: %08X | interruptlink1\n", DEVNAME(sc), table.ilink1);
-    XYLog("%s: %08X | interruptlink2\n", DEVNAME(sc), table.ilink2);
-    XYLog("%s: %08X | data1\n", DEVNAME(sc), table.data1);
-    XYLog("%s: %08X | data2\n", DEVNAME(sc), table.data2);
-    XYLog("%s: %08X | data3\n", DEVNAME(sc), table.data3);
-    XYLog("%s: %08X | beacon time\n", DEVNAME(sc), table.bcon_time);
-    XYLog("%s: %08X | tsf low\n", DEVNAME(sc), table.tsf_low);
-    XYLog("%s: %08X | tsf hi\n", DEVNAME(sc), table.tsf_hi);
-    XYLog("%s: %08X | time gp1\n", DEVNAME(sc), table.gp1);
-    XYLog("%s: %08X | time gp2\n", DEVNAME(sc), table.gp2);
-    XYLog("%s: %08X | uCode revision type\n", DEVNAME(sc),
+    XYLogE("%s: %08X | branchlink2\n", DEVNAME(sc), table.blink2);
+    XYLogE("%s: %08X | interruptlink1\n", DEVNAME(sc), table.ilink1);
+    XYLogE("%s: %08X | interruptlink2\n", DEVNAME(sc), table.ilink2);
+    XYLogE("%s: %08X | data1\n", DEVNAME(sc), table.data1);
+    XYLogE("%s: %08X | data2\n", DEVNAME(sc), table.data2);
+    XYLogE("%s: %08X | data3\n", DEVNAME(sc), table.data3);
+    XYLogE("%s: %08X | beacon time\n", DEVNAME(sc), table.bcon_time);
+    XYLogE("%s: %08X | tsf low\n", DEVNAME(sc), table.tsf_low);
+    XYLogE("%s: %08X | tsf hi\n", DEVNAME(sc), table.tsf_hi);
+    XYLogE("%s: %08X | time gp1\n", DEVNAME(sc), table.gp1);
+    XYLogE("%s: %08X | time gp2\n", DEVNAME(sc), table.gp2);
+    XYLogE("%s: %08X | uCode revision type\n", DEVNAME(sc),
           table.fw_rev_type);
-    XYLog("%s: %08X | uCode version major\n", DEVNAME(sc),
+    XYLogE("%s: %08X | uCode version major\n", DEVNAME(sc),
           table.major);
-    XYLog("%s: %08X | uCode version minor\n", DEVNAME(sc),
+    XYLogE("%s: %08X | uCode version minor\n", DEVNAME(sc),
           table.minor);
-    XYLog("%s: %08X | hw version\n", DEVNAME(sc), table.hw_ver);
-    XYLog("%s: %08X | board version\n", DEVNAME(sc), table.brd_ver);
-    XYLog("%s: %08X | hcmd\n", DEVNAME(sc), table.hcmd);
-    XYLog("%s: %08X | isr0\n", DEVNAME(sc), table.isr0);
-    XYLog("%s: %08X | isr1\n", DEVNAME(sc), table.isr1);
-    XYLog("%s: %08X | isr2\n", DEVNAME(sc), table.isr2);
-    XYLog("%s: %08X | isr3\n", DEVNAME(sc), table.isr3);
-    XYLog("%s: %08X | isr4\n", DEVNAME(sc), table.isr4);
-    XYLog("%s: %08X | last cmd Id\n", DEVNAME(sc), table.last_cmd_id);
-    XYLog("%s: %08X | wait_event\n", DEVNAME(sc), table.wait_event);
-    XYLog("%s: %08X | l2p_control\n", DEVNAME(sc), table.l2p_control);
-    XYLog("%s: %08X | l2p_duration\n", DEVNAME(sc), table.l2p_duration);
-    XYLog("%s: %08X | l2p_mhvalid\n", DEVNAME(sc), table.l2p_mhvalid);
-    XYLog("%s: %08X | l2p_addr_match\n", DEVNAME(sc), table.l2p_addr_match);
-    XYLog("%s: %08X | lmpm_pmg_sel\n", DEVNAME(sc), table.lmpm_pmg_sel);
-    XYLog("%s: %08X | timestamp\n", DEVNAME(sc), table.u_timestamp);
-    XYLog("%s: %08X | flow_handler\n", DEVNAME(sc), table.flow_handler);
+    XYLogE("%s: %08X | hw version\n", DEVNAME(sc), table.hw_ver);
+    XYLogE("%s: %08X | board version\n", DEVNAME(sc), table.brd_ver);
+    XYLogE("%s: %08X | hcmd\n", DEVNAME(sc), table.hcmd);
+    XYLogE("%s: %08X | isr0\n", DEVNAME(sc), table.isr0);
+    XYLogE("%s: %08X | isr1\n", DEVNAME(sc), table.isr1);
+    XYLogE("%s: %08X | isr2\n", DEVNAME(sc), table.isr2);
+    XYLogE("%s: %08X | isr3\n", DEVNAME(sc), table.isr3);
+    XYLogE("%s: %08X | isr4\n", DEVNAME(sc), table.isr4);
+    XYLogE("%s: %08X | last cmd Id\n", DEVNAME(sc), table.last_cmd_id);
+    XYLogE("%s: %08X | wait_event\n", DEVNAME(sc), table.wait_event);
+    XYLogE("%s: %08X | l2p_control\n", DEVNAME(sc), table.l2p_control);
+    XYLogE("%s: %08X | l2p_duration\n", DEVNAME(sc), table.l2p_duration);
+    XYLogE("%s: %08X | l2p_mhvalid\n", DEVNAME(sc), table.l2p_mhvalid);
+    XYLogE("%s: %08X | l2p_addr_match\n", DEVNAME(sc), table.l2p_addr_match);
+    XYLogE("%s: %08X | lmpm_pmg_sel\n", DEVNAME(sc), table.lmpm_pmg_sel);
+    XYLogE("%s: %08X | timestamp\n", DEVNAME(sc), table.u_timestamp);
+    XYLogE("%s: %08X | flow_handler\n", DEVNAME(sc), table.flow_handler);
 #ifdef AIRPORT_WCL
     char error_lmac[384];
     snprintf(error_lmac, sizeof(error_lmac),
@@ -17585,7 +17585,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                 sc->sc_uc.uc_ok = 0;
                 if (alive_len != sizeof(*resp4) && alive_len != sizeof(*resp5) &&
                     !((alive_ver == 6 || alive_ver == 7) && alive_len == sizeof(struct iwx_alive_resp_v6))) {
-                    XYLog("Invalid ALIVE payload: version %u size %zu\n", alive_ver, alive_len);
+                    XYLogE("Invalid ALIVE payload: version %u size %zu\n", alive_ver, alive_len);
                     sc->sc_uc.uc_intr = 1;
                     getMainCommandGate()->commandWakeup(&sc->sc_uc.uc_intr);
                     break;
@@ -17660,7 +17660,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                              IWX_CT_KILL_NOTIFICATION): {
                 struct iwx_ct_kill_notif *notif;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_ct_kill_notif *);
-                XYLog("%s: device at critical temperature (%u degC), "
+                XYLogE("%s: device at critical temperature (%u degC), "
                        "stopping device\n",
                        DEVNAME(sc), le16toh(notif->temperature));
                 sc->sc_flags |= IWX_FLAG_HW_ERR;
@@ -17794,7 +17794,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             case IWX_REPLY_ERROR: {
                 struct iwx_error_resp *resp;
                 SYNC_RESP_STRUCT(resp, pkt, struct iwx_error_resp *);
-                XYLog("%s: firmware error 0x%x, cmd 0x%x\n",
+                XYLogE("%s: firmware error 0x%x, cmd 0x%x\n",
                       DEVNAME(sc), le32toh(resp->error_type),
                       resp->cmd_id);
                 break;
@@ -17938,7 +17938,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                         (struct iwx_esr_mode_notif *)pkt->data;
                     action = le32toh(notif->action);
                 } else {
-                    XYLog("Invalid EMLSR_MODE_NOTIF version=%u length=%zu\n",
+                    XYLogE("Invalid EMLSR_MODE_NOTIF version=%u length=%zu\n",
                         version, payload_len);
                     break;
                 }
@@ -17959,7 +17959,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                     break;
                 default:
 
-                    XYLog("Unknown EMLSR mode action %u\n", action);
+                    XYLogE("Unknown EMLSR mode action %u\n", action);
                     break;
                 }
                 break;
@@ -17984,7 +17984,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                     sc->sc_mld_sta_ids[link_id] == 0xff ||
                     !(sc->sc_mld_sta_mask &
                         (1U << sc->sc_mld_sta_ids[link_id]))) {
-                    XYLog("EMLSR transition failure references unknown link %u\n",
+                    XYLogE("EMLSR transition failure references unknown link %u\n",
                         link_id);
                     break;
                 }
@@ -18016,7 +18016,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                     break;
                 }
                 if (!notif->status) {
-                    XYLog("Session protection failure\n");
+                    XYLogE("Session protection failure\n");
                     sc->sc_flags &= ~IWX_FLAG_TE_ACTIVE;
                     break;
                 }
@@ -18026,7 +18026,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                      * and know the dtim period.
                      */
                     sc->sc_flags &= ~IWX_FLAG_TE_ACTIVE;
-                    XYLog("%s finish association\n", __FUNCTION__);
+                    XYLogE("%s finish association\n", __FUNCTION__);
                 }
                 break;
             }
@@ -18157,7 +18157,7 @@ iwx_notif_intr(struct iwx_softc *sc)
                 (struct iwx_rx_completion_desc_bz *)sc->rxq.used_desc_dma.vaddr;
             rbid = le16toh(desc[sc->rxq.cur].rbid);
             if (rbid >= IWX_RX_MQ_RING_COUNT) {
-                XYLog("Unsupported BZ RX completion: rbid=%d flags=0x%x\n",
+                XYLogE("Unsupported BZ RX completion: rbid=%d flags=0x%x\n",
                       rbid, desc[sc->rxq.cur].flags);
                 sc->sc_pcitag->setProperty("AirportItlwm-RxBadRbid", ++sc->sc_rx_bad_rbid, 32);
                 sc->sc_flags |= IWX_FLAG_HW_ERR;
@@ -18292,7 +18292,7 @@ iwx_intr(OSObject *object, IOInterruptEventSource* sender, int count)
               ieee80211_state_name[sc->sc_ic.ic_state]);
 #endif
         
-        XYLog("%s: fatal firmware error\n", DEVNAME(sc));
+        XYLogE("%s: fatal firmware error\n", DEVNAME(sc));
         if ((sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0)
             iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
         rv = 1;
@@ -18301,7 +18301,7 @@ iwx_intr(OSObject *object, IOInterruptEventSource* sender, int count)
     }
     
     if (r1 & IWX_CSR_INT_BIT_HW_ERR) {
-        XYLog("%s: hardware error, stopping device \n", DEVNAME(sc));
+        XYLogE("%s: hardware error, stopping device \n", DEVNAME(sc));
         if ((sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
             sc->sc_flags |= IWX_FLAG_HW_ERR;
             iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
@@ -18406,7 +18406,7 @@ iwx_intr_msix(OSObject *object, IOInterruptEventSource* sender, int count)
               ieee80211_state_name[sc->sc_ic.ic_state]);
 #endif
         
-        XYLog("%s: fatal firmware error\n", DEVNAME(sc));
+        XYLogE("%s: fatal firmware error\n", DEVNAME(sc));
         if ((sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0)
             iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
         return 1;
@@ -18418,7 +18418,7 @@ iwx_intr_msix(OSObject *object, IOInterruptEventSource* sender, int count)
     }
     
     if (inta_hw & IWX_MSIX_HW_INT_CAUSES_REG_HW_ERR) {
-        XYLog("%s: hardware error, stopping device \n", DEVNAME(sc));
+        XYLogE("%s: hardware error, stopping device \n", DEVNAME(sc));
         if ((sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
             sc->sc_flags |= IWX_FLAG_HW_ERR;
             iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
@@ -19735,7 +19735,7 @@ iwx_preinit(struct iwx_softc *sc)
     
     /* Print version info and MAC address on first successful fw load. */
     attached = 1;
-    XYLog("%s: hw rev 0x%x, fw ver %s, address %s\n",
+    XYLogE("%s: hw rev 0x%x, fw ver %s, address %s\n",
           DEVNAME(sc), sc->sc_hw_rev & IWX_CSR_HW_REV_TYPE_MSK,
           sc->sc_fwver, ether_sprintf(sc->sc_nvm.hw_addr));
     
@@ -19759,7 +19759,7 @@ iwx_preinit(struct iwx_softc *sc)
     /* Configure MAC address. */
     err = if_setlladdr(ifp, ic->ic_myaddr);
     if (err)
-        XYLog("%s: could not set MAC address (error %d)\n",
+        XYLogE("%s: could not set MAC address (error %d)\n",
                 DEVNAME(sc), err);
     
     ieee80211_media_init(ifp);
@@ -19803,7 +19803,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     err = pci_get_capability(sc->sc_pct, sc->sc_pcitag,
                              PCI_CAP_PCIEXPRESS, &sc->sc_cap_off, NULL);
     if (err == 0) {
-        XYLog("%s: PCIe capability structure not found!\n",
+        XYLogE("%s: PCIe capability structure not found!\n",
               DEVNAME(sc));
         return false;
     }
@@ -19825,7 +19825,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     err = pci_mapreg_map(pa, PCI_MAPREG_START, memtype, 0,
                          &sc->sc_st, &sc->sc_sh, NULL, &sc->sc_sz, 0);
     if (err) {
-        XYLog("%s: can't map mem space\n", DEVNAME(sc));
+        XYLogE("%s: can't map mem space\n", DEVNAME(sc));
         return false;
     }
 #ifdef AIRPORT_WCL
@@ -19835,7 +19835,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     } else
 #endif
     if (pci_intr_map_msi(pa, &sc->ih)) {
-        XYLog("%s: can't map interrupt\n", DEVNAME(sc));
+        XYLogE("%s: can't map interrupt\n", DEVNAME(sc));
         return false;
     }
     
@@ -19869,7 +19869,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         }
     }
     if (msiIntrIndex == -1) {
-        XYLog("%s: can't find MSI interrupt controller\n", DEVNAME(sc));
+        XYLogE("%s: can't find MSI interrupt controller\n", DEVNAME(sc));
         return false;
     }
 
@@ -19884,7 +19884,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
                                                                              (IOInterruptEventSource::Action)&ItlIwx::iwx_intr, &ItlIwx::intrFilter
                                                                              ,pa->pa_tag, msiIntrIndex);
     if (sc->sc_ih == NULL || pa->workloop->addEventSource(sc->sc_ih) != kIOReturnSuccess) {
-        XYLog("%s: can't establish interrupt\n", DEVNAME(sc));
+        XYLogE("%s: can't establish interrupt\n", DEVNAME(sc));
         return false;
     }
     sc->sc_ih->enable();
@@ -19897,7 +19897,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     sc->sc_hw_rev = IWX_READ(sc, IWX_CSR_HW_REV);
 #ifdef AIRPORT_WCL
     if (sc->sc_msix)
-        XYLog("BE200 raw HW_REV=0x%x HW_RF_ID=0x%x\n",
+        XYLogE("BE200 raw HW_REV=0x%x HW_RF_ID=0x%x\n",
               sc->sc_hw_rev, IWX_READ(sc, IWX_CSR_HW_RF_ID));
 #endif
     /*
@@ -19916,7 +19916,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     pci_match(PCI_VENDOR_INTEL, device, subsystem_vendor, subsystem_device, iwx_devices,
               nitems(iwx_devices), (void **)&com.sc_cfg_params);
     if (!com.sc_cfg_params) {
-        XYLog("%s: Why??? unknown adapter type\n", DEVNAME(sc));
+        XYLogE("%s: Why??? unknown adapter type\n", DEVNAME(sc));
         return false;
     }
     sc->sc_device_family = sc->sc_cfg_params->device_family;
@@ -20010,12 +20010,12 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         int gl_api = 0;
         PE_parse_boot_argn("itlwm_gl_api", &gl_api, sizeof(gl_api));
         if (gl_api != 0 && gl_api != 86 && gl_api != 92) {
-            XYLog("Invalid itlwm_gl_api=%d; adapted BE APIs: 86, 92\n", gl_api);
+            XYLogE("Invalid itlwm_gl_api=%d; adapted BE APIs: 86, 92\n", gl_api);
             return false;
         }
         sc->sc_be.max_api = gl_api;
     }
-    XYLog("Found PCI dev %04x/%04x, rev=0x%x, rfid=0x%x fw: %s\n",
+    XYLogE("Found PCI dev %04x/%04x, rev=0x%x, rfid=0x%x fw: %s\n",
           device, subsystem_device,
           sc->sc_hw_rev, sc->sc_hw_rf_id, sc->sc_fwname);
     sc->sc_device_family = sc->sc_cfg->device_family;
@@ -20266,7 +20266,7 @@ iwx_mcc_task(void *arg)
             sc->sc_mcc_request_pending = 1;
         }
         splx(s);
-        XYLog("%s: could not update LAR MCC (error %d)\n",
+        XYLogE("%s: could not update LAR MCC (error %d)\n",
               DEVNAME(sc), err);
     }
 

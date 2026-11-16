@@ -1568,7 +1568,7 @@ ieee80211_enqueue_data(struct ieee80211com *ic, mbuf_t m,
         if (ETHER_IS_MULTICAST(eh->ether_dhost)) {
             m1 = m_dup_pkt(m, ETHER_ALIGN, MBUF_DONTWAIT);
             if (m1 == NULL) {
-                XYLog("%s %d OUTPUT_ERROR\n", __FUNCTION__, __LINE__);
+                XYLogE("%s %d OUTPUT_ERROR\n", __FUNCTION__, __LINE__);
                 ifp->netStat->outputErrors++;
             }
             else
@@ -1583,7 +1583,7 @@ ieee80211_enqueue_data(struct ieee80211com *ic, mbuf_t m,
         }
         if (m1 != NULL) {
             if (if_enqueue(ifp, m1)) {
-                XYLog("%s %d OUTPUT_ERROR\n", __FUNCTION__, __LINE__);
+                XYLogE("%s %d OUTPUT_ERROR\n", __FUNCTION__, __LINE__);
                 ifp->netStat->outputErrors++;
             }
         }
@@ -3900,7 +3900,7 @@ ieee80211_recv_assoc_resp(struct ieee80211com *ic, mbuf_t m,
     
     if (status != IEEE80211_STATUS_SUCCESS) {
         if (ifp->if_flags & IFF_DEBUG)
-            XYLog("%s: %sassociation failed (status %d)"
+            XYLogE("%s: %sassociation failed (status %d)"
                   " for %s\n", ifp->if_xname,
                   reassoc ?  "re" : "",
                   status, ether_sprintf((u_int8_t *)wh->i_addr3));

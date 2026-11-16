@@ -106,7 +106,7 @@ bool AirportItlwm::configureInterface(IONetworkInterface *netif)
     struct _ifnet *ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
     
     if (super::configureInterface(netif) == false) {
-        XYLog("super failed\n");
+        XYLogE("super failed\n");
         return false;
     }
     
@@ -243,7 +243,7 @@ void AirportItlwm::setPTK(const u_int8_t *key, size_t key_len) {
         memcpy(k->k_key, key, k->k_len);
         /* install the PTK */
         if ((*ic->ic_set_key)(ic, ni, k) != 0) {
-            XYLog("setting PTK failed\n");
+            XYLogE("setting PTK failed\n");
             return;
         }
         else
@@ -283,7 +283,7 @@ void AirportItlwm::setGTK(const u_int8_t *gtk, size_t key_len, u_int8_t kid, u_i
             memcpy(k->k_key, gtk, k->k_len);
             /* install the GTK */
             if ((*ic->ic_set_key)(ic, ni, k) != 0) {
-                XYLog("setting GTK failed\n");
+                XYLogE("setting GTK failed\n");
                 return;
             }
             else
@@ -298,7 +298,7 @@ void AirportItlwm::setGTK(const u_int8_t *gtk, size_t key_len, u_int8_t kid, u_i
             ++ni->ni_key_count == 2)
 #endif
         {
-            XYLog("marking port %s valid\n",
+            XYLogE("marking port %s valid\n",
                   ether_sprintf(ni->ni_macaddr));
             ni->ni_port_valid = 1;
             ieee80211_set_link_state(ic, LINK_STATE_UP);
@@ -317,7 +317,7 @@ createMediumTables(const IONetworkMedium **primary)
     
     OSDictionary *mediumDict = OSDictionary::withCapacity(1);
     if (mediumDict == NULL) {
-        XYLog("Cannot allocate OSDictionary\n");
+        XYLogE("Cannot allocate OSDictionary\n");
         return false;
     }
     
@@ -330,7 +330,7 @@ createMediumTables(const IONetworkMedium **primary)
     
     bool result = publishMediumDictionary(mediumDict);
     if (!result)
-        XYLog("Cannot publish medium dictionary!\n");
+        XYLogE("Cannot publish medium dictionary!\n");
 
     mediumDict->release();
     return result;
@@ -344,7 +344,7 @@ bool AirportItlwm::start(IOService *provider)
     }
     if (!serviceMatching("AppleSMC")) {
         super::stop(provider);
-        XYLog("No matching AppleSMC dictionary, failing\n");
+        XYLogE("No matching AppleSMC dictionary, failing\n");
         return false;
     }
     pciNub = OSDynamicCast(IOPCIDevice, provider);
@@ -382,7 +382,7 @@ bool AirportItlwm::start(IOService *provider)
     const IONetworkMedium *primaryMedium;
     if (!createMediumTables(&primaryMedium) ||
         !setCurrentMedium(primaryMedium) || !setSelectedMedium(primaryMedium)) {
-        XYLog("setup medium fail\n");
+        XYLogE("setup medium fail\n");
         releaseAll();
         return false;
     }
@@ -395,13 +395,13 @@ bool AirportItlwm::start(IOService *provider)
         fHalService->get80211Controller()->ic_userflags |= IEEE80211_F_NOHT40;
     
     if (!fHalService->attach(pciNub)) {
-        XYLog("attach fail\n");
+        XYLogE("attach fail\n");
         super::stop(pciNub);
         releaseAll();
         return false;
     }
     if (!attachInterface((IONetworkInterface **)&fNetIf, true)) {
-        XYLog("attach to interface fail\n");
+        XYLogE("attach to interface fail\n");
         fHalService->detach(pciNub);
         super::stop(pciNub);
         releaseAll();
@@ -409,7 +409,7 @@ bool AirportItlwm::start(IOService *provider)
     }
     fWatchdogWorkLoop = IOWorkLoop::workLoop();
     if (fWatchdogWorkLoop == NULL) {
-        XYLog("init watchdog workloop fail\n");
+        XYLogE("init watchdog workloop fail\n");
         fHalService->detach(pciNub);
         super::stop(pciNub);
         releaseAll();
@@ -417,7 +417,7 @@ bool AirportItlwm::start(IOService *provider)
     }
     watchdogTimer = IOTimerEventSource::timerEventSource(this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &AirportItlwm::watchdogAction));
     if (!watchdogTimer) {
-        XYLog("init watchdog fail\n");
+        XYLogE("init watchdog fail\n");
         fHalService->detach(pciNub);
         super::stop(pciNub);
         releaseAll();

@@ -92,7 +92,7 @@ nativeTableMismatch()
     return nullptr;
 }
 
-#define AWDL_LOG(fmt, ...) XYLog("AWDL %s: " fmt "\n", __FUNCTION__, ##__VA_ARGS__)
+#define AWDL_LOG(fmt, ...) XYLogE("AWDL %s: " fmt "\n", __FUNCTION__, ##__VA_ARGS__)
 
 #pragma mark - awdl0 BSD interface
 
@@ -2113,7 +2113,7 @@ createAWDLInterface(apple80211_virt_if_create_data *data)
     if (!awdl)
         return kIOReturnNoMemory;
     if (!awdl->attach(this)) {
-        XYLog("AWDL %s: attach failed\n", __FUNCTION__);
+        XYLogE("AWDL %s: attach failed\n", __FUNCTION__);
         awdl->release();
         return kIOReturnError;
     }
@@ -2122,7 +2122,7 @@ createAWDLInterface(apple80211_virt_if_create_data *data)
     IOSkywalkEthernetInterface::RegistrationInfo info;
     memset(&info, 0, sizeof(info));
     if (!awdl->initRegistrationInfo(&info, 1, sizeof(info))) {
-        XYLog("AWDL %s: initRegistrationInfo failed\n", __FUNCTION__);
+        XYLogE("AWDL %s: initRegistrationInfo failed\n", __FUNCTION__);
         awdl->detach(this);
         awdl->release();
         return kIOReturnError;
@@ -2138,7 +2138,7 @@ createAWDLInterface(apple80211_virt_if_create_data *data)
     memcpy(awdl->mExpansionData2->fRegistrationInfo, &info, sizeof(info));
     awdl->deferBSDAttach(true);
     if (!awdl->start(this)) {
-        XYLog("AWDL %s: start failed\n", __FUNCTION__);
+        XYLogE("AWDL %s: start failed\n", __FUNCTION__);
         awdl->detach(this);
         awdl->release();
         return kIOReturnError;
@@ -2152,7 +2152,7 @@ createAWDLInterface(apple80211_virt_if_create_data *data)
     bool ok = IONetworkController::attachInterface(&bsd, false);
     fCreatingAWDL = false;
     if (!ok || !bsd) {
-        XYLog("AWDL %s: BSD interface attach failed\n", __FUNCTION__);
+        XYLogE("AWDL %s: BSD interface attach failed\n", __FUNCTION__);
         destroyAWDLInterface();
         return kIOReturnError;
     }

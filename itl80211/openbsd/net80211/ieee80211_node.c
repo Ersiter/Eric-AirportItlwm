@@ -1262,7 +1262,7 @@ ieee80211_node_switch_bss(struct ieee80211com *ic, struct ieee80211_node *ni)
     }
     
     if (ifp->if_flags & IFF_DEBUG) {
-        XYLog("%s: roaming from %s chan %d ",
+        XYLogE("%s: roaming from %s chan %d ",
               ifp->if_xname, ether_sprintf(curbs->ni_macaddr),
               ieee80211_chan2ieee(ic, curbs->ni_chan));
         XYLog("to %s chan %d\n", ether_sprintf(selbs->ni_macaddr),

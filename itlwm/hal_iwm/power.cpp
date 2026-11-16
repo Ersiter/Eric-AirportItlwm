@@ -384,7 +384,7 @@ iwm_add_sta_cmd(struct iwm_softc *sc, struct iwm_node *in, int update, unsigned 
                                   &add_sta_cmd, &status);
     if (!err && (status & IWM_ADD_STA_STATUS_MASK) != IWM_ADD_STA_SUCCESS) {
         err = EIO;
-        XYLog("%s failed\n", __FUNCTION__);
+        XYLogE("%s failed\n", __FUNCTION__);
     } else
         sc->sc_flags |= IWM_FLAG_STA_ACTIVE;
 

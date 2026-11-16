@@ -444,7 +444,7 @@ int if_input(struct _ifnet *ifq, struct mbuf_list *ml);
 static inline int if_enqueue(struct _ifnet *ifq, mbuf_t m)
 {
     if (ifq_enqueue(&ifq->if_snd, m)) {
-        XYLog("%s if_enqueue fail!!\n", __FUNCTION__);
+        XYLogE("%s if_enqueue fail!!\n", __FUNCTION__);
         return -ENOSPC;
     }
     return 0;
