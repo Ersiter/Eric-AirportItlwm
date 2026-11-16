@@ -418,7 +418,8 @@ iwm_rx_mpdu(struct iwm_softc *sc, mbuf_t m, void *pktdata,
     rate_n_flags = le32toh(phy_info->rate_n_flags);
 
     rssi = iwm_get_signal_strength(sc, &rx_status, phy_info);
-    rs_update_last_rssi(sc, &rx_status);
+    if (!iwm_awdl_is_frame(sc, m))
+        rs_update_last_rssi(sc, &rx_status);
     rssi = (0 - IWM_MIN_DBM) + rssi;    /* normalize */
     rssi = MIN(rssi, ic->ic_max_rssi);    /* clip to max. 100% */
 
@@ -705,7 +706,7 @@ iwm_rx_reorder(struct iwm_softc *sc, mbuf_t m, int chanidx,
         buffer->valid = 1;
     }
     
-    ni = awdl ? &sc->sc_awdl_node->in_ni : ieee80211_find_rxnode(ic, wh);
+    ni = awdl ? ieee80211_ref_node(&sc->sc_awdl_node->in_ni) : ieee80211_find_rxnode(ic, wh);
     if (type == IEEE80211_FC0_TYPE_CTL &&
         subtype == IEEE80211_FC0_SUBTYPE_BAR) {
         iwm_release_frames(sc, ni, rxba, buffer, nssn, ml);
@@ -962,7 +963,8 @@ iwm_rx_mpdu_mq(struct iwm_softc *sc, mbuf_t m, void *pktdata,
     device_timestamp = desc->v1.gp2_on_air_rise;
     
     rssi = iwm_rxmq_get_signal_strength(sc, &rx_status, rate_n_flags, desc);
-    rs_update_last_rssi(sc, &rx_status);
+    if (!iwm_awdl_is_frame(sc, m))
+        rs_update_last_rssi(sc, &rx_status);
     rssi = (0 - IWM_MIN_DBM) + rssi;    /* normalize */
     rssi = MIN(rssi, ic->ic_max_rssi);    /* clip to max. 100% */
     
