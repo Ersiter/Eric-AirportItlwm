@@ -301,14 +301,10 @@ iwx_mld_update_active_links(struct iwx_softc *sc, uint8_t link_mask,
         ic->ic_state != IEEE80211_S_RUN || !sc->sc_mld_sta_mask)
         return ENXIO;
     if (!link_mask || primary_link >= IWX_MLD_MAX_LINKS ||
-        !(link_mask & (1U << primary_link)))
-        return EINVAL;
-    if (sc->sc_device_family == IWX_DEVICE_FAMILY_BZ) {
-        link_mask = 1U << primary_link;
-        emlsr_active = false;
-    }
-    if (__builtin_popcount((unsigned)link_mask) > 2 ||
-        (emlsr_active && __builtin_popcount((unsigned)link_mask) != 2))
+        !(link_mask & (1U << primary_link)) ||
+        __builtin_popcount((unsigned)link_mask) > 2 ||
+        (emlsr_active &&
+            __builtin_popcount((unsigned)link_mask) != 2))
         return EINVAL;
     for (int i = 1; i < ic->ic_mld_link_count; i++)
         if (ic->ic_mld_links[i].assoc_accepted &&
@@ -739,8 +735,7 @@ iwx_mld_select_links(struct iwx_softc *sc, uint8_t *primary, bool *emlsr)
     }
     *primary = best;
     links = 1U << best;
-    if (sc->sc_device_family == IWX_DEVICE_FAMILY_BZ ||
-        sc->sc_mld_emlsr_blocked)
+    if (sc->sc_mld_emlsr_blocked)
         return links;
 
     for (int a = 0; a < count; a++) {
