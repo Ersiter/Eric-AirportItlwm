@@ -73,6 +73,7 @@ regulatory logic, as on Linux. There is nothing to set.
 |---|---|
 | `-itlawdl` | Experimental AirDrop: this one switch turns on all of it, see below. Leave out unless testing |
 | `itlwm_he=0` | Turn HE/EHT (802.11ax/be) off. On by default |
+| `itlwm_log=1` | Verbose driver log in `dmesg`. Release builds only log errors and what the device is doing; Debug builds log everything |
 
 ## Continuity
 
