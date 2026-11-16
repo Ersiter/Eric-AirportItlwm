@@ -16472,6 +16472,7 @@ iwx_init(struct _ifnet *ifp)
     int err, generation;
     int i;
 
+    sc->sc_hw_err_final = 0;
     memset(sc->sc_tid_data, 0, sizeof(sc->sc_tid_data));
     for (i = 0; i < ARRAY_SIZE(sc->sc_tid_data); i++) {
         sc->sc_tid_data[i].qid = IWX_INVALID_QUEUE;
@@ -17619,6 +17620,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                        "stopping device\n",
                        DEVNAME(sc), le16toh(notif->temperature));
                 sc->sc_flags |= IWX_FLAG_HW_ERR;
+                sc->sc_hw_err_final = 1;
                 iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
                 break;
             }
@@ -18113,12 +18115,18 @@ iwx_notif_intr(struct iwx_softc *sc)
             if (rbid >= IWX_RX_MQ_RING_COUNT) {
                 XYLog("Unsupported BZ RX completion: rbid=%d flags=0x%x\n",
                       rbid, desc[sc->rxq.cur].flags);
+                sc->sc_pcitag->setProperty("AirportItlwm-RxBadRbid", ++sc->sc_rx_bad_rbid, 32);
                 sc->sc_flags |= IWX_FLAG_HW_ERR;
                 iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
                 ml_purge(&ml);
                 return;
             }
             bool fragmented = (desc[sc->rxq.cur].flags & 1) != 0;
+            if (fragmented) {
+                if (!sc->sc_rx_frag_count++)
+                    sc->sc_rx_frag_first_rbid = rbid;
+                sc->sc_pcitag->setProperty("AirportItlwm-RxFragments", sc->sc_rx_frag_count, 32);
+            }
             discard = fragmented || sc->rxq.next_fragment;
             sc->rxq.next_fragment = fragmented;
         }
@@ -20246,9 +20254,28 @@ iwx_init_task(void *arg1)
     struct _ifnet *ifp = &sc->sc_ic.ic_if;
 
     int s = splnet();
-    int fatal = (sc->sc_flags & (IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL));
+    int fatal = (sc->sc_flags & IWX_FLAG_RFKILL);
+    if (sc->sc_flags & IWX_FLAG_HW_ERR) {
+        /*
+         * A hardware error stopped the device. Linux restarts the hardware after one as well, and leaving it
+         * down meant airportd brought it back only after a minute or more (issue #4: every cold boot lost
+         * Wi-Fi for 55-90 s, and AutoJoin missed its chance). Overheating stays down; so does a device that
+         * keeps failing: more than three restarts within a minute.
+         */
+        uint32_t now = (uint32_t)(iwx_uptime_us() / 1000000);
+        unsigned recent = 0;
+        for (unsigned k = 0; k < nitems(sc->sc_hw_err_restarts); k++)
+            if (sc->sc_hw_err_restarts[k] && now - sc->sc_hw_err_restarts[k] < 60)
+                recent++;
+        if (sc->sc_hw_err_final || recent >= 3) {
+            fatal = 1;
+        } else {
+            memmove(sc->sc_hw_err_restarts, sc->sc_hw_err_restarts + 1, sizeof(sc->sc_hw_err_restarts) - sizeof(uint32_t));
+            sc->sc_hw_err_restarts[nitems(sc->sc_hw_err_restarts) - 1] = now ? now : 1;
+        }
+    }
 #ifdef AIRPORT_WCL
-    iwx_record_diagnostic(sc, "recovery-execute", __FUNCTION__, __LINE__, 0, 0);
+    iwx_record_diagnostic(sc, "recovery-execute", __FUNCTION__, __LINE__, fatal ? 1 : 0, 0);
     iwx_publish_diagnostics(sc);
 #endif
     

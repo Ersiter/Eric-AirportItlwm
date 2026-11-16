@@ -839,6 +839,9 @@ struct iwx_softc {
 	/* A scan was refused because the LAR domain had not arrived yet. */
 	uint8_t sc_scan_lar_deferred;
 	uint32_t sc_fw_error_count;
+	int sc_hw_err_final;		/* a HW_ERR that must not be restarted from (critical temperature) */
+	uint32_t sc_hw_err_restarts[4];	/* uptime seconds of the last restarts after HW_ERR, newest last */
+	uint32_t sc_rx_frag_count, sc_rx_frag_first_rbid, sc_rx_bad_rbid;
 #ifdef AIRPORT_WCL
     volatile uint32_t sc_diagnostic_sequence;
     struct iwx_diagnostic sc_diagnostics[32];
