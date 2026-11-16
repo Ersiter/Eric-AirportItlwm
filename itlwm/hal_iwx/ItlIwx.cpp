@@ -7146,6 +7146,21 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         qid = le16toh(ba_tfd->q_num);
         if (qid >= nitems(sc->txq) || !sc->txq[qid].ring_count)
             continue;
+        if (sc->sc_use_mld_api) {
+            // Match the station/TID queue before reclaiming its TX descriptors.
+            const uint8_t tid = ba_tfd->tid;
+            int expected_qid = IWX_INVALID_QUEUE;
+            if (ba_res->sta_id == IWX_AWDL_PEER_STA_ID) {
+                if (tid == 0)
+                    expected_qid = sc->sc_awdl_peer_qid;
+                else if (tid == 6)
+                    expected_qid = sc->sc_awdl_peer_llw_qid;
+            } else if (tid < IWX_MAX_TID_COUNT) {
+                expected_qid = sc->sc_tid_data[tid].qid;
+            }
+            if (qid != expected_qid)
+                continue;
+        }
         ring = &sc->txq[qid];
 
         iwx_ampdu_txq_advance(sc, ring, IWX_AGG_SSN_TO_TXQ_IDX(le16toh(ba_tfd->tfd_index), ring->ring_count));
