@@ -682,6 +682,7 @@ struct ieee80211com {
 	u_int32_t		ic_xflags;	/* more flags */
     
 	u_int32_t		ic_userflags;	/* yet more flags */
+	u_int8_t		ic_he_boot;	/* itlwm_he boot-arg: 0 not given, 1 on, 2 off */
 	u_int32_t		ic_caps;	/* capabilities */
 	int			ic_beacon_prot;	/* hardware Beacon Protection receive support */
 	int			ic_mld_gmac;	/* MLD SEC_KEY supports BIP-GMAC */

@@ -8,6 +8,7 @@
 
 #include "AirportItlwmV2.hpp"
 #include "AirportItlwmAWDLInterface.hpp"
+#include <HAL/ItlAWDLBootArg.hpp>
 #include <sys/_netstat.h>
 #include <crypto/sha1.h>
 #include <net80211/ieee80211_priv.h>
@@ -348,8 +349,12 @@ bool AirportItlwm::start(IOService *provider)
         fHalService->get80211Controller()->ic_userflags |= IEEE80211_F_NOHT40;
 
 #ifdef AIRPORT_WCL
-    int he_enabled = 0;
-    if (PE_parse_boot_argn("itlwm_he", &he_enabled, sizeof(he_enabled)) && he_enabled == 1)
+    // itlwm_he=1 turns HE on for every card whose firmware can do it, itlwm_he=0 off; without it HE is on for the
+    // Wi-Fi 7 family, where 802.11be rides on it, and stays opt-in for the older AX cards.
+    int he_enabled = -1;
+    if (PE_parse_boot_argn("itlwm_he", &he_enabled, sizeof(he_enabled)))
+        fHalService->get80211Controller()->ic_he_boot = he_enabled == 1 ? 1 : 2;
+    if (he_enabled == 1)
         fHalService->get80211Controller()->ic_userflags |= IEEE80211_F_HEON;
     fAWDLEnabled = PE_parse_boot_argn("-itlawdl", &boot_value, sizeof(boot_value));
     if (fAWDLEnabled) {
@@ -366,7 +371,7 @@ bool AirportItlwm::start(IOService *provider)
         fHalService->get80211Controller()->ic_vendor_action_handler = awdlActionFrameHandler;
         fHalService->get80211Controller()->ic_awdl_data_handler = awdlDataFrameHandler;
         fHalService->get80211Controller()->ic_awdl_ba_accept =
-            PE_parse_boot_argn("-itlawdlbaaccept", &boot_value, sizeof(boot_value)) ? 1 : 0;
+            itlAWDLBootFlag("-itlawdlbaaccept") ? 1 : 0;
     }
 #endif
 

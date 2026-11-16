@@ -8,6 +8,7 @@
 #include "AirportItlwmV2.hpp"
 #include "AirportItlwmAWDLInterface.hpp"
 #include "AirportItlwmSkywalkInterface.hpp"
+#include <HAL/ItlAWDLBootArg.hpp>
 
 #ifdef AIRPORT_WCL
 
@@ -439,7 +440,7 @@ static bool awListenAllowed()
     static int allowed = -1;
     if (allowed < 0) {
         int v;
-        allowed = PE_parse_boot_argn("-itlawdllisten", &v, sizeof(v)) ? 1 : 0;
+        allowed = itlAWDLBootFlag("-itlawdllisten") ? 1 : 0;
     }
     return allowed == 1;
 }
@@ -463,7 +464,7 @@ static bool awHuntAllowed()
     static int allowed = -1;
     if (allowed < 0) {
         int v = 0;
-        allowed = PE_parse_boot_argn("-itlawdlhunt", &v, sizeof(v)) ? 1 : 0;
+        allowed = itlAWDLBootFlag("-itlawdlhunt") ? 1 : 0;
     }
     return allowed == 1;
 }
@@ -486,7 +487,7 @@ static bool awDataAllowed()
     static int allowed = -1;
     if (allowed < 0) {
         int v;
-        allowed = PE_parse_boot_argn("-itlawdldata", &v, sizeof(v)) ? 1 : 0;
+        allowed = itlAWDLBootFlag("-itlawdldata") ? 1 : 0;
     }
     return allowed == 1;
 }
@@ -497,7 +498,7 @@ static bool awTxAllowed()
     static int allowed = -1;
     if (allowed < 0) {
         int v;
-        allowed = PE_parse_boot_argn("-itlawdltx", &v, sizeof(v)) ? 1 : 0;
+        allowed = itlAWDLBootFlag("-itlawdltx") ? 1 : 0;
     }
     return allowed == 1;
 }
@@ -507,7 +508,7 @@ static bool awTimelineAllowed()
     static int allowed = -1;
     if (allowed < 0) {
         int v;
-        allowed = PE_parse_boot_argn("-itlawdlaw", &v, sizeof(v)) ? 1 : 0;
+        allowed = itlAWDLBootFlag("-itlawdlaw") ? 1 : 0;
     }
     return allowed == 1;
 }

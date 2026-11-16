@@ -110,6 +110,7 @@
 #include "../../AirportItlwm/WCL/WCL.hpp"
 #endif
 #include "ItlIwx.hpp"
+#include <HAL/ItlAWDLBootArg.hpp>
 #include "if_iwxapi86.h"
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -4800,7 +4801,7 @@ iwx_setup_he_rates(struct iwx_softc *sc)
     if ((sc->sc_use_mld_api ? !mld_he_api :
             (version != 1 && version != 2)) ||
         !sc->sc_nvm.sku_cap_11ax_enable ||
-        !(ic->ic_userflags & IEEE80211_F_HEON) ||
+        ic->ic_he_boot == 2 || (ic->ic_he_boot == 0 && !sc->sc_use_mld_api) ||
         (ic->ic_userflags & IEEE80211_F_NOVHT))
         return;
     unsigned rx = iwx_num_of_ant(iwx_fw_valid_rx_ant(sc));
@@ -10615,7 +10616,7 @@ static bool iwx_awdl_promisc_enabled()
     static int enabled = -1;
     if (enabled < 0) {
         int v;
-        enabled = PE_parse_boot_argn("-itlawdlpromisc", &v, sizeof(v)) ? 1 : 0;
+        enabled = itlAWDLBootFlag("-itlawdlpromisc") ? 1 : 0;
     }
     return enabled == 1;
 }
@@ -10625,7 +10626,7 @@ static bool iwx_awdl_listener_enabled()
     static int enabled = -1;
     if (enabled < 0) {
         int v;
-        enabled = PE_parse_boot_argn("-itlawdllistener", &v, sizeof(v)) ? 1 : 0;
+        enabled = itlAWDLBootFlag("-itlawdllistener") ? 1 : 0;
     }
     return enabled == 1;
 }
@@ -10644,7 +10645,7 @@ static bool iwx_awdl_client_enabled()
     static int enabled = -1;
     if (enabled < 0) {
         int v;
-        enabled = PE_parse_boot_argn("-itlawdlclient", &v, sizeof(v)) ? 1 : 0;
+        enabled = itlAWDLBootFlag("-itlawdlclient") ? 1 : 0;
     }
     return enabled == 1;
 }
@@ -10654,7 +10655,7 @@ static bool iwx_p2p_listen_enabled()
     static int enabled = -1;
     if (enabled < 0) {
         int v;
-        enabled = PE_parse_boot_argn("-itlawdlp2p", &v, sizeof(v)) ? 1 : 0;
+        enabled = itlAWDLBootFlag("-itlawdlp2p") ? 1 : 0;
     }
     return enabled == 1;
 }
