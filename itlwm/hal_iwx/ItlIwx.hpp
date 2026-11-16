@@ -442,6 +442,10 @@ public:
     int    iwx_awdl_update_low_latency(struct iwx_softc *);
     int    iwx_awdl_tx_frame(struct iwx_softc *, const uint8_t *, size_t, int);
     static void iwx_awdl_peer_task(void *);
+    void   iwx_legacy_ba_step(struct iwx_softc *);
+    int    iwx_legacy_ba_peer_add(struct iwx_softc *, const uint8_t *);
+    int    iwx_legacy_ba_peer_remove(struct iwx_softc *);
+    void   iwx_legacy_ba_publish(struct iwx_softc *);
     static int iwx_awdl_rx_ba(struct ieee80211com *, const uint8_t *, uint8_t, uint16_t, uint16_t, int, const uint8_t *, uint8_t);
     int iwx_awdl_ba_apply(struct iwx_softc *, uint8_t, uint16_t, uint16_t, int);
     void iwx_awdl_ba_reply(struct iwx_softc *);

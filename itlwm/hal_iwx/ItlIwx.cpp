@@ -111,6 +111,8 @@
 #endif
 #include "ItlIwx.hpp"
 #include <HAL/ItlAWDLBootArg.hpp>
+
+static bool iwx_awdl_legacy_ba_enabled();
 #include "if_iwxapi86.h"
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -5770,7 +5772,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
     sc->sc_use_mld_api = sc->sc_device_family >= IWX_DEVICE_FAMILY_BZ &&
         isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_MLD_API_SUPPORT);
     sc->sc_ic.ic_awdl_llw_tx = sc->sc_use_mld_api ? iwx_awdl_tx : NULL;
-    sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api ? iwx_awdl_rx_ba : NULL;
+    sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
     sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api ? iwx_awdl_peer_cache : NULL;
 #ifdef AIRPORT_VTD
     sc->sc_ic.ic_defer_eapol_key_input = sc->sc_use_mld_api ?
@@ -10664,6 +10666,20 @@ static bool iwx_awdl_listener_enabled()
  * a client MAC takes frames of its BSSID (the AWDL BSSID is in addr3 of every AWDL frame) and ACKs
  * to its address.
  */
+/*
+ * -itlawdllegacyba (a single flag, not part of -itlawdl): the receive Block Ack session of AirportIntel's
+ * listener for pre-MLD firmware. Nobody on the project has such a card, so it stays off until a tester asks.
+ */
+static bool iwx_awdl_legacy_ba_enabled()
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        int v;
+        enabled = PE_parse_boot_argn("-itlawdllegacyba", &v, sizeof(v)) ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
 static bool iwx_awdl_client_enabled()
 {
     static int enabled = -1;
@@ -10976,8 +10992,9 @@ iwx_awdl_rx_ba(struct ieee80211com *ic, const uint8_t *peer, uint8_t tid,
     if (!sc->sc_listener_up || tid >= IWX_MAX_TID_COUNT ||
         sc->sc_capa_num_stations <= IWX_AWDL_PEER_STA_ID)
         return ENOTSUP;
-    if (!start && (!sc->sc_awdl_peer_added ||
-        !IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_addr)))
+    if (!start && (sc->sc_use_mld_api ?
+        (!sc->sc_awdl_peer_added || !IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_addr)) :
+        (!sc->sc_legacy_ba_peer_added || !IEEE80211_ADDR_EQ(peer, sc->sc_legacy_ba_peer))))
         return 0;
     if (sc->sc_awdl_peer_busy &&
         !IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_target))
@@ -11251,6 +11268,225 @@ iwx_awdl_clear_keys(struct iwx_softc *sc)
 }
 
 /* AWDL and LLW unicast share one MLD peer station with per-TID queues. */
+/*
+ * Receive Block Ack on pre-MLD firmware, after AirportIntel (kaixi2004, GPL-2.0) and ForbiddenItlwm: the AWDL peer
+ * is a firmware station of its own (LINK type, bound to the listener MAC), and the session is ADD_STA MODIFY with
+ * ADD_BA_TID. The phone's ADDBA is answered only once the firmware has taken the session, from the listener's
+ * management queue. The host does no reordering; the firmware only keeps the scoreboard and acknowledges.
+ * Anything that fails ends the attempts for this firmware run and answers REFUSED, so the phone falls back to
+ * single frames, which is what happens without this flag.
+ */
+int ItlIwx::
+iwx_legacy_ba_peer_add(struct iwx_softc *sc, const uint8_t *peer)
+{
+    struct iwx_add_sta_cmd cmd;
+    uint32_t status = IWX_ADD_STA_SUCCESS;
+    const bool wide = sc->sc_listener_width == 80;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.sta_id = IWX_AWDL_PEER_STA_ID;
+    cmd.station_type = IWX_STA_LINK;
+    cmd.mac_id_n_color = htole32(IWX_FW_CMD_ID_AND_COLOR(IWX_LISTENER_MAC_ID, 0));
+    IEEE80211_ADDR_COPY(cmd.addr, peer);
+    cmd.tid_disable_tx = htole16(0xffff);
+    cmd.station_flags = htole32((wide ? IWX_STA_FLG_FAT_EN_80MHZ : IWX_STA_FLG_FAT_EN_20MHZ) |
+        IWX_STA_FLG_MIMO_EN_MIMO2 | IWX_STA_FLG_MAX_AGG_SIZE_64K);
+    cmd.station_flags_msk = htole32(IWX_STA_FLG_FAT_EN_MSK | IWX_STA_FLG_MIMO_EN_MSK |
+        IWX_STA_FLG_MAX_AGG_SIZE_MSK | IWX_STA_FLG_AGG_MPDU_DENS_MSK);
+    int err = iwx_send_cmd_pdu_status(sc, IWX_ADD_STA, sizeof(cmd), &cmd, &status);
+    sc->sc_legacy_ba_addsta_status = status;
+    if (!err && (status & IWX_ADD_STA_STATUS_MASK) != IWX_ADD_STA_SUCCESS)
+        err = EIO;
+    return err;
+}
+
+int ItlIwx::
+iwx_legacy_ba_peer_remove(struct iwx_softc *sc)
+{
+    struct iwx_rm_sta_cmd rm = {};
+    /* REMOVE_STA takes the sessions of the station with it. */
+    rm.sta_id = IWX_AWDL_PEER_STA_ID;
+    return iwx_send_cmd_pdu(sc, IWX_REMOVE_STA, 0, sizeof(rm), &rm);
+}
+
+void ItlIwx::
+iwx_legacy_ba_publish(struct iwx_softc *sc)
+{
+#ifdef AIRPORT_WCL
+    char line[160];
+    snprintf(line, sizeof(line),
+        "stage=%u addsta=0x%x ba=0x%x sessions=%u refused=%u removed=%u open=0x%x quarantine=%d",
+        sc->sc_legacy_ba_stage, sc->sc_legacy_ba_addsta_status, sc->sc_legacy_ba_ba_status,
+        sc->sc_legacy_ba_sessions, sc->sc_legacy_ba_refused, sc->sc_legacy_ba_removed,
+        sc->sc_legacy_ba_tids, sc->sc_legacy_ba_quarantine);
+    OSString *text = OSString::withCString(line);
+    if (text) {
+        sc->sc_pcitag->setProperty("AirportItlwm-AWDLLegacyBa", text);
+        text->release();
+    }
+#endif
+}
+
+void ItlIwx::
+iwx_legacy_ba_step(struct iwx_softc *sc)
+{
+    const int generation = sc->sc_generation;
+    uint8_t peer[IEEE80211_ADDR_LEN];
+    int err = 0;
+
+    if (!sc->sc_listener_up || sc->sc_awdl_peer_busy ||
+        (sc->sc_flags & (IWX_FLAG_SHUTDOWN | IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)))
+        return;
+    if (!sc->sc_awdl_ba_pending && !sc->sc_awdl_ba_reply_pending)
+        return;
+    sc->sc_awdl_peer_busy = 1;
+    IEEE80211_ADDR_COPY(peer, sc->sc_awdl_ba_peer);
+    const uint8_t tid = sc->sc_awdl_ba_tid;
+    const bool start = sc->sc_awdl_ba_start;
+
+    if (sc->sc_awdl_ba_pending) {
+        if (sc->sc_legacy_ba_quarantine == generation || sc->sc_capa_num_stations <= IWX_AWDL_PEER_STA_ID) {
+            sc->sc_legacy_ba_refused++;
+            sc->sc_awdl_ba_pending = 0;
+            err = ENOTSUP;
+            goto answer;
+        }
+        /* One peer station only: another phone takes the place of the first. */
+        if (sc->sc_legacy_ba_peer_added && !IEEE80211_ADDR_EQ(peer, sc->sc_legacy_ba_peer)) {
+            sc->sc_legacy_ba_stage = 1;
+            err = iwx_legacy_ba_peer_remove(sc);
+            if (generation != sc->sc_generation)
+                return;
+            if (err)
+                goto failed;
+            sc->sc_legacy_ba_peer_added = 0;
+            sc->sc_legacy_ba_tids = 0;
+        }
+        if (!start) {
+            if (sc->sc_legacy_ba_peer_added && (sc->sc_legacy_ba_tids & (1U << tid))) {
+                struct iwx_add_sta_cmd cmd;
+                uint32_t status = IWX_ADD_STA_SUCCESS;
+
+                memset(&cmd, 0, sizeof(cmd));
+                cmd.sta_id = IWX_AWDL_PEER_STA_ID;
+                cmd.mac_id_n_color = htole32(IWX_FW_CMD_ID_AND_COLOR(IWX_LISTENER_MAC_ID, 0));
+                cmd.add_modify = IWX_STA_MODE_MODIFY;
+                cmd.remove_immediate_ba_tid = tid;
+                cmd.modify_mask = IWX_STA_MODIFY_REMOVE_BA_TID;
+                sc->sc_legacy_ba_stage = 5;
+                err = iwx_send_cmd_pdu_status(sc, IWX_ADD_STA, sizeof(cmd), &cmd, &status);
+                if (generation != sc->sc_generation)
+                    return;
+                if (err || (status & IWX_ADD_STA_STATUS_MASK) != IWX_ADD_STA_SUCCESS)
+                    goto failed;
+                sc->sc_legacy_ba_tids &= ~(1U << tid);
+                sc->sc_legacy_ba_removed++;
+                if (!sc->sc_legacy_ba_tids)
+                    iwx_awdl_listener_refit(sc);
+            }
+            sc->sc_awdl_ba_pending = 0;
+            goto done;
+        }
+        if (!sc->sc_legacy_ba_peer_added) {
+            sc->sc_legacy_ba_stage = 2;
+            err = iwx_legacy_ba_peer_add(sc, peer);
+            if (generation != sc->sc_generation)
+                return;
+            if (err)
+                goto failed;
+            sc->sc_legacy_ba_peer_added = 1;
+            IEEE80211_ADDR_COPY(sc->sc_legacy_ba_peer, peer);
+            sc->sc_legacy_ba_tids = 0;
+        }
+        if (sc->sc_legacy_ba_tids & (1U << tid)) {
+            /* A new request for a TID with a session replaces it. */
+            struct iwx_add_sta_cmd rmcmd;
+            uint32_t rmstatus = IWX_ADD_STA_SUCCESS;
+
+            memset(&rmcmd, 0, sizeof(rmcmd));
+            rmcmd.sta_id = IWX_AWDL_PEER_STA_ID;
+            rmcmd.mac_id_n_color = htole32(IWX_FW_CMD_ID_AND_COLOR(IWX_LISTENER_MAC_ID, 0));
+            rmcmd.add_modify = IWX_STA_MODE_MODIFY;
+            rmcmd.remove_immediate_ba_tid = tid;
+            rmcmd.modify_mask = IWX_STA_MODIFY_REMOVE_BA_TID;
+            err = iwx_send_cmd_pdu_status(sc, IWX_ADD_STA, sizeof(rmcmd), &rmcmd, &rmstatus);
+            if (generation != sc->sc_generation)
+                return;
+            if (err || (rmstatus & IWX_ADD_STA_STATUS_MASK) != IWX_ADD_STA_SUCCESS)
+                goto failed;
+            sc->sc_legacy_ba_tids &= ~(1U << tid);
+        }
+        {
+            struct iwx_add_sta_cmd cmd;
+            uint32_t status = IWX_ADD_STA_SUCCESS;
+            const uint16_t window = sc->sc_awdl_ba_winsize > 64 ? 64 : sc->sc_awdl_ba_winsize;
+
+            memset(&cmd, 0, sizeof(cmd));
+            cmd.sta_id = IWX_AWDL_PEER_STA_ID;
+            cmd.mac_id_n_color = htole32(IWX_FW_CMD_ID_AND_COLOR(IWX_LISTENER_MAC_ID, 0));
+            cmd.add_modify = IWX_STA_MODE_MODIFY;
+            cmd.add_immediate_ba_tid = tid;
+            cmd.add_immediate_ba_ssn = htole16(sc->sc_awdl_ba_ssn);
+            cmd.rx_ba_window = htole16(window ? window : 1);
+            cmd.modify_mask = IWX_STA_MODIFY_ADD_BA_TID;
+            sc->sc_legacy_ba_stage = 3;
+            err = iwx_send_cmd_pdu_status(sc, IWX_ADD_STA, sizeof(cmd), &cmd, &status);
+            sc->sc_legacy_ba_ba_status = status;
+            if (generation != sc->sc_generation)
+                return;
+            if (err || (status & IWX_ADD_STA_STATUS_MASK) != IWX_ADD_STA_SUCCESS ||
+                !(status & IWX_ADD_STA_BAID_VALID_MASK))
+                goto failed;
+        }
+        sc->sc_legacy_ba_tids |= 1U << tid;
+        sc->sc_legacy_ba_sessions++;
+        /* With a session open the filter drops promiscuous mode (see iwx_awdl_listener_refit). */
+        sc->sc_legacy_ba_stage = 4;
+        iwx_awdl_listener_refit(sc);
+        if (generation != sc->sc_generation)
+            return;
+        sc->sc_awdl_ba_pending = 0;
+        goto answer;
+    failed:
+        /* The peer station goes too, and nothing more is tried until the firmware restarts. */
+        sc->sc_legacy_ba_quarantine = generation;
+        sc->sc_legacy_ba_refused++;
+        sc->sc_awdl_ba_pending = 0;
+        if (sc->sc_legacy_ba_peer_added) {
+            const bool hadSessions = sc->sc_legacy_ba_tids != 0;
+            int rmerr = iwx_legacy_ba_peer_remove(sc);
+            if (generation != sc->sc_generation)
+                return;
+            if (!rmerr) {
+                sc->sc_legacy_ba_peer_added = 0;
+                sc->sc_legacy_ba_tids = 0;
+                if (hadSessions)
+                    iwx_awdl_listener_refit(sc);
+            }
+        }
+        if (!err)
+            err = EIO;
+    }
+answer:
+    if (err && sc->sc_awdl_ba_reply_pending) {
+        sc->sc_awdl_ba_reply[sizeof(struct ieee80211_frame) + 3] = IEEE80211_STATUS_REFUSED & 0xff;
+        sc->sc_awdl_ba_reply[sizeof(struct ieee80211_frame) + 4] = IEEE80211_STATUS_REFUSED >> 8;
+    }
+done:
+    sc->sc_awdl_peer_busy = 0;
+    if (sc->sc_awdl_ba_reply_pending) {
+        /* Sent once, or dropped: a phone that gets no answer asks again, and a stale one must not wait for a channel. */
+        struct ieee80211com *ic = &sc->sc_ic;
+        if (sc->sc_aux_roc_qid > 0 && sc->sc_listener_up && sc->sc_listener_chan == sc->sc_awdl_ba_reply_chan &&
+            iwx_awdl_tx_frame(sc, sc->sc_awdl_ba_reply, sizeof(sc->sc_awdl_ba_reply), sc->sc_aux_roc_qid) == 0)
+            ic->ic_awdl_ba_resp_sent++;
+        else
+            ic->ic_awdl_ba_resp_err++;
+        sc->sc_awdl_ba_reply_pending = 0;
+    }
+    iwx_legacy_ba_publish(sc);
+}
+
 void ItlIwx::
 iwx_awdl_peer_task(void *arg)
 {
@@ -11264,7 +11500,12 @@ iwx_awdl_peer_task(void *arg)
             }, arg);
         return;
     }
-    if (sc->sc_awdl_peer_busy || !sc->sc_listener_up || !sc->sc_use_mld_api ||
+    if (!sc->sc_use_mld_api) {
+        if (iwx_awdl_legacy_ba_enabled())
+            that->iwx_legacy_ba_step(sc);
+        return;
+    }
+    if (sc->sc_awdl_peer_busy || !sc->sc_listener_up ||
         (sc->sc_flags & (IWX_FLAG_SHUTDOWN | IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)))
         return;
 
@@ -12775,7 +13016,9 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
             if (generation != sc->sc_generation)
                 return;
         }
-        const bool sameChannel = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan) == sc->sc_listener_chan;
+        /* The firmware does not acknowledge a receive Block Ack session's frames while the filter is promiscuous. */
+        const bool sameChannel = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan) == sc->sc_listener_chan ||
+            sc->sc_legacy_ba_tids;
         if ((err = iwx_legacy_listener_mac(sc, IWX_FW_CTXT_ACTION_MODIFY, sc->sc_listener_chan,
             sameChannel)) != 0)
             ic->ic_awdl_listener_code = err;
@@ -16545,6 +16788,8 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_p2p_bound = 0;
     sc->sc_p2p_sta = 0;
     sc->sc_p2p_queue = 0;
+    sc->sc_legacy_ba_peer_added = 0;
+    sc->sc_legacy_ba_tids = 0;
     sc->sc_listener_up = 0;
     sc->sc_awdl_peer_added = sc->sc_awdl_peer_busy = 0;
     sc->sc_awdl_peer_tlc_configured = 0;
