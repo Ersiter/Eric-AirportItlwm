@@ -98,7 +98,7 @@
 <tr><td><span class="nw">WPA2-Personal</span>, <span class="nw">WPA2-Enterprise</span> (PEAP), WPA2/<span class="nw">WPA3-Übergangsnetze</span></td><td>alle</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Funktioniert</span></td></tr>
 <tr><td><span class="nw">WPA3-Personal</span> (SAE, H2E), Enhanced Open (OWE)</td><td>alle</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Funktioniert</span> <span class="snote">an einer BE200</span></td></tr>
 <tr><td><span class="nw">802.11ac</span> (VHT), 160 MHz</td><td>AC und neuer</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Funktioniert</span></td></tr>
-<tr><td><span class="nw">802.11ax</span> (HE)</td><td>AX und BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Funktioniert</span> <span class="snote">mit <code>itlwm_he=1</code></span></td></tr>
+<tr><td><span class="nw">802.11ax</span> (HE)</td><td>AX und BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Funktioniert</span> <span class="snote">BE standardmäßig an, AX mit <code>itlwm_he=1</code></span></td></tr>
 <tr><td>6 GHz</td><td>AX210/AX211/AX411, BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Funktioniert</span> <span class="snote">an einer BE200</span></td></tr>
 <tr><td><span class="nw">802.11be</span> (EHT), 320 MHz, <span class="nw">Multi-Link</span> (eMLSR)</td><td>BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Funktioniert</span> <span class="snote">320 MHz auf echter Hardware; ein Router mit <span class="nw">Multi-Link</span> wird erreicht; die <span class="nw">Link-Paarung</span> ist noch experimentell</span></td></tr>
 <tr><td>Ruhezustand und Aufwachen, Wiederherstellung nach <span class="nw">Firmware-Fehlern</span></td><td>alle</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Funktioniert</span></td></tr>
@@ -121,9 +121,9 @@
 <li>Bewahre eine startfähige Kopie deiner EFI auf und teste zuerst mit einem <span class="nw">USB-Stick</span>.</li>
 </ol><p>Das Land und die dort erlaubten Kanäle ergeben sich aus den Netzen in der Umgebung, über die Regulierungslogik der Karte selbst, wie unter Linux. Es gibt nichts einzustellen.</p>
 <h3><span class="nw">Boot-Argumente</span></h3><div class="table-wrap"><table><thead><tr><th>Argument</th><th>Wirkung</th></tr></thead><tbody>
-<tr><td><code>itlwm_he=1</code></td><td>Aktiviert <span class="nw">802.11ax</span>/be (HE/EHT). Standardmäßig aus</td></tr>
+<tr><td><code>itlwm_he=0 / 1</code></td><td>HE/EHT (<span class="nw">802.11ax</span>/be): bei <span class="nw">Wi-Fi-7-Karten</span> standardmäßig an, <code>0</code> schaltet es aus; <span class="nw">AX-Karten</span> brauchen <code>1</code></td></tr>
 <tr><td><code>itlwm_gl_api=86</code></td><td>Beschränkt BE200/BE202 auf <span class="nw">Firmware-API 8</span>6</td></tr>
-<tr><td><code>-itlawdl …</code></td><td>Experimentelles AirDrop, siehe unten. Nur zum Testen verwenden</td></tr>
+<tr><td><code>-itlawdl</code></td><td>Experimentelles AirDrop, siehe unten. Nur zum Testen verwenden</td></tr>
 </tbody></table></div></div></section>
 <section id="continuity"><div class="wrap"><h2>Continuity</h2>
 <p><span class="pill dev"><span aria-hidden="true">🧪</span> In Entwicklung</span></p>

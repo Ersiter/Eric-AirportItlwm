@@ -99,7 +99,7 @@
 <tr><td><span class="nw">WPA2-Personal</span>, <span class="nw">WPA2-Enterprise</span> (PEAP), WPA2/WPA3 transition networks</td><td>all</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Works</span></td></tr>
 <tr><td><span class="nw">WPA3-Personal</span> (SAE, H2E), Enhanced Open (OWE)</td><td>all</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Works</span> <span class="snote">on BE200</span></td></tr>
 <tr><td><span class="nw">802.11ac</span> (VHT), 160 MHz</td><td>AC and newer</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Works</span></td></tr>
-<tr><td><span class="nw">802.11ax</span> (HE)</td><td>AX and BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Works</span> <span class="snote">with <code>itlwm_he=1</code></span></td></tr>
+<tr><td><span class="nw">802.11ax</span> (HE)</td><td>AX and BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Works</span> <span class="snote">on by default for BE, AX with <code>itlwm_he=1</code></span></td></tr>
 <tr><td>6 GHz</td><td>AX210/AX211/AX411, BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Works</span> <span class="snote">on BE200</span></td></tr>
 <tr><td><span class="nw">802.11be</span> (EHT), 320 MHz, <span class="nw">multi-link</span> (eMLSR)</td><td>BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Works</span> <span class="snote">320 MHz on hardware; a <span class="nw">multi-link</span> router joins; link pairing still experimental</span></td></tr>
 <tr><td>Sleep and wake, recovery from firmware errors</td><td>all</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Works</span></td></tr>
@@ -122,9 +122,9 @@
 <li>Keep a bootable copy of your EFI and test from a USB stick first.</li>
 </ol><p>The country and the channels allowed in it come from the networks around you, through the card's own regulatory logic, as on Linux. There is nothing to set.</p>
 <h3>Boot arguments</h3><div class="table-wrap"><table><thead><tr><th>Argument</th><th>Effect</th></tr></thead><tbody>
-<tr><td><code>itlwm_he=1</code></td><td>Enable <span class="nw">802.11ax</span>/be (HE/EHT). Off by default</td></tr>
+<tr><td><code>itlwm_he=0 / 1</code></td><td>HE/EHT (<span class="nw">802.11ax</span>/be): on by default for <span class="nw">Wi-Fi 7</span> cards, <code>0</code> turns it off; AX cards need <code>1</code></td></tr>
 <tr><td><code>itlwm_gl_api=86</code></td><td>Limit BE200/BE202 to firmware API 86</td></tr>
-<tr><td><code>-itlawdl …</code></td><td>Experimental AirDrop, see below. Leave out unless testing</td></tr>
+<tr><td><code>-itlawdl</code></td><td>Experimental AirDrop: this one switch turns on all of it, see below. Leave out unless testing</td></tr>
 </tbody></table></div></div></section>
 <section id="continuity"><div class="wrap"><h2>Continuity</h2>
 <p><span class="pill dev"><span aria-hidden="true">🧪</span> In development</span></p>

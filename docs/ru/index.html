@@ -98,7 +98,7 @@
 <tr><td>WPA2 Personal, WPA2 Enterprise (PEAP), переходные сети WPA2/WPA3</td><td>все</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Работает</span></td></tr>
 <tr><td>WPA3 Personal (SAE, H2E), Enhanced Open (OWE)</td><td>все</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Работает</span> <span class="snote">на BE200</span></td></tr>
 <tr><td><span class="nw">802.11ac</span> (VHT), 160 МГц</td><td>AC и новее</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Работает</span></td></tr>
-<tr><td><span class="nw">802.11ax</span> (HE)</td><td>AX и BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Работает</span> <span class="snote">с <code>itlwm_he=1</code></span></td></tr>
+<tr><td><span class="nw">802.11ax</span> (HE)</td><td>AX и BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Работает</span> <span class="snote">BE включено по умолчанию, AX с <code>itlwm_he=1</code></span></td></tr>
 <tr><td>6 ГГц</td><td>AX210/AX211/AX411, BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Работает</span> <span class="snote">на BE200</span></td></tr>
 <tr><td><span class="nw">802.11be</span> (EHT), 320 МГц, <span class="nw">multi-link</span> (eMLSR)</td><td>BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Работает</span> <span class="snote">320 МГц на реальном железе; роутер с <span class="nw">multi-link</span> подключается; объединение линков пока экспериментальное</span></td></tr>
 <tr><td>Сон и пробуждение, восстановление после ошибок прошивки</td><td>все</td><td><span class="pill ok"><span aria-hidden="true">✅</span> Работает</span></td></tr>
@@ -121,9 +121,9 @@
 <li>Сохраните загрузочную копию своего EFI и сначала проверьте всё с <span class="nw">USB-накопителя</span>.</li>
 </ol><p>Страна и разрешённые в ней каналы определяются по окружающим сетям с помощью собственной логики регулирования карты, как в Linux. Ничего настраивать не нужно.</p>
 <h3>Аргументы загрузки</h3><div class="table-wrap"><table><thead><tr><th>Аргумент</th><th>Действие</th></tr></thead><tbody>
-<tr><td><code>itlwm_he=1</code></td><td>Включает <span class="nw">802.11ax</span>/be (HE/EHT). По умолчанию выключено</td></tr>
+<tr><td><code>itlwm_he=0 / 1</code></td><td>HE/EHT (<span class="nw">802.11ax</span>/be): на картах <span class="nw">Wi-Fi 7</span> включено по умолчанию, <code>0</code> отключает; картам AX нужно <code>1</code></td></tr>
 <tr><td><code>itlwm_gl_api=86</code></td><td>Ограничивает BE200/BE202 версией API прошивки 86</td></tr>
-<tr><td><code>-itlawdl …</code></td><td>Экспериментальный AirDrop, см. ниже. Не добавляйте без необходимости тестирования</td></tr>
+<tr><td><code>-itlawdl</code></td><td>Экспериментальный AirDrop, см. ниже. Не добавляйте без необходимости тестирования</td></tr>
 </tbody></table></div></div></section>
 <section id="continuity"><div class="wrap"><h2>Continuity</h2>
 <p><span class="pill dev"><span aria-hidden="true">🧪</span> В разработке</span></p>

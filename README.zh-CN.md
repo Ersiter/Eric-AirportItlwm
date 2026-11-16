@@ -19,7 +19,7 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 | WPA2 个人级、WPA2 企业级（PEAP）、WPA2/WPA3 过渡网络 | 全部 | ✅ |
 | WPA3 个人级（SAE、H2E）、增强型开放网络（OWE） | 全部 | ✅ BE200 实机 |
 | 802.11ac（VHT）、160 MHz | AC 及以上 | ✅ |
-| 802.11ax（HE） | AX、BE | ✅ 需 `itlwm_he=1` |
+| 802.11ax（HE） | AX、BE | ✅ BE 默认开启，AX 需 `itlwm_he=1` |
 | 6 GHz | AX210/AX211/AX411、BE | ✅ BE200 实机 |
 | 802.11be（EHT）、320 MHz、多链路（eMLSR） | BE | ✅ 320 MHz 实机；可加入开启 MLO 的路由器；链路配对仍属实验 |
 | 睡眠唤醒、固件出错自动恢复 | 全部 | ✅ |
@@ -59,9 +59,9 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 
 | 参数 | 作用 |
 |---|---|
-| `itlwm_he=1` | 打开 802.11ax/be（HE/EHT），默认关闭 |
+| `itlwm_he=0` / `1` | HE/EHT（802.11ax/be）：Wi-Fi 7 网卡默认开启，设 0 关闭；AX 网卡需设 1 |
 | `itlwm_gl_api=86` | BE200/BE202 限定固件 API 86 |
-| `-itlawdl …` | 实验性隔空投送，见下文，不测试就别加 |
+| `-itlawdl` | 实验性隔空投送，这一个开关就带上全部，见下文，不测试就别加 |
 
 ## 接续互通
 
