@@ -503,15 +503,13 @@ static bool awTxAllowed()
     return allowed == 1;
 }
 
-// -itlawdlumiack: report the transmit status of a unicast action frame (see the member comment). Its own flag, not part
-// of -itlawdl, until somebody has run Continuity Camera or Sidecar with it.
+// Report the transmit status of a unicast action frame (see the member comment). Part of -itlawdl; the single flag
+// -itlawdlumiack still works on its own.
 static bool awUmiAckAllowed()
 {
     static int allowed = -1;
-    if (allowed < 0) {
-        int v = 0;
-        allowed = PE_parse_boot_argn("-itlawdlumiack", &v, sizeof(v)) ? 1 : 0;
-    }
+    if (allowed < 0)
+        allowed = itlAWDLBootFlag("-itlawdlumiack") ? 1 : 0;
     return allowed == 1;
 }
 
