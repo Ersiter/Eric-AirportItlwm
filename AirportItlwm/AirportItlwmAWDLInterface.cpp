@@ -503,6 +503,18 @@ static bool awTxAllowed()
     return allowed == 1;
 }
 
+// -itlawdlumiack: report the transmit status of a unicast action frame (see the member comment). Its own flag, not part
+// of -itlawdl, until somebody has run Continuity Camera or Sidecar with it.
+static bool awUmiAckAllowed()
+{
+    static int allowed = -1;
+    if (allowed < 0) {
+        int v = 0;
+        allowed = PE_parse_boot_argn("-itlawdlumiack", &v, sizeof(v)) ? 1 : 0;
+    }
+    return allowed == 1;
+}
+
 static bool awTimelineAllowed()
 {
     static int allowed = -1;
@@ -887,6 +899,13 @@ teardownAW()
         OSSafeReleaseNULL(fPeerCacheTimer);
     }
     fPeerCacheDoneCount = 0;
+    if (fUmiAckTimer) {
+        fUmiAckTimer->cancelTimeout();
+        if (fUmiAckTimer->getWorkLoop())
+            fUmiAckTimer->getWorkLoop()->removeEventSource(fUmiAckTimer);
+        OSSafeReleaseNULL(fUmiAckTimer);
+    }
+    fUmiAckCount = 0;
     if (!fAWTimer)
         return;
     fAWTimer->cancelTimeout();
@@ -2381,6 +2400,15 @@ withController(AirportItlwm *controller, ether_addr *mac)
         AWDL_LOG("peer cache timer setup failed");
         OSSafeReleaseNULL(ifp->fPeerCacheTimer);
     }
+    if (awUmiAckAllowed()) {
+        ifp->fUmiAckTimer = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsPriorityHigh,
+                                                                 ifp, &AirportItlwmAWDLInterface::umiAckTimerFired);
+        if (!ifp->fUmiAckTimer || !controller->getWorkLoop() ||
+            controller->getWorkLoop()->addEventSource(ifp->fUmiAckTimer) != kIOReturnSuccess) {
+            AWDL_LOG("umi ack timer setup failed");
+            OSSafeReleaseNULL(ifp->fUmiAckTimer);
+        }
+    }
     if (awListenAllowed()) {
         ifp->fListenTimer = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsPriorityHigh,
                                                                  ifp, &AirportItlwmAWDLInterface::listenTimerFired);
@@ -2421,6 +2449,8 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fRxAFDropped = 0;
     fAWTimer = nullptr;
     fPeerCacheTimer = nullptr;
+    fUmiAckTimer = nullptr;
+    fUmiAckCount = fUmiAckPosted = 0;
     fPeerCacheDoneCount = fPeerCacheCompleted = fPeerCacheDropped = 0;
     fAWRunning = false;
     fRefUs = 0;
@@ -2758,6 +2788,33 @@ setPEER_CACHE_CONTROL(apple80211_peer_cache_control *d)
 }
 
 void AirportItlwmAWDLInterface::
+umiAckTimerFired(OSObject *owner, IOTimerEventSource *)
+{
+    if (auto *self = OSDynamicCast(AirportItlwmAWDLInterface, owner))
+        self->postUmiAcks();
+}
+
+void AirportItlwmAWDLInterface::
+postUmiAcks()
+{
+#ifndef APPLE80211_M_AWDL_UNICAST_AF_STATUS
+#define APPLE80211_M_AWDL_UNICAST_AF_STATUS 69
+#endif
+    uint8_t peers[kUmiAckDepth][6];
+    const unsigned count = fUmiAckCount;
+    memcpy(peers, fUmiAckPeers, sizeof(peers));
+    fUmiAckCount = 0;
+    for (unsigned i = 0; i < count; i++) {
+        uint8_t status[32] = {};
+        memcpy(status, peers[i], 6);            // status[6] = 0: acknowledged
+        postMessage(APPLE80211_M_AWDL_UNICAST_AF_STATUS, status, sizeof(status), false);
+        fUmiAckPosted++;
+    }
+    if (count)
+        setProperty("AWDLUmiAckPosted", fUmiAckPosted, 32);
+}
+
+void AirportItlwmAWDLInterface::
 peerCacheTimerFired(OSObject *owner, IOTimerEventSource *)
 {
     if (auto *self = OSDynamicCast(AirportItlwmAWDLInterface, owner))
@@ -2923,6 +2980,16 @@ setAWDL_OOB_REQUEST(apple80211_awdl_oob_request *d)
             raw + 4, payload, len);
         if (err == EAGAIN || err == ENOBUFS)
             return kIOReturnBusy;
+        if (!err && that->fUmiAckTimer && !(raw[4] & 1)) {
+            // A unicast frame went out: owe macOS its status (the destination is the first address of the request).
+            bool listed = false;
+            for (unsigned i = 0; i < that->fUmiAckCount; i++)
+                if (!memcmp(that->fUmiAckPeers[i], raw + 4, 6))
+                    listed = true;
+            if (!listed && that->fUmiAckCount < kUmiAckDepth)
+                memcpy(that->fUmiAckPeers[that->fUmiAckCount++], raw + 4, 6);
+            that->fUmiAckTimer->setTimeoutMS(150);
+        }
         return err ? kIOReturnError : kIOReturnSuccess;
     };
     IOWorkLoop *workLoop = _fCommandGate->getWorkLoop();

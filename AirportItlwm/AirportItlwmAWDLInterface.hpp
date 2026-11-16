@@ -234,6 +234,17 @@ private:
     uint8_t fPeerCacheDone[kPeerCacheQueueDepth][kPeerCacheBytes];
     unsigned fPeerCacheDoneCount, fPeerCacheCompleted, fPeerCacheDropped;
     IOTimerEventSource *fPeerCacheTimer;
+    // -itlawdlumiack: the unicast action frame macOS sends through setAWDL_OOB_REQUEST (Continuity Camera and Sidecar
+    // register a real-time group that way) is followed by a wait for its transmit status, event 69: the peer's address
+    // and a status byte at +6, 0 = acknowledged. Broadcom's firmware reports it; without it the registration fails
+    // after 3 s (ForbiddenItlwm PR #57, Sequoia 24H232). The status is reported once the frame is queued on the
+    // listener, 150 ms later, as that PR does; it says "sent", not "acknowledged by this peer".
+    static constexpr unsigned kUmiAckDepth = 8;
+    uint8_t fUmiAckPeers[kUmiAckDepth][6];
+    unsigned fUmiAckCount, fUmiAckPosted;
+    IOTimerEventSource *fUmiAckTimer;
+    static void umiAckTimerFired(OSObject *, IOTimerEventSource *);
+    void postUmiAcks();
     static void peerCacheTimerFired(OSObject *, IOTimerEventSource *);
     void postPeerCacheCompletions();
     uint32_t fEncryptionType;
