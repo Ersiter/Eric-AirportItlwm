@@ -380,6 +380,18 @@ bool AirportItlwm::start(IOService *provider)
         releaseAll();
         return false;
     }
+#ifdef AIRPORT_WCL
+    if (fAWDLEnabled && !fHalService->get80211Controller()->ic_awdl_listen) {
+        // The card's driver has no AirDrop path (older cards; 9260/9560 until -itlawdlac). Advertising the capability
+        // would make macOS build an awdl0 that cannot do anything.
+        XYLogE("AWDL off: no AirDrop support for this card (9260/9560 also need -itlawdlac)\n");
+        setProperty("AWDLBuildCheck", "blocked: no AirDrop support for this card");
+        fAWDLEnabled = false;
+        fHalService->get80211Controller()->ic_vendor_action_handler = NULL;
+        fHalService->get80211Controller()->ic_awdl_data_handler = NULL;
+        fHalService->get80211Controller()->ic_awdl_ba_accept = 0;
+    }
+#endif
     fWatchdogWorkLoop = _fWorkloop;
     if (fWatchdogWorkLoop == NULL) {
         XYLogE("init watchdog workloop fail\n");

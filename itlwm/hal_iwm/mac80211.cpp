@@ -3138,11 +3138,14 @@ fail:
     return err;
 }
 
+// The 9260/9560 listener has not run on a real card yet, so -itlawdl alone leaves these cards on plain Wi-Fi;
+// -itlawdlac opts in. Without the hooks the interface layer does not advertise AirDrop for the card at all.
 static bool
 iwm_awdl_enabled(void)
 {
     int enabled = 0;
-    return PE_parse_boot_argn("-itlawdl", &enabled, sizeof(enabled));
+    return PE_parse_boot_argn("-itlawdl", &enabled, sizeof(enabled)) &&
+        PE_parse_boot_argn("-itlawdlac", &enabled, sizeof(enabled));
 }
 
 int ItlIwm::
@@ -6110,7 +6113,7 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
     ic->ic_ampdu_tx_start = iwm_ampdu_tx_start;
     ic->ic_ampdu_tx_stop = iwm_ampdu_tx_stop;
     ic->ic_update_chw = iwm_update_chw;
-    if (sc->sc_awdl_supported) {
+    if (sc->sc_awdl_supported && iwm_awdl_enabled()) {
         ic->ic_awdl_listen = iwm_awdl_listen;
         ic->ic_awdl_tx = iwm_awdl_tx;
         ic->ic_awdl_peer_cache = iwm_awdl_peer_cache;
