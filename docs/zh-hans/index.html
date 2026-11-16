@@ -102,7 +102,7 @@
 <tr><td>6 GHz</td><td>AX210/AX211/AX411、BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">BE200 <wbr>实机</span></td></tr>
 <tr><td><span class="nw">802.11be</span><wbr>（EHT）、<wbr>320<wbr> MHz、<wbr>多链路<wbr>（eMLSR）</td><td>BE</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span> <span class="snote">320<wbr> MHz <wbr>实机；<wbr>可加入开启 <wbr>MLO <wbr>的<wbr>路由器；<wbr>链路配对<wbr>仍属实验</span></td></tr>
 <tr><td>睡眠<wbr>唤醒、<wbr>固件<wbr>出错<wbr>自动<wbr>恢复</td><td>全部</td><td><span class="pill ok"><span aria-hidden="true">✅</span> 可用</span></td></tr>
-<tr><td>隔空投送 <wbr>/ <wbr>AWDL</td><td>AX、BE</td><td><span class="pill dev"><span aria-hidden="true">🧪</span> 开发中</span> <span class="snote">见<a href="#continuity">接续<wbr>互通</a></span></td></tr>
+<tr><td>隔空投送 <wbr>/ <wbr>AWDL</td><td>AC（9260/9560）、AX、BE</td><td><span class="pill dev"><span aria-hidden="true">🧪</span> 开发中</span> <span class="snote">见<a href="#continuity">接续<wbr>互通</a></span></td></tr>
 <tr><td>即时<wbr>热点<wbr>（在 <wbr><span class="nw">Wi-Fi</span> <wbr>菜单里<wbr>直接连 <wbr>iPhone）</td><td>全部</td><td><span class="pill dev"><span aria-hidden="true">🧪</span> 开发中</span></td></tr>
 </tbody></table></div></div></section>
 <section id="cards"><div class="wrap"><h2>支持<wbr>的<wbr>网卡</h2>
@@ -121,8 +121,8 @@
 <li>保留<wbr>一份<wbr>能<wbr>启动<wbr>的 <wbr>EFI，<wbr>先用 <wbr>U <wbr>盘测试。</li>
 </ol><p>国<wbr>家<wbr>码<wbr>和<wbr>可用<wbr>信道<wbr>由<wbr>周围<wbr>的<wbr>路由<wbr>器经网卡<wbr>自身<wbr>的<wbr>法规<wbr>逻辑<wbr>确定，<wbr>与 <wbr>Linux <wbr>相同，<wbr>不需要<wbr>设置。</p>
 <h3>启动<wbr>参数</h3><div class="table-wrap"><table><thead><tr><th>参数</th><th>作用</th></tr></thead><tbody>
-<tr><td><code>itlwm_he=0</code></td><td>关闭 <wbr>HE/EHT<wbr>（<span class="nw">802.11ax</span>/be），<wbr>默认<wbr>开<wbr>启</td></tr>
 <tr><td><code>-itlawdl</code></td><td>实验性<wbr>隔空投送，<wbr>这<wbr>一个<wbr>开关<wbr>就<wbr>带上<wbr>全部，<wbr>见下文，<wbr>不测试<wbr>就<wbr>别加</td></tr>
+<tr><td><code>itlwm_he=0</code></td><td>关闭 <wbr>HE/EHT<wbr>（<span class="nw">802.11ax</span>/be），<wbr>默认<wbr>开<wbr>启</td></tr>
 </tbody></table></div></div></section>
 <section id="continuity"><div class="wrap"><h2>接续<wbr>互通</h2>
 <p><span class="pill dev"><span aria-hidden="true">🧪</span> 开发中</span></p>
@@ -130,7 +130,7 @@
 <h3>隔空投送<wbr>（AWDL）</h3><p><code>awdl0</code> <wbr>已经<wbr>创建，<wbr>由 <wbr>macOS <wbr>自己<wbr>的 <wbr>AWDL <wbr>协议<wbr>栈<wbr>驱动。<wbr>隔空投送<wbr>要求<wbr>网卡<wbr>一边<wbr>留<wbr>在<wbr>你<wbr>的<wbr>网络<wbr>上，<wbr>一边<wbr>在 <wbr>AWDL <wbr>信道<wbr>上<wbr>监听。<wbr>除 <wbr>AX411 <wbr>外所有 <wbr>Intel <wbr>网卡<wbr>都是<wbr>单射频<wbr>（<span class="nw">Wi-Fi 7</span> <wbr>的 <wbr>eMLSR <wbr>也是<wbr>单射频），<wbr>由固<wbr>件<wbr>在<wbr>两者<wbr>之间<wbr>分时：</p><ul>
 <li><strong>AX <wbr>系列</strong>（非 <wbr>MLD <wbr>固件）：<wbr>常驻监<wbr>听器，<wbr>有<wbr>自己<wbr>的<wbr>信道<wbr>上<wbr>下文，<wbr>与 <a target="_blank" rel="noopener noreferrer" href="https://github.com/retropineaple/ForbiddenItlwm">ForbiddenItlwm</a> <wbr>在 <wbr>AX211 <wbr>上<wbr>实现<wbr>双向<wbr>隔空<wbr>的<wbr>做法<wbr>相同。</li>
 <li><strong>BE <wbr>系列</strong>（MLD <wbr>固件）：<wbr>同样<wbr>的<wbr>思路<wbr>换成 <wbr>MLD <wbr>命令集，<wbr>在<wbr>主链<wbr>路旁加<wbr>一条 <wbr>P2P <wbr>客户端链路<wbr>（Linux <wbr>允许<wbr>两条<wbr>不同<wbr>信道<wbr>的<wbr>组合）。<wbr>正在<wbr>按固件自身代码梳理它<wbr>的<wbr>激活<wbr>条件，<wbr>尚未<wbr>走通。</li>
-<li><strong>AC <wbr>及<wbr>更早</strong>：<wbr>不在<wbr>计划内。</li>
+<li><strong>AC <wbr>系列</strong>（9260/<wbr>9560）：<wbr>同样<wbr>的<wbr>常驻<wbr>监<wbr>听器，<wbr>换成 <wbr>IWM <wbr>固件<wbr>的<wbr>命令<wbr>集；<wbr>已有<wbr>测试包，<wbr>等<wbr>第<wbr>一<wbr>批实机<wbr>结果。<wbr>9461/9462、<wbr>8265 <wbr>及<wbr>更早<wbr>的<wbr>卡：<wbr>不在<wbr>计划内。</li>
 </ul><p>前提<wbr>是<wbr>蓝牙 <wbr>LE <wbr>广播<wbr>与<wbr>扫描<wbr>在 <wbr>macOS <wbr>上<wbr>可用。<wbr>测试包<wbr>附带<wbr>配套<wbr>的 <a target="_blank" rel="noopener noreferrer" href="https://github.com/acidanthera/BrcmPatchRAM">BlueToolFixup</a>，<wbr>支持 <code>-btlfxadvsets</code>（第三<wbr>方控制器<wbr>的<wbr> <wbr>LE <wbr>广<wbr>播集，<wbr>macOS 26.4–26.7.3）<wbr>和 <code>-btlfxrpa</code>（连接<wbr>使用<wbr>私有<wbr>地址<wbr>的<wbr> <wbr>iPhone，<wbr>目前<wbr>支持 <wbr>macOS 26.4 <wbr>与 <wbr>26.7）。<wbr>加<wbr>了 <code>-itlawdl</code> <wbr>时，<wbr>驱动<wbr>先检查 <wbr>Apple <wbr>的 <wbr>AWDL <wbr>接口表<wbr>是否<wbr>与<wbr>编译<wbr>时<wbr>一致<wbr>（I/O <wbr>Registry <wbr>里<wbr>的 <code>AWDLBuildCheck</code>），<wbr>不一致<wbr>就只做普通 <wbr><span class="nw">Wi-Fi</span>，<wbr>系统<wbr>更新<wbr>不会<wbr>因此<wbr>变成<wbr>内核崩溃。<wbr>监听信<wbr>道<wbr>依次<wbr>选 <wbr>149、<wbr>44、<wbr>6，<wbr>只用<wbr>当<wbr>地<wbr>允许<wbr>发射<wbr>的<wbr>信道<wbr>（没有 <wbr>149 <wbr>的<wbr>国家<wbr>用 <wbr>44；<wbr>被<wbr>动信<wbr>道<wbr>在<wbr>听到<wbr>附近<wbr>路<wbr>由器<wbr>的<wbr>信标<wbr>后<wbr>才算可用）。<wbr>149 <wbr>最快：<wbr>路由器<wbr>在 <wbr>149、<wbr>iPhone <wbr>也<wbr>在 <wbr>149 <wbr>或<wbr>没连 <wbr><span class="nw">Wi-Fi</span> <wbr>时隔空速度<wbr>最好。</p></div></section>
 <section id="report"><div class="wrap"><h2>反馈<wbr>问题</h2><p>请<wbr>用 <wbr>Debug <wbr>包。<wbr>先复现<wbr>一次<wbr>问题，<wbr>再运行<wbr>包里<wbr>的 <code>Collect-WiFi-Community.command</code>，<wbr>把<wbr>生成<wbr>的<wbr>压缩<wbr>包附到 <a target="_blank" rel="noopener noreferrer" href="https://github.com/Ersiter/Eric-AirportItlwm/issues">GitHub Issue</a>，<wbr>写明<wbr>网卡、<wbr>macOS <wbr>版本、<wbr>路由器<wbr>型号、<wbr>加密<wbr>方式<wbr>和<wbr>操作<wbr>过程；<wbr><span class="nw">Wi-Fi 7</span> <wbr>路由器请<wbr>说明<wbr>是<wbr>否开<wbr>了 <wbr>MLO、<wbr>组合<wbr>了<wbr>哪些<wbr>频段。<wbr>压缩<wbr>包含<wbr>网络元数据，<wbr>可以<wbr>私下<wbr>发送。<wbr>能<wbr>编译<wbr>不等于<wbr>能用，<wbr>请<wbr>写<wbr>你<wbr>在<wbr>自己<wbr>机器上<wbr>看到<wbr>的<wbr>结果。</p><p><a target="_blank" rel="noopener noreferrer" class="btn" href="https://github.com/Ersiter/Eric-AirportItlwm/issues/new">提交 Issue</a></p></div></section>
 <section id="build"><div class="wrap"><h2>编译</h2>

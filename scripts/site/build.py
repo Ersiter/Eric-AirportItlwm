@@ -100,7 +100,7 @@ def page(code, folder, native, hl):
     up = '' if not folder else '../'
     ok = '<span class="pill ok"><span aria-hidden="true">✅</span> %s</span>' % t['ok']
     dev = '<span class="pill dev"><span aria-hidden="true">🧪</span> %s</span>' % t['dev']
-    cardtxt = {'all': t['cards_all'], 'ac': t['cards_ac'], 'axbe': t['cards_axbe'], 'ax210': t['cards_ax210'],
+    cardtxt = {'awdl': t['cards_awdl'], 'all': t['cards_all'], 'ac': t['cards_ac'], 'axbe': t['cards_axbe'], 'ax210': t['cards_ax210'],
                'be': t['cards_be']}
     ids = ['lineage', 'works', 'cards', 'install', 'continuity', 'report', 'build', 'license']
     nav = '\n'.join('<a href="#%s">%s</a>' % (i, attr(n)) for i, n in zip(ids, t['nav']))
@@ -136,7 +136,7 @@ def page(code, folder, native, hl):
     ]
     cards_html = '\n'.join('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' % (
         '<span class="nw">%s</span>' % g, m, p, h) for g, m, p, h in cards_rows)
-    boot_codes = ['itlwm_he=0', '-itlawdl']
+    boot_codes = ['-itlawdl', 'itlwm_he=0']
     boot_rows = '\n'.join('<tr><td><code>%s</code></td><td>%s</td></tr>' % (c, md_(e))
                           for c, e in zip(boot_codes, t['boot']))
     cred = '\n'.join('<li>%s</li>' % md_(c) for c in t['cred'])
