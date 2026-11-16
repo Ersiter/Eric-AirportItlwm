@@ -329,13 +329,6 @@ initProvider(IOService *provider, bool setupWCL, const ether_addr *macOverride)
     return ret;
 }
 
-#ifdef AIRPORT_WCL
-const char *AirportItlwmLowLatencyInterface::getBSDNamePrefix()
-{
-    return "llw";
-}
-#endif
-
 //ifnet_t AirportItlwmSkywalkInterface::
 //getBSDInterface()
 //{

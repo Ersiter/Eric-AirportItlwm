@@ -30,7 +30,7 @@ Every card it supported still works, on macOS's own Wi-Fi, with no HeliPort.
 | 6 GHz | AX210/AX211/AX411, BE | ✅ on BE200 |
 | 802.11be (EHT), 320 MHz, multi-link (eMLSR) | BE | ✅ 320 MHz on hardware; a multi-link router joins; link pairing still experimental |
 | Sleep and wake, recovery from firmware errors | all | ✅ |
-| AirDrop / AWDL | AC (9260/9560), AX, BE | 🧪 AC IWM source path implemented; build and hardware checks pending, see [Continuity](#continuity) |
+| AirDrop / AWDL | AC (9260/9560), AX, BE | 🧪 AC IWM source path implemented; Tahoe 26.4 Debug build succeeded, AC hardware check pending, see [Continuity](#continuity) |
 | Instant Hotspot (iPhone in the Wi-Fi menu) | all | 🧪 in development |
 
 **Measured on a BE200** (macOS 26, 6 GHz, 320 MHz, two streams): link rate 2882 Mbit/s, **2.55 Gbit/s
@@ -91,7 +91,7 @@ radio (Wi-Fi 7 eMLSR is single radio too), so the firmware time-shares the two:
 - **BE cards** (MLD firmware): the same idea in the MLD command set, as a P2P client link next to the
   station link (the combination Linux allows on two channels). The firmware's activation rules are being
   worked out from its own code; not working yet.
-- **AC cards (9260/9560; IWM API 46):** the experimental IWM path uses a third PHY context, listener MAC and binding, DQA P2P queues, per-peer station setup, software CCMP, and firmware RX BA reorder. The source path is implemented; build and card-level results are pending. Owly reports Linux 9260/9560 in exclusive mode; this native IWM P2P-context path still needs AC hardware validation.
+- **AC cards (9260/9560; IWM API 46):** the experimental IWM path uses a third PHY context, listener MAC and binding, DQA P2P queues, per-peer station setup, software CCMP, and firmware RX BA reorder. Tahoe 26.4 Debug builds successfully; card-level results are pending. Owly reports Linux 9260/9560 in exclusive mode; this native IWM P2P-context path still needs AC hardware validation.
 
 Bluetooth LE advertising and scanning must work on macOS first. Test packages ship a matching
 [BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM) with `-btlfxadvsets` (LE advertising sets for

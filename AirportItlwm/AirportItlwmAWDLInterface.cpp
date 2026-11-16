@@ -109,12 +109,6 @@ setLowLatencyAddress(const ether_addr &mac)
     fUniqueId[6] = kAirportItlwmLowLatencyInterfaceId;
 }
 
-const char *AirportItlwmLowLatencyEthernetInterface::
-getNamePrefix() const
-{
-    return "llw";
-}
-
 bool AirportItlwmLowLatencyEthernetInterface::
 initIfnetParams(struct ifnet_init_params *params)
 {
@@ -1888,8 +1882,9 @@ enqueueLowLatencyData(mbuf_t m)
         return;
     if (fLowLatencyDataQCount >= kDataQueueLen) {
         auto *llw = fController ? fController->fLLWBsdIf : nullptr;
-        if (llw && llw->getIfnet() && llw->getIfnet()->netStat)
-            ++llw->getIfnet()->netStat->outputErrors;
+        ifnet_t llwIfp = llw ? llw->getIfnet() : nullptr;
+        if (llwIfp)
+            ifnet_stat_increment_out(llwIfp, 0, 1, 0);
         mbuf_freem(m);
         return;
     }
@@ -1913,8 +1908,8 @@ flushLowLatencyData()
         mbuf_t m = fLowLatencyDataQ[fLowLatencyDataQHead];
         size_t plen = mbuf_pkthdr_len(m);
         if (plen < 14 || hdr + qos + llc + plen - 14 > sizeof(frame)) {
-            if (llwIfp && llwIfp->netStat)
-                ++llwIfp->netStat->outputErrors;
+            if (llwIfp)
+                ifnet_stat_increment_out(llwIfp, 0, 1, 0);
         } else {
             uint8_t eh[14];
             mbuf_copydata(m, 0, sizeof(eh), eh);
@@ -1940,8 +1935,8 @@ flushLowLatencyData()
             if (err == EAGAIN)
                 return;
             if (err) {
-                if (llwIfp && llwIfp->netStat)
-                    ++llwIfp->netStat->outputErrors;
+                if (llwIfp)
+                    ifnet_stat_increment_out(llwIfp, 0, 1, 0);
             } else if (llwIfp) {
                 ifnet_stat_increment_out(llwIfp, 1, 0, 0);
             }

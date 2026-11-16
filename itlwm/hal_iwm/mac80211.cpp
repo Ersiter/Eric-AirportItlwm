@@ -2779,7 +2779,7 @@ iwm_awdl_listener_reset(struct iwm_softc *sc)
             cleanup_err = cleanup_err ? cleanup_err : EBUSY;
             queues_safe = false;
         } else {
-            auto disable = [sc, &cleanup_err](int *qid, int tid) {
+            auto disable = [this, sc, &cleanup_err](int *qid, int tid) {
                 if (*qid < 0)
                     return;
                 struct iwm_scd_txq_cfg_cmd cmd = {};
@@ -2787,7 +2787,7 @@ iwm_awdl_listener_reset(struct iwm_softc *sc)
                 cmd.enable = IWM_SCD_CFG_DISABLE_QUEUE;
                 cmd.sta_id = IWM_AWDL_STA_ID;
                 cmd.tid = tid;
-                int err = iwm_send_cmd_pdu(sc, IWM_SCD_QUEUE_CFG, 0,
+                int err = this->iwm_send_cmd_pdu(sc, IWM_SCD_QUEUE_CFG, 0,
                     sizeof(cmd), &cmd);
                 if (err) {
                     if (!cleanup_err)
@@ -3114,7 +3114,7 @@ iwm_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     mbuf_setlen(m, len);
     mbuf_pkthdr_setlen(m, len);
     in->in_ni.ni_chan = &ic->ic_channels[chan];
-    ieee80211_ref_node(ic, &in->in_ni);
+    ieee80211_ref_node(&in->in_ni);
     err = that->iwm_tx(sc, m, &in->in_ni, EDCA_AC_BE);
     if (err) {
         ieee80211_release_node(ic, &in->in_ni);
@@ -3264,12 +3264,13 @@ int ItlIwm::
 iwm_awdl_set_low_latency(struct ieee80211com *ic, int active)
 {
     struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
+    ItlIwm *that = container_of(sc, ItlIwm, com);
     const int previous = sc->sc_awdl_low_latency;
     sc->sc_awdl_low_latency = active != 0;
     if (!sc->sc_awdl_listener_up ||
         isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DYNAMIC_QUOTA))
         return 0;
-    int err = iwm_update_quotas(sc, (struct iwm_node *)ic->ic_bss, 1);
+    int err = that->iwm_update_quotas(sc, (struct iwm_node *)ic->ic_bss, 1);
     if (err)
         sc->sc_awdl_low_latency = previous;
     return err;
@@ -4727,7 +4728,7 @@ iwm_stop(struct _ifnet *ifp)
     iwm_awdl_listener_reset(sc);
     sc->sc_awdl_listener_tries = 0;
     if (sc->sc_awdl_node) {
-        free(sc->sc_awdl_node, M_DEVBUF, sizeof(*sc->sc_awdl_node));
+        ::free(sc->sc_awdl_node);
         sc->sc_awdl_node = NULL;
         sc->sc_awdl_peer_valid = 0;
         memset(sc->sc_awdl_peer_addr, 0, sizeof(sc->sc_awdl_peer_addr));
