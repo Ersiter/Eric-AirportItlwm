@@ -157,6 +157,7 @@ bool AirportItlwm::init(OSDictionary *properties)
     fLLWAttached = false;
     fLLWStarted = false;
     memset(&fLLWMac, 0, sizeof(fLLWMac));
+    fLLWNetInfo = fLLWEthInfo = fAWDLNetInfo = fAWDLEthInfo = nullptr;
 #endif
     power_state = 0;
     memset(geo_location_cc, 0, sizeof(geo_location_cc));
@@ -476,14 +477,14 @@ bool AirportItlwm::start(IOService *provider)
         return false;
     }
 #ifdef AIRPORT_WCL
-    fNetIf->mExpansionData->fRegistrationInfo = (struct IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(kSkywalkNetworkRegistrationInfoSize);
+    fNetIf->mExpansionData->fRegistrationInfo = (struct IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(sizeof(struct IOSkywalkNetworkInterface::RegistrationInfo));
     fNetIf->mExpansionData2->fRegistrationInfo = (struct IOSkywalkEthernetInterface::RegistrationInfo *)IOMalloc(sizeof(struct IOSkywalkEthernetInterface::RegistrationInfo));
     if (!fNetIf->mExpansionData->fRegistrationInfo || !fNetIf->mExpansionData2->fRegistrationInfo) {
         super::stop(provider);
         releaseAll();
         return false;
     }
-    memcpy(fNetIf->mExpansionData->fRegistrationInfo, &registInfo, kSkywalkNetworkRegistrationInfoSize);
+    memcpy(fNetIf->mExpansionData->fRegistrationInfo, &registInfo, sizeof(registInfo));
     memcpy(fNetIf->mExpansionData2->fRegistrationInfo, &registInfo, sizeof(registInfo));
     if (fNetIf->getInterfaceRole() == 1)
         fNetIf->deferBSDAttach(true);

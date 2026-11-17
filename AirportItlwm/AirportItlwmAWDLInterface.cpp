@@ -92,6 +92,26 @@ nativeTableMismatch()
     return nullptr;
 }
 
+// The framework frees mExpansionData[2]->fRegistrationInfo with kfree_type when an interface is stopped (Tahoe
+// IOSkywalkFamily: deregisterNetworkInterface and deregisterEthernetInterface null-check the pointer, then free it as a typed
+// 288-byte / Ethernet object). Our own IOMalloc'd records are in other zones. In a normal run registerEthernetInterface
+// replaces them with typed copies; when it was never reached, stop() would free ours. So: if the pointer is still ours, take
+// it out before stop(), and release our buffers ourselves afterwards.
+static void takeOutOwnRegistrationInfo(IOSkywalkNetworkInterface *netIf, IOSkywalkEthernetInterface *ethIf, void *ownNet, void *ownEth)
+{
+    if (netIf && netIf->mExpansionData && ownNet && netIf->mExpansionData->fRegistrationInfo == ownNet)
+        netIf->mExpansionData->fRegistrationInfo = nullptr;
+    if (ethIf && ethIf->mExpansionData2 && ownEth && ethIf->mExpansionData2->fRegistrationInfo == ownEth)
+        ethIf->mExpansionData2->fRegistrationInfo = nullptr;
+}
+
+static void freeOwnRegistrationInfo(void *&ownNet, void *&ownEth)
+{
+    if (ownNet) IOFree(ownNet, sizeof(IOSkywalkNetworkInterface::RegistrationInfo));
+    if (ownEth) IOFree(ownEth, sizeof(IOSkywalkEthernetInterface::RegistrationInfo));
+    ownNet = ownEth = nullptr;
+}
+
 #define AWDL_LOG(fmt, ...) XYLogE("AWDL %s: " fmt "\n", __FUNCTION__, ##__VA_ARGS__)
 
 #pragma mark - awdl0 BSD interface
@@ -2127,14 +2147,16 @@ createAWDLInterface(apple80211_virt_if_create_data *data)
         awdl->release();
         return kIOReturnError;
     }
-    awdl->mExpansionData->fRegistrationInfo = (IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(kSkywalkNetworkRegistrationInfoSize);
+    awdl->mExpansionData->fRegistrationInfo = (IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(sizeof(IOSkywalkNetworkInterface::RegistrationInfo));
     awdl->mExpansionData2->fRegistrationInfo = (IOSkywalkEthernetInterface::RegistrationInfo *)IOMalloc(sizeof(IOSkywalkEthernetInterface::RegistrationInfo));
     if (!awdl->mExpansionData->fRegistrationInfo || !awdl->mExpansionData2->fRegistrationInfo) {
         awdl->detach(this);
         awdl->release();
         return kIOReturnNoMemory;
     }
-    memcpy(awdl->mExpansionData->fRegistrationInfo, &info, kSkywalkNetworkRegistrationInfoSize);
+    memcpy(awdl->mExpansionData->fRegistrationInfo, &info, sizeof(info));
+    fAWDLNetInfo = awdl->mExpansionData->fRegistrationInfo;
+    fAWDLEthInfo = awdl->mExpansionData2->fRegistrationInfo;
     memcpy(awdl->mExpansionData2->fRegistrationInfo, &info, sizeof(info));
     awdl->deferBSDAttach(true);
     if (!awdl->start(this)) {
@@ -2253,20 +2275,23 @@ createLowLatencyInterface(char *bsdName)
     memcpy(info.bytes + 0x10c, fLLWMac.octet + 4, 2);
     put32(info.bytes + 0x120, lowLatencyFlags);
 
-    auto *networkInfo = (IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(kSkywalkNetworkRegistrationInfoSize);
+    auto *networkInfo = (IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(
+        sizeof(IOSkywalkNetworkInterface::RegistrationInfo));
     auto *ethernetInfo = (IOSkywalkEthernetInterface::RegistrationInfo *)IOMalloc(
         sizeof(IOSkywalkEthernetInterface::RegistrationInfo));
     if (!networkInfo || !ethernetInfo) {
-        if (networkInfo) IOFree(networkInfo, kSkywalkNetworkRegistrationInfoSize);
+        if (networkInfo) IOFree(networkInfo, sizeof(*networkInfo));
         if (ethernetInfo) IOFree(ethernetInfo, sizeof(*ethernetInfo));
         XYLogE("AWDL llw0: create failed at step 3\n");
         destroyLowLatencyInterface();
         return kIOReturnNoMemory;
     }
-    memcpy(networkInfo, &info, kSkywalkNetworkRegistrationInfoSize);
+    memcpy(networkInfo, &info, sizeof(info));
     memcpy(ethernetInfo, &info, sizeof(info));
     llw->mExpansionData->fRegistrationInfo = networkInfo;
     llw->mExpansionData2->fRegistrationInfo = ethernetInfo;
+    fLLWNetInfo = networkInfo;
+    fLLWEthInfo = ethernetInfo;
     llw->deferBSDAttach(true);
     if (!llw->start(this)) {
         XYLogE("AWDL llw0: create failed at step 4\n");
@@ -2331,6 +2356,7 @@ destroyLowLatencyInterface()
         fLLWBsdIf = nullptr;
     }
     if (fLLWIf) {
+        takeOutOwnRegistrationInfo(fLLWIf, fLLWIf, fLLWNetInfo, fLLWEthInfo);
         if (fLLWStarted)
             fLLWIf->stop(this);
         if (fLLWAttached)
@@ -2338,6 +2364,7 @@ destroyLowLatencyInterface()
         fLLWIf->release();
         fLLWIf = nullptr;
     }
+    freeOwnRegistrationInfo(fLLWNetInfo, fLLWEthInfo);
     fLLWStarted = false;
     fLLWAttached = false;
     memset(&fLLWMac, 0, sizeof(fLLWMac));
@@ -2356,11 +2383,13 @@ destroyAWDLInterface()
     }
     if (fAWDLIf) {
         fAWDLIf->teardownAW();
+        takeOutOwnRegistrationInfo(fAWDLIf, fAWDLIf, fAWDLNetInfo, fAWDLEthInfo);
         fAWDLIf->stop(this);
         fAWDLIf->detach(this);
         fAWDLIf->release();
         fAWDLIf = nullptr;
     }
+    freeOwnRegistrationInfo(fAWDLNetInfo, fAWDLEthInfo);
 }
 
 // Log a setter that is accepted but not acted on yet.

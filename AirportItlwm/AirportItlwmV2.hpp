@@ -51,14 +51,6 @@ extern "C" {
 const char *convertApple80211IOCTLToString(signed int cmd);
 }
 
-#ifdef AIRPORT_WCL
-// IOSkywalkNetworkInterface::stop frees mExpansionData->fRegistrationInfo as a 0x120 (288) byte object: the zalloc panic
-// "not in the expected zone early.kalloc.288, but found in kalloc.type.var6.384" on macOS 15.8.3 (24H241) and on 26.7.3
-// (25G342), both from deregisterNetworkInterface on a buffer allocated here as 0x130. The Ethernet interface's own
-// record is the network one plus 0x10 bytes (0x130), so only the network copy is 0x120.
-static constexpr size_t kSkywalkNetworkRegistrationInfoSize = 0x120;
-#endif
-
 class AirportItlwm : public IO80211Controller {
     OSDeclareDefaultStructors(AirportItlwm)
 #define IOCTL(REQ_TYPE, REQ, DATA_TYPE) \
@@ -284,6 +276,10 @@ public:
     bool fLLWStarted;
     ether_addr fAWDLMac;
     ether_addr fLLWMac;
+    // The registration records we allocate for awdl0 and llw0. The framework makes its own typed copies when it
+    // registers the interface; if it never got that far (a failed create), stop() would free OUR pointer with
+    // kfree_type and panic ("not in the expected zone early.kalloc.288"), see releaseRegistrationInfo().
+    void *fLLWNetInfo, *fLLWEthInfo, *fAWDLNetInfo, *fAWDLEthInfo;
     IOReturn createAWDLInterface(struct apple80211_virt_if_create_data *data);
     IOReturn createLowLatencyInterface(char *bsdName);
     IOReturn destroyLowLatencyInterface();
