@@ -282,6 +282,8 @@ initCCLogs()
     return driverLogPipe && driverDataPathPipe && driverSnapshotsPipe && driverFaultReporter;
 }
 
+extern const char *hexdump(uint8_t *buf, size_t len);
+
 bool AirportItlwm::start(IOService *provider)
 {
     // The IO80211 / Skywalk vtables these builds subclass differ in every macOS generation (macOS 27 added five
@@ -294,6 +296,17 @@ bool AirportItlwm::start(IOService *provider)
 #elif defined(ITL_MACOS27)
     if (version_major != 27) {
         XYLogE("this kext is for macOS 27, not starting on Darwin %d.%d\n", version_major, version_minor);
+        return false;
+    }
+#elif __IO80211_TARGET == __MAC_14_4
+    // IO80211FamilyV2 changed at 14.4 (Darwin 23.4); the 14.0 target is for 14.0 to 14.3.
+    if (version_major != 23 || version_minor < 4) {
+        XYLogE("this kext is for macOS 14.4 to 14, not starting on Darwin %d.%d\n", version_major, version_minor);
+        return false;
+    }
+#elif __IO80211_TARGET == __MAC_14_0
+    if (version_major != 23 || version_minor >= 4) {
+        XYLogE("this kext is for macOS 14.0 to 14.3, not starting on Darwin %d.%d\n", version_major, version_minor);
         return false;
     }
 #elif __IO80211_TARGET == __MAC_26_0
