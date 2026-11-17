@@ -16,6 +16,9 @@
 #include <libkern/version.h>
 
 class CommonFaultReporter;
+#ifdef ITL_MACOS27
+struct apple80211_tracker_stats;
+#endif
 
 #ifndef __IO80211_TARGET
 #error "Please define __IO80211_TARGET to the requested version"
@@ -230,6 +233,10 @@ private: virtual void _abi_0dc0() __asm__("__ZN17IO80211Controller16CreatePostOf
     virtual void _RESERVEDIO80211Controller14();
     virtual void _RESERVEDIO80211Controller15();
     virtual IOReturn setMulticastList(ether_addr const*, unsigned int);
+#ifdef ITL_MACOS27
+    virtual void getTotalRxUnicastFrames(apple80211_tracker_stats&);
+    virtual UInt64 reportsPerInterfacePeerCacheLimits();
+#endif
 private: uint8_t _layout[0x128 - sizeof(IOEthernetController)];
 };
 static_assert(sizeof(IO80211Controller) == 0x128, "WCL ABI size");

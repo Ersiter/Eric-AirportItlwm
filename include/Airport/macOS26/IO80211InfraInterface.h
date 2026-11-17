@@ -11,6 +11,9 @@
 #define IO80211InfraInterface_h
 
 struct apple80211_wcl_advisory_info;
+#ifdef ITL_MACOS27
+struct apple80211_state_data;
+#endif
 struct apple80211_wcl_tx_rx_latency;
 
 
@@ -80,6 +83,11 @@ private: virtual void _abi_0c30() __asm__("__ZN21IO80211InfraInterface19setRxDat
     virtual void * getWCL_TX_RX_LATENCY(apple80211_wcl_tx_rx_latency*);
     virtual IOReturn setWCL_LINK_STATE_UPDATE(apple80211_wcl_update_link_state*);
 private: virtual void _abi_0e98() __asm__("__ZN21IO80211InfraInterface13createLQMDataEv"); public:
+#ifdef ITL_MACOS27
+    virtual IOReturn setBT_COEX_FLAGS(apple80211_state_data*);
+    // 27 overrides the IO80211SkywalkInterface method here; the slot itself is not new.
+    virtual void postMessageOutOfOrder(unsigned int, void*, unsigned long, bool);
+#endif
     virtual IOReturn setMacAddress(mloAddrArray&) = 0;
 private: uint8_t _layout[0x130 - sizeof(IO80211SkywalkInterface)];
 };

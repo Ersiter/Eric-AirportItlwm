@@ -416,6 +416,9 @@ public:
     virtual IOReturn setOS_ELIGIBILITY(apple80211_os_eligibility*) = 0;
     virtual IOReturn setTX_MODE_CONFIG(apple80211_tx_mode_config*) = 0;
     virtual IOReturn setMITIGATE_INTERFERENCE(apple80211_mitigate_interference*) = 0;
+#ifdef ITL_MACOS27
+    virtual IOReturn _itl27InfraProtocolTail() { return kIOReturnUnsupported; }  // macOS 27 slot 677, pure in Apple's table
+#endif
 };
 static_assert(sizeof(IO80211InfraProtocol) == 0x130, "WCL ABI size");
 #endif

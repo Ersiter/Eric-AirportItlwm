@@ -113,6 +113,12 @@ private: virtual void _abi_0cd0() __asm__("__ZN23IO80211VirtualInterface8findPee
     virtual IOReturn p2pMulticastTx(IO80211NetworkPacket**, unsigned int);
     virtual IOReturn p2pMulticastTx(unsigned int, bool);
     virtual IOReturn signalMulticastPackets(unsigned int, unsigned int);
+#ifdef ITL_MACOS27
+    virtual UInt64 getTotalUnicastInputPacketCount();
+    virtual UInt64 getTotalUnicastOutputPacketCount();
+    // 27 overrides setPowerState here; the slot is the inherited one, so subclasses must resolve to this class.
+    virtual IOReturn setPowerState(unsigned long, IOService*);
+#endif
     virtual IOReturn sendPendingPacketsToStack(IO80211NetworkPacket**, unsigned int);
     virtual IOReturn freePendingPackets(IO80211NetworkPacket**, unsigned int);
     virtual IOReturn setMacAddress(ether_addr&) = 0; // 0x0f40

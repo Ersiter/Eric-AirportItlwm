@@ -22,6 +22,9 @@ class TxCompletionEnqueueStats;
 class IO80211NetworkPacket;
 class PacketSkywalkScratch;
 typedef UInt64 IO80211FlowQueueHash;
+#ifdef ITL_MACOS27
+struct apple80211_tracker_interface_stats;
+#endif
 class IO80211Peer;
 class CCPipe;
 class IO80211APIUserClient;
@@ -92,6 +95,9 @@ public:
     virtual void * createPeerManager();
 private: virtual void _abi_0b10() __asm__("__ZN23IO80211SkywalkInterface10createPeerEPKhP18IO80211PeerManager"); public:
     virtual void postMessage(unsigned int, void*, unsigned long, bool);
+#ifdef ITL_MACOS27
+    virtual void postMessageOutOfOrder(unsigned int, void*, unsigned long, bool);
+#endif
     virtual IOReturn reportDataPathEvents(unsigned int, void*, unsigned long, bool);
     virtual IOReturn recordOutputPackets(TxSubmissionDequeueStats*, TxSubmissionDequeueStats*);
     virtual IOReturn recordOutputPacket(apple80211_wme_ac, int, int);
@@ -185,8 +191,14 @@ private: virtual void _abi_0dd0() __asm__("__ZN23IO80211SkywalkInterface17setUse
     virtual void * getRingMD(IO80211APIUserClient*, unsigned long long);
 private: virtual void _abi_0df0() __asm__("__ZN23IO80211SkywalkInterface10attachPeerEP10ether_addr"); public:
 private: virtual void _abi_0df8() __asm__("__ZN23IO80211SkywalkInterface10detachPeerEP10ether_addr"); public:
+#ifdef ITL_MACOS27
+    virtual void postPeerPresenceDone(ether_addr*, bool);
+#endif
 private: virtual void _abi_0e00() __asm__("__ZN23IO80211SkywalkInterface21setDebugTrafficReportEb"); public:
 private: virtual void _abi_0e08() __asm__("__ZN23IO80211SkywalkInterface25getDataPathInterfaceStatsEP36apple80211_data_path_interface_stats"); public:
+#ifdef ITL_MACOS27
+    virtual void getTotalRxUnicastFrames(apple80211_tracker_interface_stats&);
+#endif
 private: virtual void _abi_0e10() __asm__("__ZN23IO80211SkywalkInterface20getDataPathPeerStatsEP31apple80211_data_path_peer_stats"); public:
 private: virtual void _abi_0e18() __asm__("__ZN23IO80211SkywalkInterface22getLastQueuePacketTimeEP10ether_addr"); public:
 private: virtual void _abi_0e20() __asm__("__ZN23IO80211SkywalkInterface32getLastRxUnicastLinkActivityTimeEP10ether_addr"); public:

@@ -124,6 +124,9 @@ public:
     virtual IOReturn setPSF_DWELL(apple80211_awdl_psf_dwell_params*) = 0; // 0x11a8
     virtual IOReturn setAWDL_CONFIG(apple80211_awdl_config_request*) = 0; // 0x11b0
     virtual IOReturn setAWDL_RTG_PEER_STATS_CONFIG(apple80211_rtg_peer_stats_cfg*) = 0; // 0x11b8
+#ifdef ITL_MACOS27
+    virtual IOReturn _itl27AWDLProtocolTail() { return kIOReturnUnsupported; }  // macOS 27 slot 578, pure in Apple's table
+#endif
 
 };
 // IO80211AWDLProtocol adds no ivars on Tahoe (OSMetaClass size 0x130).

@@ -15,6 +15,10 @@
 #include "IOSkywalkInterface.h"
 
 struct if_link_status;
+#ifdef ITL_MACOS27
+struct ipsec_offload_sa;
+struct ipsec_offload_policy;
+#endif
 class IOSkywalkPacketQueue;
 class IOSkywalkLogicalLink;
 class IOSkywalkPacketBufferPool;
@@ -78,6 +82,14 @@ private: virtual void _abi_0928() __asm__("__ZN25IOSkywalkNetworkInterface17setR
     virtual void deferBSDAttach(bool);
     virtual void reportDetailedLinkStatus(if_link_status const*);
     virtual UInt getTSOOptions(IOSkywalkNetworkInterface::IOSkywalkTSOOptions*);
+#ifdef ITL_MACOS27
+    // macOS 27: IPsec offload, in front of the reserved slots.
+    virtual IOReturn ipsecOffloadSAAdd(ipsec_offload_sa*, unsigned long long*);
+    virtual IOReturn ipsecOffloadSADelete(unsigned long long);
+    virtual IOReturn ipsecOffloadSAAdvanceESN(unsigned long long, unsigned long long);
+    virtual IOReturn ipsecOffloadPolicyAdd(ipsec_offload_policy*, unsigned long long*);
+    virtual IOReturn ipsecOffloadPolicyDelete(unsigned long long);
+#endif
     virtual void _RESERVEDIOSkywalkNetworkInterface0();
     virtual void _RESERVEDIOSkywalkNetworkInterface1();
     virtual void _RESERVEDIOSkywalkNetworkInterface2();
