@@ -769,12 +769,11 @@ void ieee80211_mld_clear_links(struct ieee80211com *);
 const char *ieee80211_mlo_unusable_reason(struct ieee80211com *,
     struct ieee80211_node *);
 void ieee80211_mlo_downgrade(struct ieee80211com *, const char *);
-
-int ieee80211_setup_he_6ghz_capa(struct ieee80211_node *, const uint8_t *, size_t);
 #else
 #define ieee80211_mld_primary_node(ic, ni) (ni)
 #define ieee80211_mld_active_node(ic) ((ic)->ic_bss)
 #endif
+int ieee80211_setup_he_6ghz_capa(struct ieee80211_node *, const uint8_t *, size_t);
 void ieee80211_clean_cached(struct ieee80211com *);
 void ieee80211_clean_sta_bss_node(struct ieee80211com *);
 void ieee80211_clean_nodes(struct ieee80211com *, int);

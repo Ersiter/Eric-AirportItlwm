@@ -411,7 +411,6 @@ struct ieee80211_defrag {
 
 #define IEEE80211_GROUP_NKID	8
 
-#ifdef AIRPORT_WCL
 #define IEEE80211_MLD_MAX_LINKS 4
 
 struct ieee80211_neg_ttlm { uint16_t downlink[8], uplink[8]; };
@@ -438,7 +437,6 @@ struct ieee80211_mld_link_info {
 	uint8_t igtk_kid;
 	uint8_t def_txkey;
 };
-#endif
 
 #define IEEE80211_AWDL_DEFAULT_SYNC_PERIOD_TU 110
 
@@ -486,7 +484,6 @@ struct ieee80211com {
 	int			(*ic_bgscan_start)(struct ieee80211com *);
     /* The channel width has changed (20<->2040) */
     void            (*ic_update_chw)(struct ieee80211com *);
-#ifdef AIRPORT_WCL
     bool ic_wcl_mac_reconfig;
     bool ic_wcl_enterprise;
     bool ic_wcl_join_requested;
@@ -517,7 +514,6 @@ struct ieee80211com {
     uint32_t ic_wcl_scan_away_time_ms;
     uint64_t ic_wcl_tx_packets[4];
     uint64_t ic_wcl_rx_packets[4];
-#endif
     bool ic_mld_emlsr_supported;
     void            (*ic_event_handler)(struct ieee80211com *, int, void *);
     /*
@@ -936,6 +932,8 @@ struct ieee80211_beacon_event {
     const uint8_t *frame;
     size_t frame_length;
 };
+#endif
+
 static inline int
 ieee80211_sae_select_auth(const struct ieee80211com *ic,
     const struct ieee80211_node *ni, struct ieee80211_sae_auth *auth)
@@ -1002,8 +1000,6 @@ ieee80211_rsn_peer_addr(const struct ieee80211com *ic,
 #endif
 	return ni->ni_sae.sae_auth.mld ? ni->ni_sae.sae_auth.peeraddr : ni->ni_macaddr;
 }
-
-#endif
 
 
 void	ieee80211_ifattach(struct _ifnet *, IOEthernetController *controller);
