@@ -81,7 +81,7 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 - **AC 系列**（9260/9560）：同样的常驻监听器，换成 IWM 固件的命令集；已有测试包，等第一批实机结果（在 `-itlawdl` 之外再加 `-itlawdlac`）。9461/9462、8265 及更早的卡：不在计划内。
 
 前提是蓝牙 LE 广播与扫描在 macOS 上可用。测试包附带配套的 [BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM)，
-它的 Intel 补丁默认开启：第三方控制器的 LE 广播集（macOS 26.4–26.7.3）、连接使用私有地址的 iPhone
+它的 Intel 补丁默认开启：第三方控制器的 LE 广播集（macOS 26.4–26.7.3；macOS 15.8 上是广播、扫描和连接，还没在真机上跑过）、连接使用私有地址的 iPhone
 （目前支持 macOS 26.4 与 26.7），`-btlfxnointel` 可关闭。搭配 Lilu、IntelBluetoothFirmware、已启用的 IntelBTPatcher 使用。
 ForbiddenItlwm 的 BTLEAdvFixup 用原版 BlueToolFixup 做同样的事：两套任选其一，不要同时用；用 BTLEAdvFixup 时
 必须停用 IntelBTPatcher（两者钩同一个函数，Lilu 会 panic）。从 ForbiddenItlwm 换过来：它的 `-itlawdliface` 视同 `-itlawdl`，`-itlawdlcoexbatx` 视同 `-itlawdllegacyba`，其余 `-itlawdlcoex*` 在这里没有意义。加了 `-itlawdl` 时，驱动先检查 Apple 的 AWDL 接口表是否与编译时一致

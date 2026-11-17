@@ -97,8 +97,9 @@ radio (Wi-Fi 7 eMLSR is single radio too), so the firmware time-shares the two:
 
 Bluetooth LE advertising and scanning must work on macOS first. Test packages ship a matching
 [BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM) whose Intel patches are on by default: LE
-advertising sets for third-party controllers (macOS 26.4–26.7.3) and connecting to an iPhone that uses a
-private address (macOS 26.4 and 26.7 so far); `-btlfxnointel` turns them off. It works with Lilu,
+advertising sets for third-party controllers (macOS 26.4–26.7.3; on macOS 15.8 advertising, scanning and connections, not yet
+run on a machine) and connecting to an iPhone that uses a private address (macOS 26.4 and 26.7 so far);
+`-btlfxnointel` turns them off. It works with Lilu,
 IntelBluetoothFirmware and IntelBTPatcher enabled. ForbiddenItlwm's BTLEAdvFixup does the same job with the
 stock BlueToolFixup instead: use one of the two, never both, and IntelBTPatcher must be off with BTLEAdvFixup
 (Lilu panics if both hook the same function). Coming from ForbiddenItlwm: its `-itlawdliface` counts as `-itlawdl` and `-itlawdlcoexbatx` as `-itlawdllegacyba`; its other `-itlawdlcoex*` arguments mean nothing here. With `-itlawdl` the driver first checks that Apple's AWDL interface
