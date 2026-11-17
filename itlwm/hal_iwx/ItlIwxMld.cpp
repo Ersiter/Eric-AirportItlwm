@@ -1104,6 +1104,13 @@ iwx_mld_tpt_task(void *arg)
         that->iwx_mld_apply_link_selection(sc);
     }
 }
+#else
+void ItlIwx::iwx_mld_handle_stats_oper_notif(struct iwx_softc *, struct iwx_rx_packet *) {}
+void ItlIwx::iwx_mld_handle_beacon_filter_notif(struct iwx_softc *, struct iwx_rx_packet *) {}
+void ItlIwx::iwx_mld_exit_emlsr(struct iwx_softc *, int) {}
+void ItlIwx::iwx_mld_note_emlsr_exit(struct iwx_softc *, int) {}
+void ItlIwx::iwx_mld_tpt_timer(void *) {}
+void ItlIwx::iwx_mld_tpt_task(void *) {}
 #endif
 
 bool ItlIwx::
@@ -1309,12 +1316,16 @@ iwx_mld_active_link_task(void *arg)
         iwx_mld_log_failure(sc, "mld-link-update", "apply-active-set",
             err, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
                 IWX_MLD_LINK_CONFIG_CMD), links);
+#ifdef AIRPORT_WCL
         if (soft || emlsr_active) {
             /* A choice of the policy that rolled back: stay on the links and wait before choosing again. */
             iwx_mld_note_emlsr_exit(sc, IWX_MLD_EMLSR_EXIT_FAIL_ENTRY);
         } else {
             disconnect = 1;
         }
+#else
+        disconnect = 1;
+#endif
     }
 
     if (disconnect)
@@ -2457,7 +2468,9 @@ iwx_mld_run(struct iwx_softc *sc)
         ic->ic_ttlm_schedule(ic);
 #endif
     iwx_mld_log_links(sc);
+#ifdef AIRPORT_WCL
     iwx_mld_emlsr_start(sc);
+#endif
     return 0;
 }
 
@@ -2466,7 +2479,9 @@ iwx_mld_run_stop(struct iwx_softc *sc)
 {
     struct iwx_node *in = (struct iwx_node *)sc->sc_ic.ic_bss;
 
+#ifdef AIRPORT_WCL
     iwx_mld_emlsr_stop(sc);
+#endif
     int err = iwx_flush_sta(sc, in);
     if (err) {
         iwx_mld_log_failure(sc, "run-stop", "tx-flush", err,
@@ -2568,9 +2583,13 @@ iwx_mld_deauth(struct iwx_softc *sc)
 void ItlIwx::
 iwx_mld_roc_block_emlsr(struct iwx_softc *sc)
 {
+#ifdef AIRPORT_WCL
     sc->sc_mld_roc_last = iwx_mld_uptime();
     if (sc->sc_mld_emlsr_blocked & IWX_MLD_EMLSR_BLOCKED_ROC)
         return;
     sc->sc_mld_emlsr_blocked |= IWX_MLD_EMLSR_BLOCKED_ROC;
     iwx_mld_exit_emlsr(sc, IWX_MLD_EMLSR_EXIT_BLOCK);
+#else
+    (void)sc;      /* no EMLSR without WCL */
+#endif
 }

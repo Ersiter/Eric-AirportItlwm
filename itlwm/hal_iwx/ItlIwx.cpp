@@ -10739,7 +10739,9 @@ iwx_scan(struct iwx_softc *sc)
      * as well as the first boot.
      */
     if (sc->sc_nvm.lar_enabled && !sc->sc_mcc_profile_synced) {
+#ifdef AIRPORT_WCL
         iwx_record_diagnostic(sc, "scan-blocked-lar", __FUNCTION__, 0, EBUSY, 0);
+#endif
         sc->sc_scan_lar_deferred = 1;
         return EBUSY;
     }
@@ -15712,8 +15714,12 @@ iwx_endscan(struct iwx_softc *sc, uint8_t status, bool allowContinuation)
         return;
     }
     ieee80211_end_scan(&ic->ic_if);
+#ifdef AIRPORT_WCL
     if (mlo_scan)
         iwx_mld_mlo_scan_done(sc);
+#else
+    (void)mlo_scan;
+#endif
 }
 
 
@@ -16786,7 +16792,9 @@ iwx_stop(struct _ifnet *ifp)
     iwx_del_task(sc, sc->sc_nswq, &sc->newstate_task);
     iwx_del_task(sc, sc->sc_nswq, &sc->start_task);
     iwx_del_task(sc, sc->sc_nswq, &sc->mld_link_task);
+#ifdef AIRPORT_WCL
     iwx_mld_emlsr_stop(sc);
+#endif
     iwx_del_task(sc, sc->sc_nswq, &sc->sc_scan_task);
     iwx_del_task(sc, sc->sc_nswq, &sc->sc_sae_join_task);
     sc->sc_sae_join_pending = 0;

@@ -540,6 +540,14 @@ public:
 
     static void iwx_ttlm_schedule(ieee80211com *);
     static int iwx_ttlm_apply(ieee80211com *, uint16_t);
+#else
+    // Without WCL there is no MLO or EMLSR; the firmware-notification dispatch still names these, so they exist as no-ops.
+    void iwx_mld_handle_stats_oper_notif(iwx_softc *, struct iwx_rx_packet *);
+    void iwx_mld_handle_beacon_filter_notif(iwx_softc *, struct iwx_rx_packet *);
+    static void iwx_mld_exit_emlsr(iwx_softc *, int);
+    static void iwx_mld_note_emlsr_exit(iwx_softc *, int);
+    static void iwx_mld_tpt_timer(void *);
+    static void iwx_mld_tpt_task(void *);
 #endif
     static void iwx_mld_schedule_active_links(iwx_softc *, uint8_t, uint8_t, bool, bool);
     static void    iwx_mld_active_link_task(void *);
