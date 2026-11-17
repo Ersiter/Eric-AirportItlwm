@@ -27,6 +27,14 @@ inline bool itlAWDLBootFlag(const char *single)
     return itlAWDLEnabled() || PE_parse_boot_argn(single, &value, sizeof(value));
 }
 
+// llw0 (Sidecar, Continuity Camera): the companion interface and, on Wi-Fi 7 firmware, the listener station's TID 6
+// queue and the low-latency command that go with it. Opt-in: AirDrop does not need any of it.
+inline bool itlAWDLLlwFlag()
+{
+    int value = 0;
+    return PE_parse_boot_argn("-itlawdlllw", &value, sizeof(value));
+}
+
 inline bool itlAWDLLegacyBaFlag()
 {
     int value = 0;

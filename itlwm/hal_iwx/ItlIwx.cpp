@@ -11265,6 +11265,9 @@ iwx_awdl_set_low_latency(struct ieee80211com *ic, int active)
     struct iwx_softc *sc = (struct iwx_softc *)IC2IFP(ic)->if_softc;
     ItlIwx *that = container_of(sc, ItlIwx, com);
     const uint8_t previous = sc->sc_awdl_low_latency;
+    // Without the TID 6 queue there is nothing for the firmware's low-latency mode to serve: accept and ignore.
+    if (active && !itlAWDLLlwFlag())
+        return 0;
     sc->sc_awdl_low_latency = active != 0;
     int err = that->iwx_awdl_update_low_latency(sc);
     if (err) {
@@ -12836,25 +12839,33 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         goto fail;
     }
     data_queue_added = true;
-    setupStage(10);
-    if (!iwx_nic_lock(sc)) {
-        err = EBUSY;
-        goto fail;
+    /*
+     * The TID 6 queue is for llw0 only. On a BE200 (firmware 92.67ce4588, first real run, macOS 15.8.3) the
+     * listener came up through link activation and the data queue, then the UMAC asserted (ADVANCED_SYSASSERT,
+     * AirportItlwm-FirmwareErrorFirstSetupStage = 10) while this queue was added, and the listener fell back to
+     * periodic remain-on-channel slots that never carried a transfer. So AirDrop sets up without it.
+     */
+    if (itlAWDLLlwFlag()) {
+        setupStage(10);
+        if (!iwx_nic_lock(sc)) {
+            err = EBUSY;
+            goto fail;
+        }
+        qbit = 1U << 6;
+        qhad = sc->sc_mld_txq_tidmask & qbit;
+        llwQueue = iwx_tvqm_enable_txq(sc, 6, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_LISTENER_STA_ID);
+        iwx_nic_unlock(sc);
+        if (generation != sc->sc_generation) {
+            err = ENXIO;
+            goto fail;
+        }
+        sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~qbit) | qhad;
+        if (llwQueue < 0) {
+            err = -llwQueue;
+            goto fail;
+        }
+        llw_queue_added = true;
     }
-    qbit = 1U << 6;
-    qhad = sc->sc_mld_txq_tidmask & qbit;
-    llwQueue = iwx_tvqm_enable_txq(sc, 6, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_LISTENER_STA_ID);
-    iwx_nic_unlock(sc);
-    if (generation != sc->sc_generation) {
-        err = ENXIO;
-        goto fail;
-    }
-    sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~qbit) | qhad;
-    if (llwQueue < 0) {
-        err = -llwQueue;
-        goto fail;
-    }
-    llw_queue_added = true;
     sc->sc_p2p_queue = 1;
     sc->sc_aux_roc_qid = queue;
     sc->sc_awdl_listener_data_qid = dataQueue;
@@ -12863,7 +12874,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
     sc->sc_listener_up = 1;
-    if ((err = iwx_awdl_update_low_latency(sc)) != 0) {
+    if (sc->sc_awdl_low_latency && (err = iwx_awdl_update_low_latency(sc)) != 0) {
         sc->sc_listener_up = 0;
         sc->sc_p2p_queue = 0;
         sc->sc_aux_roc_qid = -1;
