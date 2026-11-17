@@ -2127,14 +2127,14 @@ createAWDLInterface(apple80211_virt_if_create_data *data)
         awdl->release();
         return kIOReturnError;
     }
-    awdl->mExpansionData->fRegistrationInfo = (IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(sizeof(IOSkywalkNetworkInterface::RegistrationInfo));
+    awdl->mExpansionData->fRegistrationInfo = (IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(kSkywalkNetworkRegistrationInfoSize);
     awdl->mExpansionData2->fRegistrationInfo = (IOSkywalkEthernetInterface::RegistrationInfo *)IOMalloc(sizeof(IOSkywalkEthernetInterface::RegistrationInfo));
     if (!awdl->mExpansionData->fRegistrationInfo || !awdl->mExpansionData2->fRegistrationInfo) {
         awdl->detach(this);
         awdl->release();
         return kIOReturnNoMemory;
     }
-    memcpy(awdl->mExpansionData->fRegistrationInfo, &info, sizeof(info));
+    memcpy(awdl->mExpansionData->fRegistrationInfo, &info, kSkywalkNetworkRegistrationInfoSize);
     memcpy(awdl->mExpansionData2->fRegistrationInfo, &info, sizeof(info));
     awdl->deferBSDAttach(true);
     if (!awdl->start(this)) {
@@ -2222,6 +2222,7 @@ createLowLatencyInterface(char *bsdName)
     awdlSetParentInterface(llw, fAWDLIf);
     awdlSetCompanionLowLatencySkywalkInterface(fAWDLIf, llw);
     if (!llw->attach(this)) {
+        XYLogE("AWDL llw0: create failed at step 1\n");
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
@@ -2230,6 +2231,7 @@ createLowLatencyInterface(char *bsdName)
     IOSkywalkEthernetInterface::RegistrationInfo info;
     memset(&info, 0, sizeof(info));
     if (!llw->initRegistrationInfo(&info, 1, sizeof(info))) {
+        XYLogE("AWDL llw0: create failed at step 2\n");
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
@@ -2251,22 +2253,23 @@ createLowLatencyInterface(char *bsdName)
     memcpy(info.bytes + 0x10c, fLLWMac.octet + 4, 2);
     put32(info.bytes + 0x120, lowLatencyFlags);
 
-    auto *networkInfo = (IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(
-        sizeof(IOSkywalkNetworkInterface::RegistrationInfo));
+    auto *networkInfo = (IOSkywalkNetworkInterface::RegistrationInfo *)IOMalloc(kSkywalkNetworkRegistrationInfoSize);
     auto *ethernetInfo = (IOSkywalkEthernetInterface::RegistrationInfo *)IOMalloc(
         sizeof(IOSkywalkEthernetInterface::RegistrationInfo));
     if (!networkInfo || !ethernetInfo) {
-        if (networkInfo) IOFree(networkInfo, sizeof(*networkInfo));
+        if (networkInfo) IOFree(networkInfo, kSkywalkNetworkRegistrationInfoSize);
         if (ethernetInfo) IOFree(ethernetInfo, sizeof(*ethernetInfo));
+        XYLogE("AWDL llw0: create failed at step 3\n");
         destroyLowLatencyInterface();
         return kIOReturnNoMemory;
     }
-    memcpy(networkInfo, &info, sizeof(info));
+    memcpy(networkInfo, &info, kSkywalkNetworkRegistrationInfoSize);
     memcpy(ethernetInfo, &info, sizeof(info));
     llw->mExpansionData->fRegistrationInfo = networkInfo;
     llw->mExpansionData2->fRegistrationInfo = ethernetInfo;
     llw->deferBSDAttach(true);
     if (!llw->start(this)) {
+        XYLogE("AWDL llw0: create failed at step 4\n");
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
@@ -2282,6 +2285,7 @@ createLowLatencyInterface(char *bsdName)
             detachInterface(bsd, true);
             bsd->release();
         }
+        XYLogE("AWDL llw0: create failed at step 5\n");
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
@@ -2289,11 +2293,13 @@ createLowLatencyInterface(char *bsdName)
     if (!fLLWBsdIf) {
         detachInterface(bsd, true);
         bsd->release();
+        XYLogE("AWDL llw0: create failed at step 6\n");
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
     bsd->registerService();
     if (!fLLWBsdIf->getIfnet()) {
+        XYLogE("AWDL llw0: create failed at step 7\n");
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
