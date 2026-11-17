@@ -7369,6 +7369,10 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
     }
 }
 
+// Whether a notification's payload holds a whole T. The fixed-size notifications in iwx_rx_bmiss and iwx_rx_pkt were read without
+// checking, so a short record made the driver read past it or into the next one (audit HL05).
+#define IWX_NOTIF_FITS(pkt, T) (iwx_rx_packet_payload_len(pkt) >= sizeof(T))
+
 void ItlIwx::
 iwx_rx_bmiss(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
              struct iwx_rx_data *data)
@@ -7377,6 +7381,8 @@ iwx_rx_bmiss(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
     struct iwx_missed_beacons_notif *mbn = (struct iwx_missed_beacons_notif *)pkt->data;
     uint32_t missed;
     
+    if (!IWX_NOTIF_FITS(pkt, struct iwx_missed_beacons_notif))     // audit HL05
+        return;
     if ((ic->ic_opmode != IEEE80211_M_STA) ||
         (ic->ic_state != IEEE80211_S_RUN))
         return;
@@ -17613,7 +17619,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                         sc->sc_uc.uc_ok = 1;
                     else
                         sc->sc_uc.uc_ok = 0;
-                } else {
+                } else if (IWX_NOTIF_FITS(pkt, struct iwx_alive_resp_v5)) {
                     SYNC_RESP_STRUCT(resp5, pkt, struct iwx_alive_resp_v5 *);
                     sc->sc_uc.uc_lmac_error_event_table[0] = le32toh(
                                                                      resp5->lmac_data[0].dbg_ptrs.error_event_table_ptr);
@@ -17669,7 +17675,8 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_ct_kill_notif *);
                 XYLogE("%s: device at critical temperature (%u degC), "
                        "stopping device\n",
-                       DEVNAME(sc), le16toh(notif->temperature));
+                       DEVNAME(sc), IWX_NOTIF_FITS(pkt, struct iwx_ct_kill_notif) ?
+                       le16toh(notif->temperature) : 0);
                 sc->sc_flags |= IWX_FLAG_HW_ERR;
                 sc->sc_hw_err_final = 1;
                 iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
@@ -17780,6 +17787,8 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                 
             case IWX_MCC_CHUB_UPDATE_CMD: {
                 struct iwx_mcc_chub_notif *notif;
+                if (!IWX_NOTIF_FITS(pkt, struct iwx_mcc_chub_notif))
+                    break;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_mcc_chub_notif *);
                 uint16_t mcc = le16toh(notif->mcc);
                 char alpha2[3] = {
@@ -17800,6 +17809,8 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                 
             case IWX_REPLY_ERROR: {
                 struct iwx_error_resp *resp;
+                if (!IWX_NOTIF_FITS(pkt, struct iwx_error_resp))
+                    break;
                 SYNC_RESP_STRUCT(resp, pkt, struct iwx_error_resp *);
                 XYLogE("%s: firmware error 0x%x, cmd 0x%x\n",
                       DEVNAME(sc), le32toh(resp->error_type),
@@ -17831,6 +17842,8 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             case IWX_TIME_EVENT_NOTIFICATION: {
                 struct iwx_time_event_notif *notif;
                 uint32_t action;
+                if (!IWX_NOTIF_FITS(pkt, struct iwx_time_event_notif))
+                    break;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_time_event_notif *);
                 
                 if (sc->sc_aux_roc_running &&
@@ -18017,6 +18030,8 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
 
             case IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_SESSION_PROTECTION_NOTIF): {
                 struct iwx_session_prot_notif *notif;
+                if (!IWX_NOTIF_FITS(pkt, struct iwx_session_prot_notif))
+                    break;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_session_prot_notif *);
                 if (le32toh(notif->mac_id) == IWX_P2P_MAC_ID) {
                     iwx_p2p_roc_event(sc, le32toh(notif->status), le32toh(notif->start));
@@ -18058,6 +18073,8 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             case IWX_WIDE_ID(IWX_LEGACY_GROUP, IWX_BAR_FRAME_RELEASE): {
                 struct iwx_bar_frame_release *release;
                 if (iwx_rx_packet_payload_len(pkt) < sizeof(*release))
+                    break;
+                if (!IWX_NOTIF_FITS(pkt, struct iwx_bar_frame_release))
                     break;
                 SYNC_RESP_STRUCT(release, pkt, struct iwx_bar_frame_release *);
                 unsigned int baid = le32_get_bits(release->ba_info,
