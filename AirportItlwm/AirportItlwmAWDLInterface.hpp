@@ -170,6 +170,9 @@ public:
     // Returns 1 when the frame was AWDL and has been consumed.
     int inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi);
     uint64_t rxActionFrames() const { return fRxAF; }
+    // awdl0's own address, as this class stored it. Not IO80211SkywalkInterface::getSelfMacAddr(): see
+    // AirportItlwm::createLowLatencyInterface.
+    void copyAddress(ether_addr &out) const { memcpy(&out, &fMac, sizeof(out)); }
     // Stop and remove the AW timer; call before the interface is stopped.
     void teardownAW();
 

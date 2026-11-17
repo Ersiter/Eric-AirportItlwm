@@ -2195,10 +2195,15 @@ createLowLatencyInterface(char *bsdName)
         destroyLowLatencyInterface();
     }
 
-    ether_addr *parentMac = fAWDLIf->getSelfMacAddr();
-    if (!parentMac)
+    // IO80211SkywalkInterface::getSelfMacAddr() returns the six bytes by value (in RAX), not a pointer to them. The
+    // header declared a pointer, so this copy dereferenced the address itself: a general protection fault in
+    // wifip2pd's request on every boot with -itlawdl, on every card (the RSI of all seven reported panics, read as a
+    // little-endian value, is a locally administered MAC with two zero bytes above it). The address is ours anyway.
+    fAWDLIf->copyAddress(fLLWMac);
+    static const uint8_t zeroMac[sizeof(fLLWMac)] = {};
+    if (!memcmp(&fLLWMac, zeroMac, sizeof(fLLWMac)))
         return kIOReturnNotReady;
-    memcpy(&fLLWMac, parentMac, sizeof(fLLWMac));
+    ether_addr *parentMac = &fLLWMac;
 
     auto *llw = new AirportItlwmLowLatencyInterface;
     if (!llw)
@@ -3270,6 +3275,16 @@ setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create *data)
     AirportItlwm *controller = OSDynamicCast(AirportItlwm, getController());
     if (!controller)
         return kIOReturnNotReady;
+    // The companion interface (llw0, for Sidecar and Continuity Camera) is its own opt-in: AirDrop does not need it, and
+    // its creation has never completed on a real machine. Without -itlawdlllw the request is accepted and ignored, as it
+    // was before llw0 existed, so a fault in that path cannot take awdl0 or the boot with it.
+    static int llwAllowed = -1;
+    if (llwAllowed < 0) {
+        int v = 0;
+        llwAllowed = PE_parse_boot_argn("-itlawdlllw", &v, sizeof(v)) ? 1 : 0;
+    }
+    if (llwAllowed != 1)
+        return kIOReturnSuccess;
     uint8_t *request = reinterpret_cast<uint8_t *>(data);
     uint32_t operation;
     memcpy(&operation, request + 4, sizeof(operation));

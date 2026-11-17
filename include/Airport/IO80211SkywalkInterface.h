@@ -153,7 +153,8 @@ public:
     virtual void *getWorkerMatchingDict(OSString *);
     virtual bool init(IOService *);
     virtual bool isInterfaceEnabled(void);
-    virtual ether_addr *getSelfMacAddr(void);
+    // Returns the six bytes by value (RAX), not a pointer: on Tahoe the "pointer" was the MAC address itself.
+    virtual ether_addr getSelfMacAddr();
     virtual void setSelfMacAddr(ether_addr *);
     virtual void *getPacketPool(OSString *);
     virtual void *getLogger(void);
