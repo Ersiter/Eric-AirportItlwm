@@ -14,11 +14,17 @@
  * -itlawdl and -itlawdllegacyba, so moving from ForbiddenItlwm to this driver keeps AirDrop switched on; the
  * other -itlawdlcoex* names are ForbiddenItlwm's internal steps and mean nothing here.
  */
+// AirDrop needs the awdl0 interface this driver creates, which only the WCL targets (macOS 15, 26 and 27) have; on
+// the others the listener would only cost airtime, so the switch is off whatever the boot-args say.
 inline bool itlAWDLEnabled()
 {
+#ifdef AIRPORT_WCL
     int value = 0;
     return PE_parse_boot_argn("-itlawdl", &value, sizeof(value)) ||
         PE_parse_boot_argn("-itlawdliface", &value, sizeof(value));
+#else
+    return false;
+#endif
 }
 
 inline bool itlAWDLBootFlag(const char *single)
