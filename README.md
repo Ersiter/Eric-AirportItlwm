@@ -72,8 +72,7 @@ regulatory logic, as on Linux. There is nothing to set.
 | Argument | Effect |
 |---|---|
 | `-itlawdl` | Experimental AirDrop: this one switch turns on all of it, see below. Leave out unless testing |
-| `-itlawdlllw` | Experimental, next to `-itlawdl`: the companion interface for Sidecar and Continuity Camera (`llw0`). AirDrop does not need it. Off by default |
-| `-itlawdlac` | 9260/9560 only, next to `-itlawdl`: without it these cards stay on plain Wi-Fi |
+| `-itlawdlnollw` | Next to `-itlawdl`: leave out `llw0`, the companion interface for Sidecar and Continuity Camera |
 | `itlwm_he=0` | Turn HE/EHT (802.11ax/be) off. On by default |
 | `itlwm_log=1` | Verbose driver log in `dmesg`. Release builds only log errors and what the device is doing; Debug builds log everything |
 
@@ -93,7 +92,7 @@ radio (Wi-Fi 7 eMLSR is single radio too), so the firmware time-shares the two:
 - **BE cards** (MLD firmware): the same idea in the MLD command set, as a P2P client link next to the
   station link (the combination Linux allows on two channels). The firmware's activation rules are being
   worked out from its own code; not working yet.
-- **AC cards** (9260/9560): the same standing listener in the IWM firmware's command set; a test package exists and the first results on real hardware are pending (add `-itlawdlac` next to `-itlawdl`). 9461/9462, 8265 and older: not planned.
+- **AC cards** (9260/9560): the same standing listener in the IWM firmware's command set; a test package exists and the first results on real hardware are pending. 9461/9462, 8265 and older: not planned.
 
 Bluetooth LE advertising and scanning must work on macOS first. Test packages ship a matching
 [BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM) whose Intel patches are on by default: LE
