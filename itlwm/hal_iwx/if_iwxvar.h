@@ -932,6 +932,7 @@ struct iwx_softc {
 	uint32_t sc_aux_roc_started;
 	uint8_t sc_listener_up;	/* the LISTENER MAC, link, station and queue exist and are active */
 	uint8_t sc_listener_chan;
+	uint32_t sc_listener_bi;	/* beacon interval of the listener link, fixed while it exists */
 	/* -itlawdllegacyba: a firmware receive Block Ack session for the AWDL peer on pre-MLD firmware. */
 	uint8_t sc_legacy_ba_peer[ETHER_ADDR_LEN];
 	uint8_t sc_legacy_ba_peer_added, sc_legacy_ba_remove;
