@@ -1365,6 +1365,7 @@
 		F8FA0EEB2501E7EE00B1822E /* zutil.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = zutil.h; sourceTree = "<group>"; };
 		F8FA0EED2501E8C100B1822E /* zutil.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = zutil.c; sourceTree = "<group>"; };
 		3FCE22CDA614FF2D176FAC46 /* AirportItlwm.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AirportItlwm.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		21499BD3D46506653E65AF42 /* AirportItlwm.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AirportItlwm.kext; sourceTree = BUILT_PRODUCTS_DIR; };
 		873185406E684353B0988B8A /* AirportItlwm.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AirportItlwm.kext; sourceTree = BUILT_PRODUCTS_DIR; };
 		F8E3806526D533D400568FEB /* iwlwifi-ty-a0-gf-a0.pnvm */ = {isa = PBXFileReference; lastKnownFileType = file; path = "iwlwifi-ty-a0-gf-a0.pnvm"; sourceTree = "<group>"; };
 		F8E49A12249B923500BE6868 /* ItlNetworkUserClient.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ItlNetworkUserClient.cpp; sourceTree = "<group>"; };
@@ -1519,6 +1520,7 @@
 			isa = PBXGroup;
 			children = (
 				873185406E684353B0988B8A /* AirportItlwm.kext */,
+				21499BD3D46506653E65AF42 /* AirportItlwm.kext */,
 				024A07AC23FCBC3C009FBA6C /* itlwm.kext */,
 				F89B6BB925021C9C000F77FF /* AirportItlwm.kext */,
 				35CBE6BA251CB89700435CBC /* AirportItlwm.kext */,
@@ -2512,6 +2514,25 @@
 			productReference = 3FCE22CDA614FF2D176FAC46 /* AirportItlwm.kext */;
 			productType = "com.apple.product-type.kernel-extension";
 		};
+		B4971F289F589AF39F00A715 /* AirportItlwm-GoldenGate */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E269A2FD523105737C8438A1 /* Build configuration list for PBXNativeTarget "AirportItlwm-GoldenGate" */;
+			buildPhases = (
+				F8D94C832B9ABFE20081A3C4 /* Headers */,
+				F8D94CA52B9ABFE20081A3C4 /* Sources */,
+				F8D94CEF2B9ABFE20081A3C4 /* Frameworks */,
+				F8D94CF12B9ABFE20081A3C4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F8D94C812B9ABFE20081A3C4 /* PBXTargetDependency */,
+			);
+			name = "AirportItlwm-GoldenGate";
+			productName = AirportItlwm;
+			productReference = 21499BD3D46506653E65AF42 /* AirportItlwm.kext */;
+			productType = "com.apple.product-type.kernel-extension";
+		};
 		C2631DEBF2864F9B8272D88C /* AirportItlwm-Sequoia */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C9DEB043F00A4DCFAC3294DD /* Build configuration list for PBXNativeTarget "AirportItlwm-Sequoia" */;
@@ -2598,6 +2619,7 @@
 				F8B210A72A2EC2680043ECBD /* AirportItlwm-Sonoma14.0 */,
 				F8D94C802B9ABFE20081A3C4 /* AirportItlwm-Sonoma14.4 */,
 				A6465A40B44EE5DC353B726B /* AirportItlwm-Tahoe */,
+				B4971F289F589AF39F00A715 /* AirportItlwm-GoldenGate */,
 				5066D63825287F7900EE6F38 /* fw_gen */,
 				C2631DEBF2864F9B8272D88C /* AirportItlwm-Sequoia */,
 			);
@@ -4416,6 +4438,76 @@
 			};
 			name = Release;
 		};
+		DA37A85619F71149F3AE205F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CONFIGURATION_BUILD_DIR = "$(SYMROOT)/$(CONFIGURATION)/GoldenGate";
+				CURRENT_PROJECT_VERSION = "$(MODULE_VERSION)";
+				GCC_PRECOMPILE_PREFIX_HEADER = YES;
+				GCC_PREFIX_HEADER = itlwm/PrivateSPI.pch;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					AIRPORT_WCL,
+					ITL_MACOS27,
+					AIRPORT_VTD,
+					"$(inherited)",
+					AIRPORT,
+					"__IO80211_TARGET=__MAC_26_0",
+					__PRIVATE_SPI__,
+					IO80211FAMILY_V2,
+				);
+				INFOPLIST_FILE = "AirportItlwm/WCL/Info.plist";
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/itl80211",
+					"$(inherited)",
+					"$(PROJECT_DIR)/itl80211/openbsd",
+					"$(PROJECT_DIR)/itl80211/linux",
+					"$(PROJECT_DIR)/MacKernelSDK/Library/x86_64",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 10.15;
+				MODULE_NAME = com.zxystd.AirportItlwm;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zxystd.AirportItlwm;
+				PRODUCT_MODULE_NAME = AirportItlwm;
+				PRODUCT_NAME = AirportItlwm;
+				SYSTEM_HEADER_SEARCH_PATHS = "itl80211/openbsd itl80211 include";
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Debug;
+		};
+		6170BC8AD74887C5A427532F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CONFIGURATION_BUILD_DIR = "$(SYMROOT)/$(CONFIGURATION)/GoldenGate";
+				CURRENT_PROJECT_VERSION = "$(MODULE_VERSION)";
+				GCC_PRECOMPILE_PREFIX_HEADER = YES;
+				GCC_PREFIX_HEADER = itlwm/PrivateSPI.pch;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					AIRPORT_WCL,
+					ITL_MACOS27,
+					AIRPORT_VTD,
+					"__IO80211_TARGET=__MAC_26_0",
+					AIRPORT,
+					__PRIVATE_SPI__,
+					"$(inherited)",
+					IO80211FAMILY_V2,
+				);
+				INFOPLIST_FILE = "AirportItlwm/WCL/Info.plist";
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/itl80211",
+					"$(inherited)",
+					"$(PROJECT_DIR)/itl80211/openbsd",
+					"$(PROJECT_DIR)/itl80211/linux",
+					"$(PROJECT_DIR)/MacKernelSDK/Library/x86_64",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 10.15;
+				MODULE_NAME = com.zxystd.AirportItlwm;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zxystd.AirportItlwm;
+				PRODUCT_MODULE_NAME = AirportItlwm;
+				PRODUCT_NAME = AirportItlwm;
+				SYSTEM_HEADER_SEARCH_PATHS = "itl80211/openbsd itl80211 include";
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Release;
+		};
 		E71DD1C8720A4A5E8D09A1CD /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -4557,6 +4649,15 @@
 			buildConfigurations = (
 				7D5753727745775F75788913 /* Debug */,
 				D92AB006FB4B2B6A6032F9C7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E269A2FD523105737C8438A1 /* Build configuration list for PBXNativeTarget "AirportItlwm-GoldenGate" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DA37A85619F71149F3AE205F /* Debug */,
+				6170BC8AD74887C5A427532F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -291,6 +291,11 @@ bool AirportItlwm::start(IOService *provider)
         XYLogE("this kext is for macOS 15.2 and later, not starting on Darwin %d.%d\n", version_major, version_minor);
         return false;
     }
+#elif defined(ITL_MACOS27)
+    if (version_major != 27) {
+        XYLogE("this kext is for macOS 27, not starting on Darwin %d.%d\n", version_major, version_minor);
+        return false;
+    }
 #elif __IO80211_TARGET == __MAC_26_0
     if (version_major != 25) {
         XYLogE("this kext is for macOS 26, not starting on Darwin %d.%d\n", version_major, version_minor);

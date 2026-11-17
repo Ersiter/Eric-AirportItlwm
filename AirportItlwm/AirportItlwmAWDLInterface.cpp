@@ -73,6 +73,17 @@ nativeTableMismatch()
         {500, pure},        // first IO80211AWDLProtocol method
         {562, pure},        // last one
         {563, 0},
+#elif defined(ITL_MACOS27)
+        // 27.2.1 (26B131), 579 slots: IOSkywalkNetworkInterface gained five IPsec virtuals at slot 323 and
+        // IO80211SkywalkInterface / IO80211VirtualInterface three and two more of their own.
+        {300, reinterpret_cast<uintptr_t>(&awdlAnchorWakeFlags)},
+        {386, reinterpret_cast<uintptr_t>(&awdlAnchorInterfaceCCA)},
+        {426, reinterpret_cast<uintptr_t>(&awdlAnchorStatsDump)},
+        {468, reinterpret_cast<uintptr_t>(&awdlAnchorSyncDPSStats)},
+        {514, reinterpret_cast<uintptr_t>(&awdlAnchorReserved15)},
+        {515, pure},        // first IO80211AWDLProtocol method
+        {578, pure},        // last one
+        {579, 0},
 #else
         {300, reinterpret_cast<uintptr_t>(&awdlAnchorWakeFlags)},
         {380, reinterpret_cast<uintptr_t>(&awdlAnchorInterfaceCCA)},
