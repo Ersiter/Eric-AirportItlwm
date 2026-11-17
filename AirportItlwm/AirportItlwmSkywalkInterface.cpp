@@ -1018,6 +1018,24 @@ setScanningState(unsigned int channel, bool scanning, apple80211_scan_data *data
 {
 }
 
+#ifdef AIRPORT_WCL
+IOReturn AirportItlwmLowLatencyInterface::
+setPowerState(unsigned long state, IOService *device)
+{
+    return IO80211SkywalkInterface::setPowerState(state, device);
+}
+
+IOReturn AirportItlwmLowLatencyInterface::
+processBSDCommand(struct __ifnet *ifp, unsigned int command, void *data)
+{
+    // _IOW('i', 200, ifreq), _IOW('i', 200, ifdrv), _IOWR('i', 201, ifreq), _IOWR('i', 201, ifdrv), _IOWR('i', 200, ifreq)
+    if (command == 0x802069c8 || command == 0x802869c8 || command == 0xc02069c8 || command == 0xc02069c9 ||
+        command == 0xc02869c9)
+        return EINVAL;
+    return AirportItlwmSkywalkInterface::processBSDCommand(ifp, command, data);
+}
+#endif
+
 IOReturn AirportItlwmSkywalkInterface::
 processBSDCommand(struct __ifnet *ifp, unsigned int cmd, void *data)
 {

@@ -558,6 +558,14 @@ public:
     IOReturn setMacAddress(mloAddrArray &) override { return kIOReturnSuccess; }
 #endif
     void setParentAddress(const ether_addr &mac) { memcpy(&fParentMac, &mac, sizeof(fParentMac)); }
+    // IO80211InfraInterface::setPowerState runs a block on the interface work loop when the caller is not on it, and the
+    // request that creates this interface already holds that loop: power management waits for the whole request ("PM
+    // waiting on pmDriverCallout(0x2) to AirportItlwmLowLatencyInterface (2000 ms)") and the machine hangs. The Skywalk
+    // part is all this interface needs (ForbiddenItlwm PR #72, which brings llw0 up on Sequoia, found the same by
+    // disassembly).
+    IOReturn setPowerState(unsigned long state, IOService *device) override;
+    // Apple's llw interface refuses the driver-specific ioctls with EINVAL and leaves the rest to the family.
+    IOReturn processBSDCommand(struct __ifnet *ifp, unsigned int command, void *data) override;
 private:
     ether_addr fParentMac;
 };
