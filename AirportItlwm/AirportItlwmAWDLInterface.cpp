@@ -3281,15 +3281,7 @@ setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create *data)
     AirportItlwm *controller = OSDynamicCast(AirportItlwm, getController());
     if (!controller)
         return kIOReturnNotReady;
-    // The companion interface (llw0, for Sidecar and Continuity Camera) is its own opt-in: AirDrop does not need it, and
-    // its creation has never completed on a real machine. Without -itlawdlllw the request is accepted and ignored, as it
-    // was before llw0 existed, so a fault in that path cannot take awdl0 or the boot with it.
-#if __IO80211_TARGET == __MAC_15_2
-    // macOS 15: never. The first Sequoia run (24H241, four panics) failed after the interface had started and its
-    // cleanup stop() freed our registration buffer as a 288-byte object (zalloc "not in the expected zone
-    // early.kalloc.288, found in kalloc.type.var6.384"), so Sequoia's IOSkywalkFamily does not size it like Tahoe's.
-    return kIOReturnSuccess;
-#else
+    // The companion interface (llw0, for Sidecar and Continuity Camera); -itlawdlnollw leaves it out.
     if (!itlAWDLLlwFlag())
         return kIOReturnSuccess;
     uint8_t *request = reinterpret_cast<uint8_t *>(data);
@@ -3300,7 +3292,6 @@ setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create *data)
     if (operation != 1)
         return kIOReturnSuccess;
     return controller->createLowLatencyInterface(reinterpret_cast<char *>(request + 8));
-#endif
 }
 AWDL_SET_STUB(AWDL_OOB_SEC_PAYLOAD_REQUEST, apple80211_awdl_af_sec_payload_request)
 IOReturn AirportItlwmAWDLInterface::
