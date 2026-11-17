@@ -2840,6 +2840,9 @@ void
 ieee80211_setup_vhtopmode(struct ieee80211_node *ni, const uint8_t *ie)
 {
     /* vht operation */
+    /* Short elements are refused here, so no caller can forget the check (audit P-V01). */
+    if (ie == NULL || ie[1] < sizeof(struct ieee80211_ie_vht_operation) - 2)
+        return;
     struct ieee80211_ie_vht_operation *op = (struct ieee80211_ie_vht_operation *)ie;
     ni->ni_vht_chanwidth = op->chan_width;
     ni->ni_vht_chan1 = op->center_freq_seg1_idx;
@@ -2869,6 +2872,9 @@ ieee80211_setup_vhtcaps(struct ieee80211com *ic, struct ieee80211_node *ni, cons
     
     uint32_t own_vhtcap = ic->ic_vhtcaps;
     uint32_t new_vhtcap = 0, peer_vhtcap;
+    /* Short elements are refused here, so no caller can forget the check (audit P-V01). */
+    if (ie == NULL || ie[1] < sizeof(struct ieee80211_ie_vhtcap) - 2)
+        return;
     /* vht capability */
     peer_vhtcap = le32dec(ie + 2);
     /* suppmcs */

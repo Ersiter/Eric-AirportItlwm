@@ -4102,6 +4102,12 @@ ieee80211_recv_assoc_resp(struct ieee80211com *ic, mbuf_t m,
         ieee80211_setup_htcaps(ni, htcaps + 2, htcaps[1]);
     if (htop)
         ieee80211_setup_htop(ni, htop + 2, htop[1], 0);
+    /* As the beacon parser does: a short VHT element is ignored, and the pair is applied only when both
+     * are whole. The association response passed them on unchecked (audit P-V01). */
+    if (vhtcap != NULL && vhtcap[1] < sizeof(struct ieee80211_ie_vhtcap) - 2)
+        vhtcap = NULL;
+    if (vhtopmode != NULL && vhtopmode[1] < sizeof(struct ieee80211_ie_vht_operation) - 2)
+        vhtopmode = NULL;
     if (vhtcap != NULL && vhtopmode != NULL) {
         ieee80211_setup_vhtcaps(ic, ni, vhtcap);
         ieee80211_setup_vhtopmode(ni, vhtopmode);
