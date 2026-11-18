@@ -2214,6 +2214,14 @@ setAWDLLinkGated(OSObject *owner, void *arg0, void *, void *, void *)
     return kIOReturnSuccess;
 }
 
+// XYLogE is kprintf, which the unified log does not carry: a tester's capture never shows it. The outcome of the llw0 create
+// goes to the I/O Registry (AWDLLlwStatus) and, for a failure, to IOLog as well.
+#define AWDL_LLW_FAILED(step) do { \
+    XYLogE("AWDL llw0: create failed at step " #step "\n"); \
+    IOLog("itlwm: AWDL llw0: create failed at step " #step "\n"); \
+    setProperty("AWDLLlwStatus", "failed at step " #step); \
+} while (0)
+
 IOReturn AirportItlwm::
 createLowLatencyInterface(char *bsdName)
 {
@@ -2255,7 +2263,7 @@ createLowLatencyInterface(char *bsdName)
     awdlSetParentInterface(llw, fAWDLIf);
     awdlSetCompanionLowLatencySkywalkInterface(fAWDLIf, llw);
     if (!llw->attach(this)) {
-        XYLogE("AWDL llw0: create failed at step 1\n");
+        AWDL_LLW_FAILED(1);
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
@@ -2264,7 +2272,7 @@ createLowLatencyInterface(char *bsdName)
     IOSkywalkEthernetInterface::RegistrationInfo info;
     memset(&info, 0, sizeof(info));
     if (!llw->initRegistrationInfo(&info, 1, sizeof(info))) {
-        XYLogE("AWDL llw0: create failed at step 2\n");
+        AWDL_LLW_FAILED(2);
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
@@ -2293,7 +2301,7 @@ createLowLatencyInterface(char *bsdName)
     if (!networkInfo || !ethernetInfo) {
         if (networkInfo) IOFree(networkInfo, sizeof(*networkInfo));
         if (ethernetInfo) IOFree(ethernetInfo, sizeof(*ethernetInfo));
-        XYLogE("AWDL llw0: create failed at step 3\n");
+        AWDL_LLW_FAILED(3);
         destroyLowLatencyInterface();
         return kIOReturnNoMemory;
     }
@@ -2305,7 +2313,7 @@ createLowLatencyInterface(char *bsdName)
     fLLWEthInfo = ethernetInfo;
     llw->deferBSDAttach(true);
     if (!llw->start(this)) {
-        XYLogE("AWDL llw0: create failed at step 4\n");
+        AWDL_LLW_FAILED(4);
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
@@ -2321,7 +2329,7 @@ createLowLatencyInterface(char *bsdName)
             detachInterface(bsd, true);
             bsd->release();
         }
-        XYLogE("AWDL llw0: create failed at step 5\n");
+        AWDL_LLW_FAILED(5);
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
@@ -2329,13 +2337,13 @@ createLowLatencyInterface(char *bsdName)
     if (!fLLWBsdIf) {
         detachInterface(bsd, true);
         bsd->release();
-        XYLogE("AWDL llw0: create failed at step 6\n");
+        AWDL_LLW_FAILED(6);
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
     bsd->registerService();
     if (!fLLWBsdIf->getIfnet()) {
-        XYLogE("AWDL llw0: create failed at step 7\n");
+        AWDL_LLW_FAILED(7);
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
@@ -2349,6 +2357,7 @@ createLowLatencyInterface(char *bsdName)
              ifnet_unit(fLLWBsdIf->getIfnet()));
     XYLog("AWDL companion created %s role %u id %u\n", bsdName,
           kAirportItlwmLowLatencyRole, kAirportItlwmLowLatencyInterfaceId);
+    setProperty("AWDLLlwStatus", "created");
     return kIOReturnSuccess;
 }
 
