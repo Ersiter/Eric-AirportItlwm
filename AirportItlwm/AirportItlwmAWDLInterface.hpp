@@ -25,6 +25,7 @@
 #include <IOKit/IOTimerEventSource.h>
 
 class AirportItlwm;
+class AirportItlwmLowLatencyEthernetInterface;
 struct ieee80211_rxinfo;
 
 // IO80211Family buffer objects. On macOS 26 they are used only through their vtables and the
@@ -73,7 +74,7 @@ public:
     int inputAWDLData(mbuf_t m, class AirportItlwmAWDLInterface *awdl, struct ieee80211com *ic);
     // Stage 4 output: hand Ethernet frames to the AWDL interface's tx queue.
     UInt32 outputAWDL(mbuf_t m, void *param);
-    UInt32 outputLowLatency(mbuf_t m, void *param);
+    UInt32 outputLowLatency(mbuf_t m, AirportItlwmLowLatencyEthernetInterface *source);
     void setAWDLOwner(class AirportItlwmAWDLInterface *owner) { fOwner = owner; }
 
 private:
@@ -326,6 +327,7 @@ public:
     void flushData();
     void enqueueLowLatencyData(mbuf_t m);
     void flushLowLatencyData();
+    void clearLowLatencyData();
     // 32 overflowed during AirDrop (AWDLDataTxDropFull): data only
     // leaves in the peer's slots, so a burst from the stack has to wait.
     enum { kDataQueueLen = 256 };

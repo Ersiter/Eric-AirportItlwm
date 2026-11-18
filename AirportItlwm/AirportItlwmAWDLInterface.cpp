@@ -159,6 +159,10 @@ attachToDataLinkLayer(IOOptionBits options, void *parameter)
     IOReturn ret = AirportItlwmEthernetInterface::attachToDataLinkLayer(options, parameter);
     if (ret == kIOReturnSuccess && getIfnet())
         ifnet_set_lladdr(getIfnet(), &fMac, sizeof(fMac));
+    fBSDRegistrationResult = ret;
+    __atomic_store_n(&fBSDRegistrationComplete, true, __ATOMIC_RELEASE);
+    if (_fCommandGate)
+        _fCommandGate->commandWakeup(this);
     return ret;
 }
 
@@ -198,7 +202,7 @@ performCommand(IONetworkController *controller, unsigned long cmd, void *arg0, v
 }
 
 UInt32 AirportItlwmLowLatencyEthernetInterface::
-outputLowLatency(mbuf_t packet, void *param)
+outputLowLatency(mbuf_t packet, void *)
 {
     AirportItlwm *controller = OSDynamicCast(AirportItlwm, getController());
     if (!controller) {
@@ -207,14 +211,12 @@ outputLowLatency(mbuf_t packet, void *param)
         return kIOReturnOutputDropped;
     }
     auto *ic = controller->fHalService->get80211Controller();
-    if (!ic || !ic->ic_awdl_llw_tx)
-        return controller->outputPacket(packet, param);
-    if (!controller->fAWDLBsdIf) {
+    if (!ic || !ic->ic_awdl_llw_tx || !controller->fAWDLBsdIf) {
         if (packet)
             mbuf_freem(packet);
         return kIOReturnOutputDropped;
     }
-    return controller->fAWDLBsdIf->outputLowLatency(packet, param);
+    return controller->fAWDLBsdIf->outputLowLatency(packet, this);
 }
 
 bool AirportItlwmAWDLEthernetInterface::
@@ -291,41 +293,44 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
     size_t hdr = sizeof(*wh);
     static const uint8_t kSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x17, 0xf2 };
     static const uint8_t kLlwSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
-    bool lowLatency = false;
+    auto *driver = OSDynamicCast(AirportItlwm, getController());
+    auto *llw = driver ? driver->fLLWBsdIf : nullptr;
+    ifnet_t llwIf = llw && llw->bsdRegistrationComplete() &&
+        llw->bsdRegistrationResult() == kIOReturnSuccess ? llw->getIfnet() : nullptr;
     if (ieee80211_has_qos(wh)) {
-        if (len < hdr + 2) {
+        hdr = ieee80211_get_hdrlen(wh);
+        if (len < hdr) {
             awdl->fDataRxBad++;
             mbuf_freem(m);
             return 1;
         }
-        uint16_t qos = p[hdr] | (p[hdr + 1] << 8);
-        lowLatency = (qos & IEEE80211_QOS_TID) == 6 ||
-            (qos & IEEE80211_QOS_TID) == 7;
-        hdr += 2;
+        const uint16_t qos = ieee80211_get_qos(wh);
         if (qos & IEEE80211_QOS_AMSDU) {
-            if (!lowLatency)
-                awdl->fDataRxAmsdu++;
-            auto *driver = OSDynamicCast(AirportItlwm, getController());
-            auto *llw = lowLatency && driver ? driver->fLLWBsdIf : nullptr;
-            if (lowLatency && (!llw || !llw->getIfnet())) {
-                awdl->fDataRxBad++;
-                mbuf_freem(m);
-                return 1;
-            }
-            ifnet_t inputIf = lowLatency ? llw->getIfnet() : getIfnet();
+            bool deliveredAWDL = false;
             size_t offset = hdr, total = mbuf_pkthdr_len(m);
-            while (offset + (lowLatency ? 22 : 30) <= total) {
+            while (offset + 22 <= total) {
                 uint8_t subhdr[30];
-                mbuf_copydata(m, offset, lowLatency ? 22 : sizeof(subhdr), subhdr);
-                size_t sublen = (subhdr[12] << 8) | subhdr[13];
-                const size_t payloadOffset = lowLatency ? 22 : 30;
-                if (sublen < (lowLatency ? 8 : 16) ||
-                    offset + 14 + sublen > total ||
-                    memcmp(subhdr + 14, lowLatency ? kLlwSnap : kSnap, sizeof(kSnap)) ||
-                    (!lowLatency && (subhdr[20] != 0x08 || subhdr[21] != 0x00))) {
+                if (mbuf_copydata(m, offset, 22, subhdr) != 0) {
                     awdl->fDataRxBad++;
                     break;
                 }
+                size_t sublen = (subhdr[12] << 8) | subhdr[13];
+                if (sublen < 8 || offset + 14 + sublen > total) {
+                    awdl->fDataRxBad++;
+                    break;
+                }
+                const bool lowLatency = memcmp(subhdr + 14, kLlwSnap, sizeof(kLlwSnap)) == 0;
+                const size_t payloadOffset = lowLatency ? 22 : 30;
+                const size_t consumed = 14 + sublen;
+                if (lowLatency ? !llwIf :
+                    (sublen < 16 || memcmp(subhdr + 14, kSnap, sizeof(kSnap)) ||
+                     subhdr[20] != 0x08 || subhdr[21] != 0x00 ||
+                     mbuf_copydata(m, offset + 22, 8, subhdr + 22) != 0)) {
+                    awdl->fDataRxBad++;
+                    offset += (consumed + 3) & ~size_t(3);
+                    continue;
+                }
+                ifnet_t inputIf = lowLatency ? llwIf : getIfnet();
                 mbuf_t sub = nullptr;
                 if (mbuf_gethdr(MBUF_DONTWAIT, MBUF_TYPE_DATA, &sub) || !sub) {
                     awdl->fDataRxNoBuf++;
@@ -340,8 +345,9 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
                 uint8_t chunk[512];
                 for (size_t pos = 0; !err && pos < payload;) {
                     size_t n = MIN(sizeof(chunk), payload - pos);
-                    mbuf_copydata(m, offset + payloadOffset + pos, n, chunk);
-                    err = mbuf_copyback(sub, sizeof(eh) + pos, n, chunk, MBUF_DONTWAIT);
+                    err = mbuf_copydata(m, offset + payloadOffset + pos, n, chunk);
+                    if (!err)
+                        err = mbuf_copyback(sub, sizeof(eh) + pos, n, chunk, MBUF_DONTWAIT);
                     pos += n;
                 }
                 if (err) {
@@ -352,6 +358,7 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
                 mbuf_pkthdr_setlen(sub, sizeof(eh) + payload);
                 mbuf_pkthdr_setrcvif(sub, inputIf);
                 if (!lowLatency) {
+                    deliveredAWDL = true;
                     awdl->fDataRx++;
                     awdl->fDataRxLastLen = (uint32_t)mbuf_pkthdr_len(sub);
                     awdl->fDataRxLastType = (uint16_t)((eh[12] << 8) | eh[13]);
@@ -361,20 +368,18 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
                     llw->inputPacket(sub, (UInt32)mbuf_pkthdr_len(sub), 0, sub);
                 else
                     inputPacket(sub, (UInt32)mbuf_pkthdr_len(sub), 0, sub);
-                size_t consumed = 14 + sublen;
                 offset += (consumed + 3) & ~size_t(3);
             }
             mbuf_freem(m);
-            if (!lowLatency)
+            if (deliveredAWDL) {
+                awdl->fDataRxAmsdu++;
                 awdl->publishDataState();
+            }
             return 1;
         }
     }
-    if (lowLatency) {
-        auto *driver = OSDynamicCast(AirportItlwm, getController());
-        auto *llw = driver ? driver->fLLWBsdIf : nullptr;
-        if (!llw || !llw->getIfnet() || len < hdr + 8 ||
-            memcmp(p + hdr, kLlwSnap, sizeof(kLlwSnap))) {
+    if (len >= hdr + 8 && !memcmp(p + hdr, kLlwSnap, sizeof(kLlwSnap))) {
+        if (!llwIf) {
             awdl->fDataRxBad++;
             mbuf_freem(m);
             return 1;
@@ -389,8 +394,8 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
         memcpy(eh + 6, src, 6);
         eh[12] = ethType[0];
         eh[13] = ethType[1];
-        mbuf_pkthdr_setrcvif(m, llw->getIfnet());
-        ifnet_stat_increment_in(llw->getIfnet(), 1, (u_int32_t)mbuf_pkthdr_len(m), 0);
+        mbuf_pkthdr_setrcvif(m, llwIf);
+        ifnet_stat_increment_in(llwIf, 1, (u_int32_t)mbuf_pkthdr_len(m), 0);
         llw->inputPacket(m, (UInt32)mbuf_pkthdr_len(m), 0, m);
         return 1;
     }
@@ -442,17 +447,21 @@ outputAWDL(mbuf_t m, void *param)
 }
 
 UInt32 AirportItlwmAWDLEthernetInterface::
-outputLowLatency(mbuf_t m, void *param)
+outputLowLatency(mbuf_t m, AirportItlwmLowLatencyEthernetInterface *source)
 {
     if (!awDataAllowed() || !fOwner || !_fCommandGate)
-        return dropOutput(m, param);
-    _fCommandGate->runAction([](OSObject *, void *owner, void *pkt, void *, void *) -> IOReturn {
+        return dropOutput(m, nullptr);
+    IOReturn result = _fCommandGate->runAction([](OSObject *, void *owner, void *pkt, void *sender, void *) -> IOReturn {
         auto *awdl = static_cast<AirportItlwmAWDLInterface *>(owner);
+        auto *llw = awdl->fController ? awdl->fController->fLLWBsdIf : nullptr;
+        if (!llw || llw != sender || !llw->bsdRegistrationComplete() ||
+            llw->bsdRegistrationResult() != kIOReturnSuccess)
+            return kIOReturnNotReady;
         awdl->enqueueLowLatencyData((mbuf_t)pkt);
         awdl->flushLowLatencyData();
         return kIOReturnSuccess;
-    }, fOwner, m);
-    return kIOReturnOutputSuccess;
+    }, fOwner, m, source);
+    return result == kIOReturnSuccess ? kIOReturnOutputSuccess : dropOutput(m, nullptr);
 }
 
 UInt32 AirportItlwmAWDLEthernetInterface::
@@ -875,12 +884,7 @@ stopAWTimeline()
         fDataQHead = (fDataQHead + 1) % kDataQueueLen;
         fDataQCount--;
     }
-    while (fLowLatencyDataQCount) {
-        mbuf_freem(fLowLatencyDataQ[fLowLatencyDataQHead]);
-        fLowLatencyDataQ[fLowLatencyDataQHead] = nullptr;
-        fLowLatencyDataQHead = (fLowLatencyDataQHead + 1) % kDataQueueLen;
-        fLowLatencyDataQCount--;
-    }
+    clearLowLatencyData();
     if (fInAW) {
         AWDLAWEndEvent end = {};
         end.endUsBE = OSSwapHostToBigInt32((uint32_t)hostUs());
@@ -909,12 +913,7 @@ teardownAW()
         fDataQHead = (fDataQHead + 1) % kDataQueueLen;
         fDataQCount--;
     }
-    while (fLowLatencyDataQCount) {
-        mbuf_freem(fLowLatencyDataQ[fLowLatencyDataQHead]);
-        fLowLatencyDataQ[fLowLatencyDataQHead] = nullptr;
-        fLowLatencyDataQHead = (fLowLatencyDataQHead + 1) % kDataQueueLen;
-        fLowLatencyDataQCount--;
-    }
+    clearLowLatencyData();
     if (fTxTimer) {
         fTxTimer->cancelTimeout();
         if (fTxTimer->getWorkLoop())
@@ -1949,15 +1948,28 @@ enqueueLowLatencyData(mbuf_t m)
 }
 
 void AirportItlwmAWDLInterface::
+clearLowLatencyData()
+{
+    while (fLowLatencyDataQCount) {
+        mbuf_freem(fLowLatencyDataQ[fLowLatencyDataQHead]);
+        fLowLatencyDataQ[fLowLatencyDataQHead] = nullptr;
+        fLowLatencyDataQHead = (fLowLatencyDataQHead + 1) % kDataQueueLen;
+        fLowLatencyDataQCount--;
+    }
+}
+
+void AirportItlwmAWDLInterface::
 flushLowLatencyData()
 {
     ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
-    if (!ic || !ic->ic_awdl_llw_tx)
+    if (!ic || !ic->ic_awdl_llw_tx || !ic->ic_awdl_listener_chan)
         return;
     ifnet_t llwIfp = fController && fController->fLLWBsdIf ?
         fController->fLLWBsdIf->getIfnet() : nullptr;
     static uint8_t frame[2048];
-    const size_t hdr = sizeof(struct ieee80211_frame), qos = 2, llc = 8;
+    const size_t hdr = sizeof(struct ieee80211_frame);
+    const size_t qos = ic->ic_awdl_llw_qos ? 2 : 0;
+    const size_t llc = 8;
     static const uint8_t snap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
 
     while (fLowLatencyDataQCount) {
@@ -1971,16 +1983,18 @@ flushLowLatencyData()
             mbuf_copydata(m, 0, sizeof(eh), eh);
             memset(frame, 0, hdr + qos + llc);
             struct ieee80211_frame *wh = (struct ieee80211_frame *)frame;
-            wh->i_fc[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_DATA |
-                IEEE80211_FC0_SUBTYPE_QOS;
+            wh->i_fc[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_DATA;
+            if (qos)
+                wh->i_fc[0] |= IEEE80211_FC0_SUBTYPE_QOS;
             memcpy(wh->i_addr1, eh, 6);
             memcpy(wh->i_addr2, &fMac, 6);
             memcpy(wh->i_addr3,
                 ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : kAWDLBssid, 6);
-            uint16_t sc = (uint16_t)((fLowLatencySeq++ & 0x0fff) << 4);
+            const uint16_t sc = (uint16_t)((fLowLatencySeq & 0x0fff) << 4);
             wh->i_seq[0] = sc & 0xff;
             wh->i_seq[1] = sc >> 8;
-            frame[hdr] = 6;
+            if (qos)
+                frame[hdr] = 6;
             uint8_t *l = frame + hdr + qos;
             memcpy(l, snap, sizeof(snap));
             l[6] = eh[12];
@@ -1988,13 +2002,15 @@ flushLowLatencyData()
             mbuf_copydata(m, 14, plen - 14, l + llc);
             int err = ic->ic_awdl_llw_tx(ic, ic->ic_awdl_listener_chan, frame,
                 hdr + qos + llc + plen - 14);
-            if (err == EAGAIN)
+            if (err == EAGAIN || err == EBUSY || err == ENOBUFS)
                 return;
             if (err) {
                 if (llwIfp)
                     ifnet_stat_increment_out(llwIfp, 0, 1, 0);
-            } else if (llwIfp) {
-                ifnet_stat_increment_out(llwIfp, 1, 0, 0);
+            } else {
+                fLowLatencySeq++;
+                if (llwIfp)
+                    ifnet_stat_increment_out(llwIfp, 1, 0, 0);
             }
         }
         mbuf_freem(m);
@@ -2227,14 +2243,12 @@ createLowLatencyInterface(char *bsdName)
 {
     if (!bsdName || !fAWDLEnabled || !fAWDLIf)
         return kIOReturnNotReady;
-    if (fLLWIf || fLLWBsdIf) {
-        if (fLLWIf && fLLWBsdIf && fLLWBsdIf->getIfnet()) {
-            snprintf(bsdName, 16, "%s%u", ifnet_name(fLLWBsdIf->getIfnet()),
-                     ifnet_unit(fLLWBsdIf->getIfnet()));
-            return kIOReturnSuccess;
-        }
-        destroyLowLatencyInterface();
-    }
+    if (!fHalService->get80211Controller()->ic_awdl_llw_tx)
+        return kIOReturnUnsupported;
+    if (fLLWBsdIf)
+        return completeLowLatencyInterface(bsdName);
+    if (fLLWIf)
+        return kIOReturnBusy;
 
     // IO80211SkywalkInterface::getSelfMacAddr() returns the six bytes by value (in RAX), not a pointer to them. The
     // header declared a pointer, so this copy dereferenced the address itself: a general protection fault in
@@ -2262,6 +2276,7 @@ createLowLatencyInterface(char *bsdName)
     awdlSetLowLatencyEnabled(llw, true);
     awdlSetParentInterface(llw, fAWDLIf);
     awdlSetCompanionLowLatencySkywalkInterface(fAWDLIf, llw);
+    awdlSetCompanionInterfaceId(llw, awdlGetInterfaceId(fAWDLIf));
     if (!llw->attach(this)) {
         AWDL_LLW_FAILED(1);
         destroyLowLatencyInterface();
@@ -2318,7 +2333,6 @@ createLowLatencyInterface(char *bsdName)
         return kIOReturnError;
     }
     fLLWStarted = true;
-    awdlSetCompanionInterfaceId(llw, awdlGetInterfaceId(fAWDLIf));
 
     IONetworkInterface *bsd = nullptr;
     fCreatingLLW = true;
@@ -2341,20 +2355,46 @@ createLowLatencyInterface(char *bsdName)
         destroyLowLatencyInterface();
         return kIOReturnError;
     }
-    bsd->registerService();
-    if (!fLLWBsdIf->getIfnet()) {
+    setProperty("AWDLLlwStatus", "registering");
+    bsd->registerService(kIOServiceAsynchronous);
+    return completeLowLatencyInterface(bsdName);
+}
+
+IOReturn AirportItlwm::
+completeLowLatencyInterface(char *bsdName)
+{
+    auto *bsd = fLLWBsdIf;
+    bsd->retain();
+    if (!bsd->bsdRegistrationComplete()) {
+        // BSD attach needs this same gate for prepareBSDInterface().
+        AbsoluteTime deadline;
+        clock_interval_to_deadline(1000, kMillisecondScale, reinterpret_cast<uint64_t *>(&deadline));
+        while (fLLWBsdIf == bsd && !bsd->bsdRegistrationComplete()) {
+            if (_fCommandGate->commandSleep(bsd, deadline, THREAD_INTERRUPTIBLE) != THREAD_AWAKENED)
+                break;
+        }
+    }
+    const bool current = fLLWBsdIf == bsd;
+    const bool complete = bsd->bsdRegistrationComplete();
+    const IOReturn result = complete ? bsd->bsdRegistrationResult() : kIOReturnNotReady;
+    bsd->release();
+    if (!current)
+        return kIOReturnNotReady;
+    if (!complete)
+        return kIOReturnNotReady;
+    ifnet_t ifp = bsd->getIfnet();
+    if (result != kIOReturnSuccess || !ifp) {
         AWDL_LLW_FAILED(7);
         destroyLowLatencyInterface();
-        return kIOReturnError;
+        return result != kIOReturnSuccess ? result : kIOReturnError;
     }
 
     bool linkUp = fHalService->get80211Controller()->ic_state == IEEE80211_S_RUN;
-    fLLWBsdIf->setLinkState(linkUp ? kIO80211NetworkLinkUp : kIO80211NetworkLinkDown);
-    bool llwUp = linkUp && (ifnet_flags(fLLWBsdIf->getIfnet()) & IFF_UP);
-    llw->setRunningState(llwUp);
-    llw->reportLinkStatus(llwUp ? 3 : 1, llwUp ? 0x80 : 0);
-    snprintf(bsdName, 16, "%s%u", ifnet_name(fLLWBsdIf->getIfnet()),
-             ifnet_unit(fLLWBsdIf->getIfnet()));
+    bsd->setLinkState(linkUp ? kIO80211NetworkLinkUp : kIO80211NetworkLinkDown);
+    bool llwUp = linkUp && (ifnet_flags(ifp) & IFF_UP);
+    fLLWIf->setRunningState(llwUp);
+    fLLWIf->reportLinkStatus(llwUp ? 3 : 1, llwUp ? 0x80 : 0);
+    snprintf(bsdName, 16, "%s%u", ifnet_name(ifp), ifnet_unit(ifp));
     XYLog("AWDL companion created %s role %u id %u\n", bsdName,
           kAirportItlwmLowLatencyRole, kAirportItlwmLowLatencyInterfaceId);
     setProperty("AWDLLlwStatus", "created");
@@ -2366,14 +2406,19 @@ destroyLowLatencyInterface()
 {
     if (!fLLWIf && !fLLWBsdIf)
         return kIOReturnNotFound;
-    if (fAWDLIf)
+    if (fAWDLIf) {
         awdlSetCompanionLowLatencySkywalkInterface(fAWDLIf, nullptr);
+        fAWDLIf->clearLowLatencyData();
+    }
     if (fLLWIf)
         awdlSetParentInterface(fLLWIf, nullptr);
     if (fLLWBsdIf) {
-        detachInterface(fLLWBsdIf, true);
-        fLLWBsdIf->release();
+        auto *bsd = fLLWBsdIf;
         fLLWBsdIf = nullptr;
+        if (_fCommandGate)
+            _fCommandGate->commandWakeup(bsd);
+        detachInterface(bsd, true);
+        bsd->release();
     }
     if (fLLWIf) {
         takeOutOwnRegistrationInfo(fLLWIf, fLLWIf, fLLWNetInfo, fLLWEthInfo);
@@ -3336,13 +3381,22 @@ setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create *data)
         return kIOReturnSuccess;
     }
     uint8_t *request = reinterpret_cast<uint8_t *>(data);
-    uint32_t operation;
-    memcpy(&operation, request + 4, sizeof(operation));
-    if (operation == 0)
-        return controller->destroyLowLatencyInterface();
-    if (operation != 1)
-        return kIOReturnSuccess;
-    return controller->createLowLatencyInterface(reinterpret_cast<char *>(request + 8));
+    if (!_fCommandGate)
+        return kIOReturnNotReady;
+    return _fCommandGate->runAction([](OSObject *, void *owner, void *arg, void *, void *) -> IOReturn {
+        auto *driver = static_cast<AirportItlwm *>(owner);
+        auto *request = static_cast<uint8_t *>(arg);
+        uint32_t operation;
+        memcpy(&operation, request + 4, sizeof(operation));
+        if (operation == 0) {
+            if (driver->fLLWBsdIf && !driver->fLLWBsdIf->bsdRegistrationComplete())
+                return kIOReturnBusy;
+            return driver->destroyLowLatencyInterface();
+        }
+        if (operation != 1)
+            return kIOReturnSuccess;
+        return driver->createLowLatencyInterface(reinterpret_cast<char *>(request + 8));
+    }, controller, request);
 }
 AWDL_SET_STUB(AWDL_OOB_SEC_PAYLOAD_REQUEST, apple80211_awdl_af_sec_payload_request)
 IOReturn AirportItlwmAWDLInterface::

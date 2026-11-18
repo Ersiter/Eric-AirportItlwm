@@ -819,11 +819,11 @@ setLinkStateGated(OSObject *target, void *arg0, void *arg1, void *arg2, void *ar
     const bool up = state == kIO80211NetworkLinkUp;
     that->bsdInterface->setLinkState(state);
     static_cast<AirportItlwmSkywalkInterface *>(that->fNetIf)->handleWCLLink(up);
-    if (that->fLLWBsdIf)
-        that->fLLWBsdIf->setLinkState(state);
-    if (that->fLLWIf) {
-        bool llwUp = up && that->fLLWBsdIf && that->fLLWBsdIf->getIfnet() &&
-            (ifnet_flags(that->fLLWBsdIf->getIfnet()) & IFF_UP);
+    auto *llw = that->fLLWBsdIf;
+    if (that->fLLWIf && llw && llw->bsdRegistrationComplete() &&
+        llw->bsdRegistrationResult() == kIOReturnSuccess && llw->getIfnet()) {
+        llw->setLinkState(state);
+        const bool llwUp = up && (ifnet_flags(llw->getIfnet()) & IFF_UP);
         that->fLLWIf->setRunningState(llwUp);
         that->fLLWIf->reportLinkStatus(llwUp ? 3 : 1, llwUp ? 0x80 : 0);
     }

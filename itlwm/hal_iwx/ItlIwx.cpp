@@ -5771,7 +5771,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
 
     sc->sc_use_mld_api = sc->sc_device_family >= IWX_DEVICE_FAMILY_BZ &&
         isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_MLD_API_SUPPORT);
-    sc->sc_ic.ic_awdl_llw_tx = sc->sc_use_mld_api ? iwx_awdl_tx : NULL;
+    sc->sc_ic.ic_awdl_llw_qos = sc->sc_use_mld_api;
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
     sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_peer_cache : NULL;
 #ifdef AIRPORT_VTD
@@ -20206,6 +20206,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
 #endif
     ic->ic_awdl_listen = iwx_awdl_listen;
     ic->ic_awdl_tx = iwx_awdl_tx;
+    ic->ic_awdl_llw_tx = iwx_awdl_tx;
     ic->ic_awdl_key = iwx_awdl_key;
     ic->ic_awdl_crypto = iwx_awdl_crypto;
     ic->ic_awdl_set_encryption = iwx_awdl_set_encryption;

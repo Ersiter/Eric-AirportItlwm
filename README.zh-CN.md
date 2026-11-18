@@ -60,7 +60,7 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 | 参数 | 作用 |
 |---|---|
 | `-itlawdl` | 实验性隔空投送，这一个开关就带上全部，见下文，不测试就别加 |
-| `-itlawdlllw` | 实验性，加在 `-itlawdl` 旁边：随航和连续互通相机用的伴随接口（`llw0`），隔空投送不需要它，默认关 |
+| `-itlawdlllw` | 实验性伴随接口（`llw0`），用于 BE、AX、9260/9560 的随航和连续互通相机。需加 `-itlawdl`，9260/9560 还需加 `-itlawdlac`。默认关闭 |
 | `itlwm_he=0` | 关闭 HE/EHT（802.11ax/be），默认开启 |
 | `itlwm_log=1` | 在 `dmesg` 里输出详细驱动日志。Release 版只记录错误和设备状态，Debug 版全部记录 |
 

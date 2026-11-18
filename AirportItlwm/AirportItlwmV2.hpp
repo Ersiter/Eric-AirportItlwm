@@ -282,6 +282,7 @@ public:
     void *fLLWNetInfo, *fLLWEthInfo, *fAWDLNetInfo, *fAWDLEthInfo;
     IOReturn createAWDLInterface(struct apple80211_virt_if_create_data *data);
     IOReturn createLowLatencyInterface(char *bsdName);
+    IOReturn completeLowLatencyInterface(char *bsdName);
     IOReturn destroyLowLatencyInterface();
     static IOReturn setAWDLLinkGated(OSObject *owner, void *arg0, void *, void *, void *);
     void destroyAWDLInterface();

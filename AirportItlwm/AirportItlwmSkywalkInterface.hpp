@@ -584,9 +584,16 @@ public:
                           void *arg0, void *arg1) override;
     UInt32 outputLowLatency(mbuf_t packet, void *param);
     void setLowLatencyAddress(const ether_addr &mac);
+    bool bsdRegistrationComplete() const
+    {
+        return __atomic_load_n(&fBSDRegistrationComplete, __ATOMIC_ACQUIRE);
+    }
+    IOReturn bsdRegistrationResult() const { return fBSDRegistrationResult; }
 private:
     ether_addr fMac;
     uint8_t fUniqueId[7];
+    bool fBSDRegistrationComplete = false;
+    IOReturn fBSDRegistrationResult = kIOReturnNotReady;
 };
 #endif
 

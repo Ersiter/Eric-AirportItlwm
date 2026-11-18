@@ -6123,6 +6123,7 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
     if (sc->sc_awdl_supported && iwm_awdl_enabled()) {
         ic->ic_awdl_listen = iwm_awdl_listen;
         ic->ic_awdl_tx = iwm_awdl_tx;
+        ic->ic_awdl_llw_tx = iwm_awdl_tx;
         ic->ic_awdl_peer_cache = iwm_awdl_peer_cache;
         ic->ic_awdl_rx_ba = sc->sc_mqrx_supported ? iwm_awdl_rx_ba : NULL;
         ic->ic_awdl_key = iwm_awdl_key;
