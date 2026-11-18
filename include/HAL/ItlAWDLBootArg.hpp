@@ -33,11 +33,12 @@ inline bool itlAWDLBootFlag(const char *single)
     return itlAWDLEnabled() || PE_parse_boot_argn(single, &value, sizeof(value));
 }
 
-// llw0 (Sidecar, Continuity Camera) comes with -itlawdl; -itlawdlnollw leaves it out.
+// llw0 (Sidecar, Continuity Camera) is off unless -itlawdlllw asks for it: AirDrop does not need it, and its creation
+// path has panicked on every machine that ran it so far.
 inline bool itlAWDLLlwFlag()
 {
     int value = 0;
-    return itlAWDLEnabled() && !PE_parse_boot_argn("-itlawdlnollw", &value, sizeof(value));
+    return itlAWDLEnabled() && PE_parse_boot_argn("-itlawdlllw", &value, sizeof(value));
 }
 
 inline bool itlAWDLLegacyBaFlag()

@@ -3330,9 +3330,11 @@ setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create *data)
     AirportItlwm *controller = OSDynamicCast(AirportItlwm, getController());
     if (!controller)
         return kIOReturnNotReady;
-    // The companion interface (llw0, for Sidecar and Continuity Camera); -itlawdlnollw leaves it out.
-    if (!itlAWDLLlwFlag())
+    // The companion interface (llw0, for Sidecar and Continuity Camera); only -itlawdlllw creates it.
+    if (!itlAWDLLlwFlag()) {
+        controller->setProperty("AWDLLlwStatus", "off (needs -itlawdlllw)");
         return kIOReturnSuccess;
+    }
     uint8_t *request = reinterpret_cast<uint8_t *>(data);
     uint32_t operation;
     memcpy(&operation, request + 4, sizeof(operation));
