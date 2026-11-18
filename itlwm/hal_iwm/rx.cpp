@@ -1217,7 +1217,8 @@ iwm_rx_pkt(struct iwm_softc *sc, struct iwm_rx_data *data, struct mbuf_list *ml)
                        DEVNAME(sc), IWM_NOTIF_FITS(pkt, struct iwm_ct_kill_notif) ?
                        le16toh(notif->temperature) : 0);
                 sc->sc_flags |= IWM_FLAG_HW_ERR;
-                task_add(systq, &sc->init_task);
+                IWM_RESTART(sc, "ct-kill", 0, IWM_NOTIF_FITS(pkt, struct iwm_ct_kill_notif) ?
+                       le16toh(notif->temperature) : 0);
                 break;
             }
                 

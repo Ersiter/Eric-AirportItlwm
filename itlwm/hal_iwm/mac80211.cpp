@@ -4183,6 +4183,7 @@ iwm_newstate_task(void *psc)
     struct ieee80211com *ic = &sc->sc_ic;
     enum ieee80211_state nstate = sc->ns_nstate;
     enum ieee80211_state ostate = ic->ic_state;
+    IWM_DIAG(sc, "newstate", 0, (uint32_t)((ostate << 8) | nstate));
     int arg = sc->ns_arg;
     int err = 0, s = splnet();
     
@@ -4262,7 +4263,7 @@ iwm_newstate_task(void *psc)
 out:
     if ((sc->sc_flags & IWM_FLAG_SHUTDOWN) == 0) {
         if (err)
-            task_add(systq, &sc->init_task);
+            IWM_RESTART(sc, "newstate-failed", err, (uint32_t)((ostate << 8) | nstate));
         else
             sc->sc_newstate(ic, nstate, arg);
     }
@@ -4326,7 +4327,9 @@ iwm_endscan(struct iwm_softc *sc)
     
     if ((sc->sc_flags & (IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN)) == 0)
         return;
-    
+
+    iwm_record_diagnostic(sc, "scan-end", __FUNCTION__, __LINE__, 0, (uint32_t)sc->sc_flags,
+        ic->ic_bss ? (uint32_t)ic->ic_bss->ni_rssi : 0, ic->ic_bgscan_fail);
     sc->sc_flags &= ~(IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN);
     ieee80211_end_scan(&ic->ic_if);
 }
@@ -4709,6 +4712,7 @@ iwm_init(struct _ifnet *ifp)
         if (generation != sc->sc_generation)
             return ENXIO;
         if (err) {
+            IWM_DIAG(sc, "init-wait-failed", err, 0);
             iwm_stop(ifp);
             return err;
         }
@@ -4828,8 +4832,9 @@ iwm_stop(struct _ifnet *ifp)
     
     //    rw_assert_wrlock(&sc->ioctl_rwl);
     
+    IWM_DIAG(sc, "device-stop", 0, (uint32_t)ifp->if_flags);
     sc->sc_flags |= IWM_FLAG_SHUTDOWN; /* Disallow new tasks. */
-    
+
     /* Cancel scheduled tasks and let any stale tasks finish up. */
     task_del(systq, &sc->init_task);
     iwm_del_task(sc, sc->sc_nswq, &sc->newstate_task);
@@ -4930,7 +4935,7 @@ iwm_watchdog(struct _ifnet *ifp)
                 that->iwm_nic_error(sc);
 #endif
                 if ((sc->sc_flags & IWM_FLAG_SHUTDOWN) == 0) {
-                    task_add(systq, &sc->init_task);
+                    IWM_RESTART(sc, "tx-timeout", 0, i);
                 }
                 XYLogE("%s %d OUTPUT_ERROR\n", __FUNCTION__, __LINE__);
                 ifp->netStat->outputErrors++;
@@ -4974,8 +4979,10 @@ iwm_ioctl(struct _ifnet *ifp, u_long cmd, caddr_t data)
                     err = that->iwm_init(ifp);
                 }
             } else {
-                if (ifp->if_flags & IFF_RUNNING)
+                if (ifp->if_flags & IFF_RUNNING) {
+                    IWM_DIAG(sc, "ioctl-stop", 0, cmd);
                     that->iwm_stop(ifp);
+                }
             }
             break;
             
@@ -4987,6 +4994,7 @@ iwm_ioctl(struct _ifnet *ifp, u_long cmd, caddr_t data)
         err = 0;
         if ((ifp->if_flags & (IFF_UP | IFF_RUNNING)) ==
             (IFF_UP | IFF_RUNNING)) {
+            IWM_DIAG(sc, "ioctl-reset", 0, cmd);
             that->iwm_stop(ifp);
             err = that->iwm_init(ifp);
         }
@@ -5347,7 +5355,7 @@ iwm_intr(OSObject *arg, IOInterruptEventSource* sender, int count)
         handled |= IWM_CSR_INT_BIT_RF_KILL;
         XYLog("%s RF_KILL has been toggled\n", __FUNCTION__);
         that->iwm_check_rfkill(sc);
-        task_add(systq, &sc->init_task);
+        IWM_RESTART(sc, "rfkill", 0, r1);
         rv = 1;
         goto out_ena;
     }
@@ -5373,7 +5381,7 @@ iwm_intr(OSObject *arg, IOInterruptEventSource* sender, int count)
         
         XYLogE("%s: fatal firmware error\n", DEVNAME(sc));
         if ((sc->sc_flags & IWM_FLAG_SHUTDOWN) == 0)
-            task_add(systq, &sc->init_task);
+            IWM_RESTART(sc, "fw-error", 0, r1);
         rv = 1;
         goto out;
         
@@ -5384,7 +5392,7 @@ iwm_intr(OSObject *arg, IOInterruptEventSource* sender, int count)
         XYLogE("%s: hardware error, stopping device \n", DEVNAME(sc));
         if ((sc->sc_flags & IWM_FLAG_SHUTDOWN) == 0) {
             sc->sc_flags |= IWM_FLAG_HW_ERR;
-            task_add(systq, &sc->init_task);
+            IWM_RESTART(sc, "hw-error", 0, r1);
         }
         rv = 1;
         goto out;
@@ -5484,20 +5492,20 @@ iwm_intr_msix(OSObject *object, IOInterruptEventSource* sender, int count)
         
         XYLogE("%s: fatal firmware error\n", DEVNAME(sc));
         if ((sc->sc_flags & IWM_FLAG_SHUTDOWN) == 0)
-            task_add(systq, &sc->init_task);
+            IWM_RESTART(sc, "fw-error", 0, inta_hw);
         return 1;
     }
     
     if (inta_hw & IWM_MSIX_HW_INT_CAUSES_REG_RF_KILL) {
         that->iwm_check_rfkill(sc);
-        task_add(systq, &sc->init_task);
+        IWM_RESTART(sc, "rfkill", 0, inta_hw);
     }
     
     if (inta_hw & IWM_MSIX_HW_INT_CAUSES_REG_HW_ERR) {
         XYLogE("%s: hardware error, stopping device \n", DEVNAME(sc));
         if ((sc->sc_flags & IWM_FLAG_SHUTDOWN) == 0) {
             sc->sc_flags |= IWM_FLAG_HW_ERR;
-            task_add(systq, &sc->init_task);
+            IWM_RESTART(sc, "hw-error", 0, inta_hw);
         }
         return 1;
     }
@@ -6171,6 +6179,86 @@ iwm_radiotap_attach(struct iwm_softc *sc)
 }
 #endif
 
+void
+iwm_record_diagnostic(struct iwm_softc *sc, const char *event, const char *function, int line, int error,
+    uint32_t detail, uint32_t detail2, uint32_t detail3)
+{
+    uint32_t sequence = __sync_add_and_fetch(&sc->sc_diagnostic_sequence, 1);
+    struct iwm_diagnostic *record = &sc->sc_diagnostics[(sequence - 1) % IWM_DIAG_SLOTS];
+    __atomic_store_n(&record->sequence, 0, __ATOMIC_RELEASE);
+    clock_get_uptime(&record->uptime);
+    record->event = event;
+    record->function = function;
+    record->line = line;
+    record->error = error;
+    record->generation = sc->sc_generation;
+    record->flags = sc->sc_flags;
+    record->state = sc->sc_ic.ic_state;
+    record->next_state = sc->ns_nstate;
+    record->if_flags = sc->sc_ic.ic_if.if_flags;
+    record->ic_flags = sc->sc_ic.ic_flags;
+    record->detail = detail;
+    record->detail2 = detail2;
+    record->detail3 = detail3;
+    __atomic_store_n(&record->sequence, sequence, __ATOMIC_RELEASE);
+}
+
+void
+iwm_schedule_restart(struct iwm_softc *sc, const char *event, const char *function, int line, int error,
+    uint32_t detail)
+{
+    iwm_record_diagnostic(sc, event, function, line, error, detail);
+    sc->sc_restart_reason = event;
+    // kprintf never reaches the unified log; IOLog does, and restarts are rare.
+    IOLog("itlwm: %s: restart requested: %s (%s:%d) error=%d detail=0x%x\n", DEVNAME(sc), event, function, line, error, detail);
+    task_add(systq, &sc->init_task);
+}
+
+// Properties are set from a task, never from the interrupt that produced the entries.
+void
+iwm_publish_diagnostics(struct iwm_softc *sc)
+{
+    if (!sc->sc_pcitag)
+        return;
+    for (unsigned int i = 0; i < IWM_DIAG_SLOTS; i++) {
+        const struct iwm_diagnostic *slot = &sc->sc_diagnostics[i];
+        uint32_t sequence = __atomic_load_n(&slot->sequence, __ATOMIC_ACQUIRE);
+        if (!sequence)
+            continue;
+        struct iwm_diagnostic record = *slot;
+        __sync_synchronize();
+        if (sequence != __atomic_load_n(&slot->sequence, __ATOMIC_ACQUIRE))
+            continue;
+        char key[48], value[320];
+        uint64_t nanos;
+        absolutetime_to_nanoseconds(record.uptime, &nanos);
+        snprintf(key, sizeof(key), "AirportItlwm-Diagnostic%02u", i);
+        snprintf(value, sizeof(value),
+            "seq=%u uptime_us=%llu event=%s source=%s:%d error=%d gen=%d flags=0x%x state=%d next=%d ifflags=0x%x icflags=0x%x detail=0x%08x detail2=0x%08x detail3=0x%08x",
+            sequence, nanos / 1000, record.event, record.function, record.line, record.error, record.generation,
+            record.flags, record.state, record.next_state, record.if_flags, record.ic_flags, record.detail,
+            record.detail2, record.detail3);
+        sc->sc_pcitag->setProperty(key, value);
+    }
+    sc->sc_pcitag->setProperty("AirportItlwm-DiagnosticSequence",
+        __atomic_load_n(&sc->sc_diagnostic_sequence, __ATOMIC_ACQUIRE), 32);
+    sc->sc_pcitag->setProperty("AirportItlwm-RestartCount", sc->sc_restart_count, 32);
+}
+
+// The firmware keeps its own record of why it stopped. Read it before iwm_stop() powers the device down (a task, device
+// still up): LMAC and UMAC tables, valid word, error id, the interrupt link and the first error-specific word.
+void ItlIwm::
+iwm_capture_firmware_error(struct iwm_softc *sc)
+{
+    uint32_t table[10];
+    uint32_t lmac = sc->sc_uc.uc_error_event_table, umac = sc->sc_uc.uc_umac_error_event_table;
+
+    if (lmac >= 0x800000 && !iwm_read_mem(sc, lmac, table, sizeof(table) / sizeof(table[0])))
+        iwm_record_diagnostic(sc, "lmac-error-table", __FUNCTION__, __LINE__, table[0], table[1], table[7], table[5]);
+    if (umac >= 0x800000 && !iwm_read_mem(sc, umac, table, 9))
+        iwm_record_diagnostic(sc, "umac-error-table", __FUNCTION__, __LINE__, table[0], table[1], table[6], table[4]);
+}
+
 void ItlIwm::
 iwm_init_task(void *arg1)
 {
@@ -6181,14 +6269,25 @@ iwm_init_task(void *arg1)
     int s = splnet();
     int generation = sc->sc_generation;
     int fatal = (sc->sc_flags & (IWM_FLAG_HW_ERR | IWM_FLAG_RFKILL));
-    
+
     //    rw_enter_write(&sc->ioctl_rwl);
     if (generation != sc->sc_generation) {
         //        rw_exit(&sc->ioctl_rwl);
         splx(s);
         return;
     }
-    
+
+    // The reason is whoever scheduled this task last; the entry carries it in its source field.
+    const char *reason = sc->sc_restart_reason ? sc->sc_restart_reason : "unknown";
+    sc->sc_restart_reason = NULL;
+    sc->sc_restart_count++;
+    iwm_record_diagnostic(sc, "init-task", reason, __LINE__, fatal, sc->sc_restart_count);
+    if (!(sc->sc_flags & IWM_FLAG_SHUTDOWN) && (ifp->if_flags & IFF_RUNNING) &&
+        (!strcmp(reason, "fw-error") || !strcmp(reason, "hw-error") || !strcmp(reason, "tx-timeout")))
+        that->iwm_capture_firmware_error(sc);
+    sc->sc_pcitag->setProperty("AirportItlwm-LastRestartReason", reason);
+    iwm_publish_diagnostics(sc);
+
     if (ifp->if_flags & IFF_RUNNING)
         that->iwm_stop(ifp);
     else
@@ -6215,7 +6314,8 @@ iwm_init_task(void *arg1)
         that->iwm_init(ifp);
 #endif
     }
-    
+
+    iwm_publish_diagnostics(sc);
     //    rw_exit(&sc->ioctl_rwl);
     splx(s);
 }
@@ -6365,7 +6465,7 @@ iwm_ba_task(void *arg)
             err = that->iwm_sta_tx_agg(sc, ni, tid, 0, 0, 0);
             if (err) {
                 /* DMA ownership is unknown: let reset stop the hardware first. */
-                task_add(systq, &sc->init_task);
+                IWM_RESTART(sc, "ba-stop-failed", err, tid);
                 break;
             }
             that->iwm_ampdu_txq_advance(sc, ring, -1);
@@ -6462,7 +6562,7 @@ iwm_activate(struct iwm_softc *sc, int act)
         case DVACT_WAKEUP:
             /* Hardware should be up at this point. */
             if (iwm_set_hw_ready(sc))
-                task_add(systq, &sc->init_task);
+                IWM_RESTART(sc, "wakeup", 0, 0);
             break;
     }
     

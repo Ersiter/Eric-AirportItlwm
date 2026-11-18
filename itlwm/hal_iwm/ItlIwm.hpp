@@ -426,6 +426,7 @@ public:
     int    iwm_init(struct _ifnet *);
     static void    iwm_start(struct _ifnet *);
     void    iwm_stop(struct _ifnet *);
+    void    iwm_capture_firmware_error(struct iwm_softc *);
     static void    iwm_watchdog(struct _ifnet *);
     static int    iwm_ioctl(struct _ifnet *, u_long, caddr_t);
 #ifdef IWM_DEBUG

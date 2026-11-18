@@ -947,6 +947,7 @@ int ItlIwm::
 iwm_scan(struct iwm_softc *sc)
 {
     XYLog("%s\n", __FUNCTION__);
+    IWM_DIAG(sc, "scan-start", 0, (uint32_t)sc->sc_flags);
     struct ieee80211com *ic = &sc->sc_ic;
     struct _ifnet *ifp = IC2IFP(ic);
     int err;
@@ -1002,7 +1003,10 @@ iwm_bgscan(struct ieee80211com *ic)
     
     if (sc->sc_flags & IWM_FLAG_SCANNING)
         return 0;
-    
+
+    // detail2: the RSSI net80211 holds for the AP we are on (a bogus 0 here makes it roam-scan, see WiFiCommunity 11-18)
+    iwm_record_diagnostic(sc, "bgscan-start", __FUNCTION__, __LINE__, 0, 0,
+        ic->ic_bss ? (uint32_t)ic->ic_bss->ni_rssi : 0, ic->ic_bgscan_fail);
     if (isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_UMAC_SCAN))
         err = that->iwm_umac_scan(sc, 1);
     else

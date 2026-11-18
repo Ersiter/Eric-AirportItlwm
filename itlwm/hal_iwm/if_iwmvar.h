@@ -517,6 +517,32 @@ struct iwm_awdl_key {
     uint8_t valid;
 };
 
+/*
+ * One entry per event that restarts or stops the device, or brackets a scan. Written from any context (interrupt
+ * included) with plain stores; published by iwm_publish_diagnostics() on a task. The sequence word is zero while an
+ * entry is being written.
+ */
+#define IWM_DIAG_SLOTS 32
+struct iwm_diagnostic {
+	uint64_t uptime;
+	const char *event;
+	const char *function;
+	int line, error, generation, flags, state, next_state, if_flags, ic_flags;
+	uint32_t detail, detail2, detail3;
+	volatile uint32_t sequence;
+};
+
+struct iwm_softc;
+void iwm_record_diagnostic(struct iwm_softc *, const char *event, const char *function, int line, int error,
+    uint32_t detail, uint32_t detail2 = 0, uint32_t detail3 = 0);
+void iwm_schedule_restart(struct iwm_softc *, const char *event, const char *function, int line, int error,
+    uint32_t detail);
+void iwm_publish_diagnostics(struct iwm_softc *);
+#define IWM_DIAG(sc, event, error, detail) \
+	iwm_record_diagnostic((sc), (event), __FUNCTION__, __LINE__, (error), (detail))
+#define IWM_RESTART(sc, event, error, detail) \
+	iwm_schedule_restart((sc), (event), __FUNCTION__, __LINE__, (error), (detail))
+
 struct iwm_softc {
 	struct device sc_dev;
 	struct ieee80211com sc_ic;
@@ -623,6 +649,11 @@ struct iwm_softc {
 	 * don't have the luxury of waiting for quiescense.
 	 */
 	int sc_generation;
+
+	volatile uint32_t sc_diagnostic_sequence;
+	struct iwm_diagnostic sc_diagnostics[IWM_DIAG_SLOTS];
+	const char *sc_restart_reason;
+	uint32_t sc_restart_count;
 
 //	struct rwlock ioctl_rwl;
 
