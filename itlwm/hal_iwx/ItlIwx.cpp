@@ -7128,20 +7128,16 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
     if (length < sizeof(*ba_res) ||
         le16toh(ba_res->tfd_cnt) > (length - sizeof(*ba_res)) / sizeof(ba_res->tfd[0]))
         return;
+    const bool awdlListener = sc->sc_use_mld_api && sc->sc_listener_up &&
+        ba_res->sta_id == IWX_LISTENER_STA_ID;
+    const bool awdlPeer = sc->sc_use_mld_api && sc->sc_awdl_peer_added &&
+        ba_res->sta_id == IWX_AWDL_PEER_STA_ID;
     if (ba_res->sta_id >= 32 ||
         (sc->sc_use_mld_api ?
             (!(sc->sc_mld_sta_mask & (1U << ba_res->sta_id)) &&
-             !(sc->sc_awdl_peer_added && ba_res->sta_id == IWX_AWDL_PEER_STA_ID)) :
+             !awdlPeer && !awdlListener) :
             ba_res->sta_id != IWX_STATION_ID))
         return;
-    if (sc->sc_awdl_peer_added && ba_res->sta_id == IWX_AWDL_PEER_STA_ID &&
-        le16toh(ba_res->tfd_cnt)) {
-        const uint32_t txed = le16toh(ba_res->txed);
-        const uint32_t done = le16toh(ba_res->done);
-        sc->sc_ic.ic_awdl_tx_ok += done;
-        if (txed > done)
-            sc->sc_ic.ic_awdl_tx_fail += txed - done;
-    }
     if (le32toh(ba_res->flags) != IWX_BA_RESP_TX_BAR && le32toh(ba_res->flags) != IWX_BA_RESP_TX_AGG){
         DPRINTFN(3, ("BA_NOTIFICATION flags %x, sent:%d, acked:%d, tfd_cnt:%d, query_frame_cnt:%d, retry_cnt:%d\n",
               le32toh(ba_res->flags),
@@ -7155,18 +7151,18 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
     if (!le16toh(ba_res->tfd_cnt))
         return;
 
-    /* Free per TID */
+    bool reclaimed = false;
     for (i = 0; i < le16toh(ba_res->tfd_cnt); i++) {
         struct iwx_compressed_ba_tfd *ba_tfd = &ba_res->tfd[i];
 
         qid = le16toh(ba_tfd->q_num);
         if (qid >= nitems(sc->txq) || !sc->txq[qid].ring_count)
             continue;
-        /*
-         * Linux reclaims on q_num and tfd_index alone, and so does the station. Only the AWDL peer's queues are
-         * matched against their TID, because those are the ones that share a firmware station with another path.
-         */
-        if (sc->sc_use_mld_api && ba_res->sta_id == IWX_AWDL_PEER_STA_ID) {
+        /* The listener's queues belong to a separate firmware station. */
+        if (awdlListener && qid != sc->sc_aux_roc_qid &&
+            qid != sc->sc_awdl_listener_data_qid && qid != sc->sc_awdl_listener_llw_qid)
+            continue;
+        if (awdlPeer) {
             const uint8_t tid = ba_tfd->tid;
             int expected_qid = IWX_INVALID_QUEUE;
             if (tid == 0)
@@ -7178,8 +7174,17 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         }
         ring = &sc->txq[qid];
 
+        const int queued = ring->queued;
         iwx_ampdu_txq_advance(sc, ring, IWX_AGG_SSN_TO_TXQ_IDX(le16toh(ba_tfd->tfd_index), ring->ring_count));
+        reclaimed |= ring->queued < queued;
         iwx_clear_oactive(sc, ring);
+    }
+    if ((awdlListener || awdlPeer) && reclaimed) {
+        const uint32_t txed = le16toh(ba_res->txed);
+        const uint32_t done = le16toh(ba_res->done);
+        sc->sc_ic.ic_awdl_tx_ok += done;
+        if (txed > done)
+            sc->sc_ic.ic_awdl_tx_fail += txed - done;
     }
 }
 
