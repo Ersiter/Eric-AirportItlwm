@@ -40,6 +40,10 @@
 #define IWN4965_FIRST_AGG_TXQUEUE    7
 #define IWN5000_NTXQUEUES        20
 #define IWN5000_FIRST_AGG_TXQUEUE    10
+#define IWN_CMD_QUEUE               4
+#define IWN_PAN_CMD_QUEUE           9
+#define IWN_PAN_DATA_QUEUE          5
+#define IWN_PAN_FIRST_AGG_TXQUEUE   11
 
 #define IWN4965_NDMACHNLS    7
 #define IWN5000_NDMACHNLS    8
@@ -423,6 +427,7 @@ struct iwn_rx_desc {
 #define IWN_RX_COMPRESSED_BA        197
 
     uint8_t        flags; /* XXX iwlwifi calls this "group_id" */
+#define IWN_CMD_FAILED            (1 << 6)
     uint8_t        idx;
     uint8_t        qid;
 } __packed;
@@ -493,6 +498,8 @@ struct iwn_rxon {
 #define IWN_MODE_STA        3
 #define IWN_MODE_IBSS        4
 #define IWN_MODE_MONITOR    6
+#define IWN_MODE_PAN_STA    8
+#define IWN_MODE_PAN_OFF    9
 
     uint8_t        air;
     uint16_t    rxchain;
@@ -529,6 +536,7 @@ struct iwn_rxon {
 #define IWN_FILTER_CTL        (1 << 1)
 #define IWN_FILTER_MULTICAST    (1 << 2)
 #define IWN_FILTER_NODECRYPT    (1 << 3)
+#define IWN_FILTER_NOGRPDECRYPT (1 << 4)
 #define IWN_FILTER_BSS        (1 << 5)
 #define IWN_FILTER_BEACON    (1 << 6)
 
@@ -605,7 +613,33 @@ struct iwn_cmd_timing {
     uint16_t    atim;
     uint32_t    binitval;
     uint16_t    lintval;
-    uint16_t    reserved;
+    uint8_t     dtim_period;
+    uint8_t     delta_cp_bss_tbtts;
+} __packed;
+
+#define IWN_CMD_WIPAN_PARAMS        0xb2
+#define IWN_CMD_WIPAN_RXON          0xb3
+#define IWN_CMD_WIPAN_TIMING        0xb4
+#define IWN_WIPAN_DEACTIVATED       0xbd
+#define IWN_WIPAN_SLOTTED_MODE      (1 << 3)
+#define IWN_CMD_TXFIFO_FLUSH        0x1e
+#define IWN_TXFIFO_DROP_ALL         (1 << 1)
+
+struct iwn_txfifo_flush_cmd {
+    uint32_t queues;
+    uint16_t control;
+    uint16_t reserved;
+} __packed;
+
+struct iwn_wipan_params {
+    uint16_t flags;
+    uint8_t reserved;
+    uint8_t num_slots;
+    struct {
+        uint16_t width;
+        uint8_t type;
+        uint8_t reserved;
+    } __packed slots[10];
 } __packed;
 
 /* Structure for command IWN_CMD_ADD_NODE. */
@@ -619,7 +653,9 @@ struct iwn_node_info {
     uint16_t    reserved2;
     uint8_t        id;
 #define IWN_ID_BSS         0
+#define IWN_ADD_NODE_SUCCESS    1
 #define IWN5000_ID_BROADCAST    15
+#define IWN_PAN_ID_BROADCAST    14
 #define IWN4965_ID_BROADCAST    31
 
     uint8_t        flags;
@@ -649,6 +685,7 @@ struct iwn_node_info {
     uint8_t        txmic[IEEE80211_TKIP_MICLEN];
 
     uint32_t    htflags;
+#define IWN_NODE_PAN_STATION    (1 << 13)
 #define IWN_AMDPU_SIZE_FACTOR(x)    ((x) << 19)
 #define IWN_AMDPU_SIZE_FACTOR_MASK    ((0x3) << 19)
 #define IWN_40MHZ_ENABLE        (1 << 21)

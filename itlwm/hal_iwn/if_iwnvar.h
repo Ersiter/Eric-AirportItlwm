@@ -87,6 +87,7 @@ struct iwn_tx_data {
 #ifdef AIRPORT_VTD
     bool commandPending;
     bool commandWaiting;
+    int commandError;
 #endif
     bus_dmamap_t        map;
     bus_addr_t        cmd_paddr;
@@ -298,6 +299,18 @@ struct iwn_softc {
     struct iwn_calib_state    calib;
 
     struct task        init_task;
+    uint8_t            cmdqid;
+#ifdef AIRPORT_WCL
+    bool               pan_sku;
+    bool               pan_requested;
+    bool               pan_task_pending;
+    bool               pan_deactivation_pending;
+    bool               pan_configured;
+    bool               pan_cleanup_failed;
+    uint32_t           pan_addr_gen;
+    struct iwn_rxon    pan_rxon;
+    struct task        pan_task;
+#endif
 
     struct iwn_fw_info    fw;
     struct iwn_calib_info    calibcmd[5];

@@ -206,19 +206,28 @@ public:
                 uint16_t);
     static void        iwn5000_reset_sched(struct iwn_softc *, int, int);
     int        iwn_tx(struct iwn_softc *, mbuf_t,
-                struct ieee80211_node *);
+                   struct ieee80211_node *, bool awdl = false);
     int        iwn_rval2ridx(int);
     static void        iwn_start(struct _ifnet *);
     static void        iwn_watchdog(struct _ifnet *);
     static int        iwn_ioctl(struct _ifnet *, u_long, caddr_t);
-    int        iwn_cmd(struct iwn_softc *, int, const void *, int, int);
+    int        iwn_cmd(struct iwn_softc *, int, const void *, int, int, bool checked = false);
+#ifdef AIRPORT_WCL
+    static int  iwn_awdl_listen(struct ieee80211com *, uint8_t, uint16_t);
+    static int  iwn_awdl_tx(struct ieee80211com *, uint8_t, const uint8_t *, size_t);
+    static void iwn_awdl_stop(struct ieee80211com *);
+    static void iwn_awdl_pan_task(void *);
+    void        iwn_awdl_pan_update(struct iwn_softc *);
+    int         iwn_awdl_pan_disable(struct iwn_softc *);
+    int         iwn_awdl_pan_slots(struct iwn_softc *, uint16_t);
+#endif
     static int        iwn4965_add_node(struct iwn_softc *, struct iwn_node_info *,
                 int);
     static int        iwn5000_add_node(struct iwn_softc *, struct iwn_node_info *,
                 int);
     int        iwn_set_link_quality(struct iwn_softc *,
                 struct ieee80211_node *);
-    int        iwn_add_broadcast_node(struct iwn_softc *, int, int);
+    int        iwn_add_broadcast_node(struct iwn_softc *, int, int, bool pan = false);
     static void        iwn_updateedca(struct ieee80211com *);
     void        iwn_set_led(struct iwn_softc *, uint8_t, uint8_t, uint8_t);
     int        iwn_set_critical_temp(struct iwn_softc *);

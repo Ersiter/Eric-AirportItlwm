@@ -38,6 +38,7 @@
 #include "../../AirportItlwm/WCL/WCL.hpp"
 #endif
 #include "ItlIwn.hpp"
+#include <HAL/ItlAWDLBootArg.hpp>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <FwData.h>
@@ -103,6 +104,13 @@ detach(IOPCIDevice *device)
             auto pci = static_cast<IOPCIDevice *>(arg1);
             that->dmaDetaching = true;
             that->dmaEpoch++;
+#ifdef AIRPORT_WCL
+            if (that->com.cmdqid == IWN_PAN_CMD_QUEUE) {
+                task_del(systq, &that->com.pan_task);
+                that->com.pan_requested = false;
+                that->getMainCommandGate()->commandWakeup(&that->com.pan_deactivation_pending);
+            }
+#endif
             that->com.sc_ic.ic_ac.ac_if.if_flags &= ~(IFF_UP | IFF_RUNNING);
             that->com.sc_ic.ic_state = IEEE80211_S_INIT;
             timeout_del(&that->com.sc_ic.ic_bgscan_timeout);
@@ -645,6 +653,23 @@ iwn_attach(struct iwn_softc *sc, struct pci_attach_args *pa)
     timeout_set(&sc->calib_to, iwn_calib_timeout, sc);
 //    rw_init(&sc->sc_rwlock, "iwnlock");
     task_set(&sc->init_task, iwn_init_task, sc, "iwn_init_task");
+    sc->cmdqid = IWN_CMD_QUEUE;
+#ifdef AIRPORT_WCL
+    task_set(&sc->pan_task, iwn_awdl_pan_task, sc, "iwn_pan_task");
+    if (itlAWDLEnabled() && sc->pan_sku && iwn_read_firmware(sc) == 0) {
+        ::free(sc->fw.data);
+        memset(&sc->fw, 0, sizeof(sc->fw));
+        const uint32_t panCaps = IWN_UCODE_TLV_FLAGS_PAN | IWN_UCODE_TLV_FLAGS_P2P;
+        if ((sc->tlv_feature_flags & panCaps) == panCaps) {
+            sc->cmdqid = IWN_PAN_CMD_QUEUE;
+            sc->first_agg_txq = IWN_PAN_FIRST_AGG_TXQUEUE;
+            ic->ic_awdl_home_chan = 6;
+            ic->ic_awdl_listen = iwn_awdl_listen;
+            ic->ic_awdl_tx = iwn_awdl_tx;
+            ic->ic_awdl_stop = iwn_awdl_stop;
+        }
+    }
+#endif
     return true;
 
     /* Free allocated memory if something failed during attachment. */
@@ -1461,6 +1486,12 @@ iwn_reset_tx_ring(struct iwn_softc *sc, struct iwn_tx_ring *ring)
     for (i = 0; i < IWN_TX_RING_COUNT; i++) {
         struct iwn_tx_data *data = &ring->data[i];
 
+#ifdef AIRPORT_WCL
+        if (sc->cmdqid == IWN_PAN_CMD_QUEUE && ring->qid == IWN_PAN_DATA_QUEUE && data->ni) {
+            ieee80211_release_node(&sc->sc_ic, data->ni);
+            data->ni = NULL;
+        }
+#endif
 #ifdef AIRPORT_VTD
         data->commandPending = false;
         data->commandWaiting = false;
@@ -1579,6 +1610,10 @@ iwn_read_eeprom(struct iwn_softc *sc)
     /* Check if HT support is bonded out. */
     if (val & htole16(IWN_EEPROM_SKU_CAP_11N))
         sc->sc_flags |= IWN_FLAG_HAS_11N;
+#ifdef AIRPORT_WCL
+    sc->pan_sku = sc->hw_type != IWN_HW_REV_TYPE_4965 &&
+        (letoh16(val) & IWN_EEPROM_SKU_CAP_IPAN);
+#endif
 
     iwn_read_prom_data(sc, IWN_EEPROM_RFCFG, &val, 2);
     sc->rfcfg = letoh16(val);
@@ -1925,6 +1960,10 @@ iwn_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
     int error;
 
     if (ic->ic_state == IEEE80211_S_RUN) {
+#ifdef AIRPORT_WCL
+        if (nstate != IEEE80211_S_RUN && ic->ic_awdl_stop)
+            ic->ic_awdl_stop(ic);
+#endif
         if (nstate == IEEE80211_S_SCAN) {
             /*
              * During RUN->SCAN we don't call sc_newstate() so
@@ -2283,7 +2322,20 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
     ni = ieee80211_find_rxnode(ic, wh);
 
     memset(&rxi, 0, sizeof(rxi));
-    if (((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) != IEEE80211_FC0_TYPE_CTL)
+    bool panFrame = false;
+#ifdef AIRPORT_WCL
+    if (sc->pan_configured && len >= sizeof(*wh)) {
+        panFrame = IEEE80211_ADDR_EQ(wh->i_addr1, sc->pan_rxon.myaddr) ||
+            (IEEE80211_IS_MULTICAST(wh->i_addr1) &&
+             IEEE80211_ADDR_EQ(wh->i_addr3, sc->pan_rxon.bssid));
+        if (panFrame && !ic->ic_awdl_listener_chan) {
+            ieee80211_release_node(ic, ni);
+            mbuf_freem(m);
+            return;
+        }
+    }
+#endif
+    if (!panFrame && ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) != IEEE80211_FC0_TYPE_CTL)
         && (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) &&
         !IEEE80211_IS_MULTICAST(wh->i_addr1) &&
         (ni->ni_flags & IEEE80211_NODE_RXPROT) &&
@@ -2372,6 +2424,8 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
     /* Send the frame to the 802.11 layer. */
     rxi.rxi_rssi = rssi;
     rxi.rxi_chan = chan;
+    if (panFrame)
+        rxi.rxi_tstamp = (uint32_t)letoh64(stat->tstamp);
     ieee80211_inputm(ifp, m, ni, &rxi, ml);
 
     /* Node is no longer needed. */
@@ -2887,6 +2941,10 @@ iwn5000_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
     if (desc->qid < sc->first_agg_txq) {
         int txfail = (status != IWN_TX_STATUS_SUCCESS &&
                       status != IWN_TX_STATUS_DIRECT_DONE);
+#ifdef AIRPORT_WCL
+        if (txfail && sc->cmdqid == IWN_PAN_CMD_QUEUE && desc->qid == IWN_PAN_DATA_QUEUE)
+            sc->sc_ic.ic_awdl_tx_last_status = status;
+#endif
         /* Reset TX scheduler slot. */
         iwn5000_reset_sched(sc, desc->qid, desc->idx);
 
@@ -2954,6 +3012,18 @@ iwn_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
     if (data->ni == NULL)
         return;
 
+#ifdef AIRPORT_WCL
+    if (sc->cmdqid == IWN_PAN_CMD_QUEUE && qid == IWN_PAN_DATA_QUEUE) {
+        if (txfail)
+            ic->ic_awdl_tx_fail++;
+        else
+            ic->ic_awdl_tx_ok++;
+        iwn_tx_done_free_txdata(sc, data);
+        ring->queued--;
+        return;
+    }
+#endif
+
     if (data->ni->ni_flags & IEEE80211_NODE_HT) {
         if (ic->ic_state == IEEE80211_S_RUN &&
             ic->ic_fixed_mcs == -1 && (rflags & IWN_RFLAG_MCS)) {
@@ -2995,10 +3065,10 @@ iwn_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 void ItlIwn::
 iwn_cmd_done(struct iwn_softc *sc, struct iwn_rx_desc *desc)
 {
-    struct iwn_tx_ring *ring = &sc->txq[4];
+    struct iwn_tx_ring *ring = &sc->txq[sc->cmdqid];
     struct iwn_tx_data *data;
 
-    if ((desc->qid & 0xf) != 4)
+    if ((desc->qid & 0x1f) != sc->cmdqid)
         return;    /* Not a command ack. */
 
     data = &ring->data[desc->idx];
@@ -3006,6 +3076,11 @@ iwn_cmd_done(struct iwn_softc *sc, struct iwn_rx_desc *desc)
     if (!data->commandPending)
         return;
     data->commandPending = false;
+    data->commandError = (desc->flags & IWN_CMD_FAILED) ? EIO : 0;
+    if (desc->type == IWN_CMD_ADD_NODE &&
+        ((letoh32(desc->len) & IWN_RX_DESC_LEN_MASK) < sizeof(*desc) - sizeof(desc->len) + 1 ||
+         *(const uint8_t *)(desc + 1) != IWN_ADD_NODE_SUCCESS))
+        data->commandError = EIO;
 #endif
 
 
@@ -3060,6 +3135,14 @@ iwn_notif_intr(struct iwn_softc *sc)
             iwn_cmd_done(sc, desc);
 
         switch (desc->type) {
+#ifdef AIRPORT_WCL
+        case IWN_WIPAN_DEACTIVATED:
+            if (sc->pan_deactivation_pending) {
+                sc->pan_deactivation_pending = false;
+                getMainCommandGate()->commandWakeup(&sc->pan_deactivation_pending);
+            }
+            break;
+#endif
         case IWN_RX_PHY:
             iwn_rx_phy(sc, desc, data);
             break;
@@ -3204,6 +3287,10 @@ iwn_notif_intr(struct iwn_softc *sc)
             }
             sc->sc_flags &= ~IWN_FLAG_SCANNING;
             sc->sc_flags &= ~IWN_FLAG_BGSCAN;
+#ifdef AIRPORT_WCL
+            if (sc->pan_configured && !sc->pan_requested)
+                iwn_awdl_stop(ic);
+#endif
             ieee80211_end_scan(ifp);
             break;
         }
@@ -3501,7 +3588,7 @@ iwn_is_mimo_mcs(int mcs)
 }
 
 int ItlIwn::
-iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni)
+iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni, bool awdl)
 {
     struct iwn_ops *ops = &sc->ops;
     struct ieee80211com *ic = &sc->sc_ic;
@@ -3537,7 +3624,12 @@ iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni)
     else
         hdrlen = ieee80211_get_hdrlen(wh);
 
-    if ((hasqos = ieee80211_has_qos(wh))) {
+    if (awdl) {
+        hasqos = 0;
+        qos = 0;
+        tid = IWN_NONQOS_TID;
+        qid = IWN_PAN_DATA_QUEUE;
+    } else if ((hasqos = ieee80211_has_qos(wh))) {
         /* Select EDCA Access Category and TX ring for this frame. */
         struct ieee80211_tx_ba *ba;
         qos = ieee80211_get_qos(wh);
@@ -3581,7 +3673,9 @@ iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni)
     data = &ring->data[ring->cur];
 
     /* Choose a TX rate index. */
-    if (IEEE80211_IS_MULTICAST(wh->i_addr1) ||
+    if (awdl)
+        ridx = IWN_RIDX_OFDM;
+    else if (IEEE80211_IS_MULTICAST(wh->i_addr1) ||
         type != IEEE80211_FC0_TYPE_DATA)
         ridx = iwn_rval2ridx(ieee80211_min_basic_rate(ic));
     else if (ic->ic_fixed_mcs != -1)
@@ -3606,7 +3700,7 @@ iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni)
         if (ic->ic_curmode != IEEE80211_MODE_11N)
             chan_flags &= ~IEEE80211_CHAN_HT;
         tap->wt_chan_flags = htole16(chan_flags);
-        if ((ni->ni_flags & IEEE80211_NODE_HT) &&
+        if (!awdl && (ni->ni_flags & IEEE80211_NODE_HT) &&
             !IEEE80211_IS_MULTICAST(wh->i_addr1) &&
             type == IEEE80211_FC0_TYPE_DATA) {
             tap->wt_rate = (0x80 | ni->ni_txmcs);
@@ -3700,7 +3794,9 @@ iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni)
         }
     }
 
-    if (type == IEEE80211_FC0_TYPE_CTL &&
+    if (awdl)
+        tx->id = IWN_PAN_ID_BROADCAST;
+    else if (type == IEEE80211_FC0_TYPE_CTL &&
         subtype == IEEE80211_FC0_SUBTYPE_BAR)
         tx->id = wn->id;
     else if (IEEE80211_IS_MULTICAST(wh->i_addr1) ||
@@ -3736,7 +3832,7 @@ iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni)
     tx->data_ntries = 15;
     tx->lifetime = htole32(IWN_LIFETIME_INFINITE);
 
-    if ((ni->ni_flags & IEEE80211_NODE_HT) &&
+    if (!awdl && (ni->ni_flags & IEEE80211_NODE_HT) &&
         tx->id != sc->broadcast_id &&
         rinfo->ht_plcp != IWN_RATE_HT_SISO_MCS_INV_PLCP) {
         tx->plcp = rinfo->ht_plcp;
@@ -3761,7 +3857,7 @@ iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni)
         else
             tx->rflags = 0;
     }
-    if (tx->id == sc->broadcast_id || ic->ic_fixed_mcs != -1 ||
+    if (awdl || tx->id == sc->broadcast_id || ic->ic_fixed_mcs != -1 ||
         ic->ic_fixed_rate != -1) {
         /* Group or management frame, or fixed Tx rate. */
         tx->linkq = 0;
@@ -3856,13 +3952,13 @@ iwn_tx(struct iwn_softc *sc, mbuf_t m, struct ieee80211_node *ni)
     IWN_WRITE(sc, IWN_HBUS_TARG_WRPTR, ring->qid << 8 | ring->cur);
 
     /* Mark TX ring as full if we reach a certain threshold. */
-    if (++ring->queued > IWN_TX_RING_HIMARK) {
+    if (++ring->queued > IWN_TX_RING_HIMARK && !awdl) {
 //        XYLog("%s sc->qfullmsk is FULL qid=%d ring->cur=%d ring->queued=%d\n", __FUNCTION__, ring->qid, ring->cur, ring->queued);
         sc->qfullmsk |= 1 << ring->qid;
     }
 
 #ifdef AIRPORT_WCL
-    if (type == IEEE80211_FC0_TYPE_DATA && !(subtype & IEEE80211_FC0_SUBTYPE_NODATA))
+    if (!awdl && type == IEEE80211_FC0_TYPE_DATA && !(subtype & IEEE80211_FC0_SUBTYPE_NODATA))
         ++ic->ic_wcl_tx_packets[trafficAC];
 #endif
     return 0;
@@ -4029,23 +4125,24 @@ iwn_ioctl(struct _ifnet *ifp, u_long cmd, caddr_t data)
  * Send a command to the firmware.
  */
 int ItlIwn::
-iwn_cmd(struct iwn_softc *sc, int code, const void *buf, int size, int async)
+iwn_cmd(struct iwn_softc *sc, int code, const void *buf, int size, int async, bool checked)
 {
 #ifdef AIRPORT_VTD
     if (!getMainWorkLoop()->inGate()) {
-        struct Request { iwn_softc *sc; int code; const void *buf; int size; int async; } request = {sc, code, buf, size, async};
+        struct Request { iwn_softc *sc; int code; const void *buf; int size; int async; bool checked; }
+            request = {sc, code, buf, size, async, checked};
         return getMainCommandGate()->runAction(
             [](OSObject *, void *arg0, void *arg1, void *, void *) -> IOReturn {
                 auto request = static_cast<Request *>(arg1);
                 return static_cast<ItlIwn *>(arg0)->iwn_cmd(request->sc, request->code,
-                    request->buf, request->size, request->async);
+                    request->buf, request->size, request->async, request->checked);
             }, this, &request);
     }
     uint64_t epoch = dmaEpoch;
 #endif
     DPRINTFN(2, ("%s code=%d size=%d\n", __FUNCTION__, code, size));
     struct iwn_ops *ops = &sc->ops;
-    struct iwn_tx_ring *ring = &sc->txq[4];
+    struct iwn_tx_ring *ring = &sc->txq[sc->cmdqid];
     struct iwn_tx_desc *desc;
     struct iwn_tx_data *data;
     struct iwn_tx_cmd *cmd;
@@ -4144,6 +4241,7 @@ iwn_cmd(struct iwn_softc *sc, int code, const void *buf, int size, int async)
 #ifdef AIRPORT_VTD
     data->commandPending = true;
     data->commandWaiting = !async;
+    data->commandError = 0;
 #endif
     ring->cur = (ring->cur + 1) % IWN_TX_RING_COUNT;
     IWN_WRITE(sc, IWN_HBUS_TARG_WRPTR, ring->qid << 8 | ring->cur);
@@ -4163,9 +4261,12 @@ iwn_cmd(struct iwn_softc *sc, int code, const void *buf, int size, int async)
         if (epoch != dmaEpoch)
             return ENXIO;
         data->commandWaiting = false;
+        if (checked && !error)
+            error = data->commandError;
     }
     return error;
 #else
+    (void)checked;
     return async ? 0 : tsleep_nsec(desc, PCATCH, "iwncmd", SEC_TO_NSEC(1));
 #endif
 }
@@ -4325,7 +4426,7 @@ iwn_set_link_quality(struct iwn_softc *sc, struct ieee80211_node *ni)
  * Broadcast node is used to send group-addressed and management frames.
  */
 int ItlIwn::
-iwn_add_broadcast_node(struct iwn_softc *sc, int async, int ridx)
+iwn_add_broadcast_node(struct iwn_softc *sc, int async, int ridx, bool pan)
 {
     struct iwn_ops *ops = &sc->ops;
     struct iwn_node_info node;
@@ -4336,16 +4437,20 @@ iwn_add_broadcast_node(struct iwn_softc *sc, int async, int ridx)
 
     memset(&node, 0, sizeof node);
     IEEE80211_ADDR_COPY(node.macaddr, etherbroadcastaddr);
-    node.id = sc->broadcast_id;
+    node.id = pan ? IWN_PAN_ID_BROADCAST : sc->broadcast_id;
+    if (pan)
+        node.htflags = htole32(IWN_NODE_PAN_STATION);
     DPRINTF(("adding broadcast node\n"));
-    if ((error = ops->add_node(sc, &node, async)) != 0)
+    error = pan ? iwn_cmd(sc, IWN_CMD_ADD_NODE, &node, sizeof(node), async, true) :
+        ops->add_node(sc, &node, async);
+    if (error != 0)
         return error;
 
     /* Use the first valid TX antenna. */
     txant = IWN_LSB(sc->txchainmask);
 
     memset(&linkq, 0, sizeof linkq);
-    linkq.id = sc->broadcast_id;
+    linkq.id = node.id;
     linkq.antmsk_1stream = txant;
     linkq.antmsk_2stream = IWN_ANT_AB;
     linkq.ampdu_max = IWN_AMPDU_MAX_NO_AGG;
@@ -4363,8 +4468,272 @@ iwn_add_broadcast_node(struct iwn_softc *sc, int async, int ridx)
         linkq.retry[i].plcp = linkq.retry[0].plcp;
         linkq.retry[i].rflags = linkq.retry[0].rflags;
     }
-    return iwn_cmd(sc, IWN_CMD_LINK_QUALITY, &linkq, sizeof linkq, async);
+    return iwn_cmd(sc, IWN_CMD_LINK_QUALITY, &linkq, sizeof linkq, async, pan);
 }
+
+#ifdef AIRPORT_WCL
+int ItlIwn::
+iwn_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t)
+{
+    auto *sc = (struct iwn_softc *)IC2IFP(ic)->if_softc;
+    if (ic->ic_state != IEEE80211_S_RUN || ic->ic_opmode != IEEE80211_M_STA ||
+        !ic->ic_awdl_addr_gen || chan != ic->ic_awdl_home_chan ||
+        sc->rxon.chan != chan || !(ic->ic_if.if_flags & IFF_RUNNING) ||
+        (sc->sc_flags & (IWN_FLAG_SCANNING | IWN_FLAG_BGSCAN)) ||
+        ic->ic_wcl_scan_requested)
+        return EBUSY;
+    if (sc->pan_cleanup_failed ||
+        (ic->ic_awdl_listener_code && sc->pan_addr_gen == ic->ic_awdl_addr_gen))
+        return ic->ic_awdl_listener_code;
+    sc->pan_requested = true;
+    if (ic->ic_awdl_listener_chan == chan && sc->pan_addr_gen == ic->ic_awdl_addr_gen)
+        return 0;
+    if (!sc->pan_task_pending) {
+        sc->pan_task_pending = true;
+        task_add(systq, &sc->pan_task);
+    }
+    return EAGAIN;
+}
+
+int ItlIwn::
+iwn_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t len)
+{
+    auto *sc = (struct iwn_softc *)IC2IFP(ic)->if_softc;
+    auto *that = container_of(sc, ItlIwn, com);
+    if (!chan || chan != ic->ic_awdl_listener_chan || chan != sc->rxon.chan ||
+        !sc->pan_requested || sc->pan_addr_gen != ic->ic_awdl_addr_gen ||
+        ic->ic_state != IEEE80211_S_RUN || !(ic->ic_if.if_flags & IFF_RUNNING) ||
+        (sc->sc_flags & (IWN_FLAG_SCANNING | IWN_FLAG_BGSCAN)) ||
+        ic->ic_wcl_scan_requested ||
+        sc->txq[IWN_PAN_DATA_QUEUE].queued >= IWN_TX_RING_HIMARK) {
+        ic->ic_awdl_tx_busy++;
+        return EAGAIN;
+    }
+    if (len < sizeof(struct ieee80211_frame) || len > MCLBYTES)
+        return EMSGSIZE;
+    const auto *wh = (const struct ieee80211_frame *)frame;
+    if ((wh->i_fc[1] & IEEE80211_FC1_PROTECTED) || ieee80211_has_qos(wh))
+        return ENOTSUP;
+
+    mbuf_t m = NULL;
+    unsigned int segments = 1;
+    if (mbuf_allocpacket(MBUF_DONTWAIT, len, &segments, &m) != 0)
+        return ENOMEM;
+    memcpy(mbuf_data(m), frame, len);
+    mbuf_setlen(m, len);
+    mbuf_pkthdr_setlen(m, len);
+    struct ieee80211_node *ni = ieee80211_ref_node(ic->ic_bss);
+    int err = that->iwn_tx(sc, m, ni, true);
+    if (err) {
+        ieee80211_release_node(ic, ni);
+        ic->ic_awdl_tx_err++;
+        return err;
+    }
+    ic->ic_awdl_tx_sent++;
+    return 0;
+}
+
+void ItlIwn::
+iwn_awdl_stop(struct ieee80211com *ic)
+{
+    auto *sc = (struct iwn_softc *)IC2IFP(ic)->if_softc;
+    auto *that = container_of(sc, ItlIwn, com);
+    if (!that->getMainWorkLoop()->inGate()) {
+        that->getMainCommandGate()->runAction(
+            [](OSObject *, void *arg, void *, void *, void *) -> IOReturn {
+                iwn_awdl_stop(static_cast<ieee80211com *>(arg));
+                return kIOReturnSuccess;
+            }, ic);
+        return;
+    }
+    sc->pan_requested = false;
+    ic->ic_awdl_listener_chan = 0;
+    ic->ic_awdl_listen_chan = 0;
+    if (!sc->pan_cleanup_failed)
+        ic->ic_awdl_listener_code = 0;
+    if (sc->pan_configured && !sc->pan_cleanup_failed && !sc->pan_task_pending &&
+        (ic->ic_if.if_flags & IFF_RUNNING) && !that->dmaDetaching) {
+        sc->pan_task_pending = true;
+        task_add(systq, &sc->pan_task);
+    }
+}
+
+void ItlIwn::
+iwn_awdl_pan_task(void *arg)
+{
+    auto *sc = static_cast<iwn_softc *>(arg);
+    auto *that = container_of(sc, ItlIwn, com);
+    that->getMainCommandGate()->runAction(
+        [](OSObject *, void *target, void *state, void *, void *) -> IOReturn {
+            auto *sc = static_cast<iwn_softc *>(state);
+            static_cast<ItlIwn *>(target)->iwn_awdl_pan_update(sc);
+            sc->pan_task_pending = false;
+            return kIOReturnSuccess;
+        }, that, sc);
+}
+
+int ItlIwn::
+iwn_awdl_pan_disable(struct iwn_softc *sc)
+{
+    struct iwn_rxon off = sc->pan_rxon;
+    off.mode = IWN_MODE_PAN_OFF;
+    off.filter &= ~htole32(IWN_FILTER_BSS);
+    uint64_t epoch = dmaEpoch;
+    sc->pan_deactivation_pending = true;
+    int err = iwn_cmd(sc, IWN_CMD_WIPAN_RXON, &off, sc->rxonsz, 0, true);
+    if (epoch != dmaEpoch)
+        return ENXIO;
+    if (!err) {
+        uint64_t deadline;
+        clock_interval_to_deadline(1, kSecondScale, &deadline);
+        while (sc->pan_deactivation_pending && epoch == dmaEpoch) {
+            if (getMainCommandGate()->commandSleep(&sc->pan_deactivation_pending,
+                   deadline, THREAD_UNINT) != THREAD_AWAKENED)
+                break;
+        }
+        if (epoch != dmaEpoch)
+            return ENXIO;
+        if (sc->pan_deactivation_pending)
+            err = ETIMEDOUT;
+    }
+    sc->pan_deactivation_pending = false;
+    return err;
+}
+
+int ItlIwn::
+iwn_awdl_pan_slots(struct iwn_softc *sc, uint16_t beaconInterval)
+{
+    struct iwn_wipan_params cmd = {};
+    cmd.num_slots = 2;
+    cmd.slots[1].type = 1;
+    cmd.slots[0].width = htole16(300);
+    if (beaconInterval) {
+        cmd.flags = htole16(IWN_WIPAN_SLOTTED_MODE);
+        cmd.slots[0].width = htole16(beaconInterval / 2);
+        cmd.slots[1].width = htole16(beaconInterval - beaconInterval / 2);
+    }
+    return iwn_cmd(sc, IWN_CMD_WIPAN_PARAMS, &cmd, sizeof(cmd), 0, true);
+}
+
+void ItlIwn::
+iwn_awdl_pan_update(struct iwn_softc *sc)
+{
+    auto *ic = &sc->sc_ic;
+    if (dmaDetaching || !(ic->ic_if.if_flags & IFF_RUNNING) ||
+        sc->pan_cleanup_failed || (sc->sc_flags & (IWN_FLAG_SCANNING | IWN_FLAG_BGSCAN)))
+        return;
+
+    const uint64_t epoch = dmaEpoch;
+    auto deactivate = [&]() -> int {
+        int err = 0;
+        if (sc->txq[IWN_PAN_DATA_QUEUE].queued) {
+            const struct iwn_txfifo_flush_cmd flush = {
+                htole32(1U << IWN_PAN_DATA_QUEUE),
+                htole16(IWN_TXFIFO_DROP_ALL),
+                0,
+            };
+            err = iwn_cmd(sc, IWN_CMD_TXFIFO_FLUSH, &flush, sizeof(flush), 0, true);
+        }
+        if (!err)
+            err = iwn_awdl_pan_disable(sc);
+        if (!err)
+            err = iwn_awdl_pan_slots(sc, 0);
+        if (epoch == dmaEpoch) {
+            sc->pan_configured = err != 0;
+            sc->pan_cleanup_failed = err != 0;
+        }
+        return err;
+    };
+    ic->ic_awdl_listener_chan = 0;
+    ic->ic_awdl_listen_chan = 0;
+    if (sc->pan_configured) {
+        int err = deactivate();
+        if (epoch != dmaEpoch)
+            return;
+        if (err) {
+            ic->ic_awdl_listener_stage = 6;
+            ic->ic_awdl_listener_code = err;
+            return;
+        }
+    }
+
+    const uint32_t addressGeneration = ic->ic_awdl_addr_gen;
+    auto wanted = [&]() {
+        return epoch == dmaEpoch && sc->pan_requested &&
+            addressGeneration == ic->ic_awdl_addr_gen &&
+            ic->ic_state == IEEE80211_S_RUN && sc->rxon.chan == ic->ic_awdl_home_chan &&
+            !(sc->sc_flags & (IWN_FLAG_SCANNING | IWN_FLAG_BGSCAN)) &&
+            !ic->ic_wcl_scan_requested;
+    };
+    if (!wanted())
+        return;
+
+    static const uint8_t bssid[] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
+    sc->pan_addr_gen = addressGeneration;
+    sc->pan_rxon = sc->rxon;
+    sc->pan_rxon.mode = IWN_MODE_PAN_STA;
+    sc->pan_rxon.associd = 0;
+    sc->pan_rxon.filter = htole32(IWN_FILTER_PROMISC | IWN_FILTER_MULTICAST |
+        IWN_FILTER_CTL | IWN_FILTER_NODECRYPT | IWN_FILTER_NOGRPDECRYPT);
+    IEEE80211_ADDR_COPY(sc->pan_rxon.myaddr, ic->ic_awdl_addr);
+    IEEE80211_ADDR_COPY(sc->pan_rxon.wlap, ic->ic_awdl_addr);
+    IEEE80211_ADDR_COPY(sc->pan_rxon.bssid, ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : bssid);
+
+    const auto *bss = ic->ic_bss;
+    const uint16_t interval = bss->ni_intval ? bss->ni_intval : 100;
+    const uint32_t period = interval * IEEE80211_DUR_TU;
+    struct iwn_cmd_timing timing = {};
+    memcpy(&timing.tstamp, bss->ni_tstamp, sizeof(timing.tstamp));
+    timing.bintval = htole16(interval);
+    timing.lintval = htole16(1);
+    timing.binitval = htole32(period - letoh64(timing.tstamp) % period);
+    timing.dtim_period = bss->ni_dtimperiod ? bss->ni_dtimperiod : 1;
+
+    if (ic->ic_awdl_listener_tries != 255)
+        ic->ic_awdl_listener_tries++;
+    int stage = 1;
+    int err = iwn_awdl_pan_disable(sc);
+    if (!err && wanted()) {
+        stage = 2;
+        err = iwn_cmd(sc, IWN_CMD_WIPAN_TIMING, &timing, sizeof(timing), 0, true);
+    }
+    if (!err && wanted()) {
+        stage = 3;
+        sc->pan_configured = true;
+        err = iwn_cmd(sc, IWN_CMD_WIPAN_RXON, &sc->pan_rxon, sc->rxonsz, 0, true);
+    }
+    if (!err && wanted()) {
+        stage = 4;
+        err = iwn_add_broadcast_node(sc, 0, IWN_RIDX_OFDM, true);
+    }
+    if (!err && wanted()) {
+        stage = 5;
+        err = iwn_awdl_pan_slots(sc, interval);
+    }
+    if (epoch != dmaEpoch)
+        return;
+    if (!err && wanted()) {
+        ic->ic_awdl_listener_chan = sc->rxon.chan;
+        ic->ic_awdl_listen_chan = sc->rxon.chan;
+        ic->ic_awdl_listener_stage = 0;
+        ic->ic_awdl_listener_code = 0;
+        return;
+    }
+    if (sc->pan_configured && !(sc->sc_flags & (IWN_FLAG_SCANNING | IWN_FLAG_BGSCAN))) {
+        int cleanup = deactivate();
+        if (epoch != dmaEpoch)
+            return;
+        if (cleanup) {
+            stage = 6;
+            err = cleanup;
+        }
+    }
+    if (err) {
+        ic->ic_awdl_listener_stage = stage;
+        ic->ic_awdl_listener_code = err;
+    }
+}
+#endif
 
 void ItlIwn::
 iwn_updateedca(struct ieee80211com *ic)
@@ -6732,7 +7101,7 @@ iwn5000_post_alive(struct iwn_softc *sc)
     IWN_SETBITS(sc, IWN_FH_TX_CHICKEN, IWN_FH_TX_CHICKEN_SCHED_RETRY);
 
     /* Enable chain mode for all queues, except command queue. */
-    iwn_prph_write(sc, IWN5000_SCHED_QCHAIN_SEL, 0xfffef);
+    iwn_prph_write(sc, IWN5000_SCHED_QCHAIN_SEL, 0xfffff & ~(1U << sc->cmdqid));
     iwn_prph_write(sc, IWN5000_SCHED_AGGR_SEL, 0);
 
     for (qid = 0; qid < IWN5000_NTXQUEUES; qid++) {
@@ -6752,11 +7121,13 @@ iwn5000_post_alive(struct iwn_softc *sc)
     /* Identify TX FIFO rings (0-7). */
     iwn_prph_write(sc, IWN5000_SCHED_TXFACT, 0xff);
 
-    /* Mark TX rings (4 EDCA + cmd + 2 HCCA) as active. */
-    for (qid = 0; qid < 7; qid++) {
-        static uint8_t qid2fifo[] = { 3, 2, 1, 0, 7, 5, 6 };
+    static const uint8_t bssFifos[] = { 3, 2, 1, 0, 7, 5, 6 };
+    static const uint8_t panFifos[] = { 3, 2, 1, 0, 0, 4, 2, 5, 4, 7, 5 };
+    const bool pan = sc->cmdqid == IWN_PAN_CMD_QUEUE;
+    const uint8_t *qFifos = pan ? panFifos : bssFifos;
+    for (qid = 0; qid < (pan ? nitems(panFifos) : nitems(bssFifos)); qid++) {
         iwn_prph_write(sc, IWN5000_SCHED_QUEUE_STATUS(qid),
-            IWN5000_TXQ_STATUS_ACTIVE | qid2fifo[qid]);
+            IWN5000_TXQ_STATUS_ACTIVE | qFifos[qid]);
     }
     iwn_nic_unlock(sc);
 
@@ -7138,7 +7509,7 @@ iwn_read_firmware_tlv(struct iwn_softc *sc, struct iwn_fw_info *fw,
                 break;
             if (len % sizeof(uint32_t))
                 break;
-            sc->tlv_feature_flags = letoh32(*ptr);
+            sc->tlv_feature_flags = LE_READ_4(ptr);
             DPRINTF(("feature: 0x%08x\n", sc->tlv_feature_flags));
             break;
         default:
@@ -7167,6 +7538,7 @@ iwn_read_firmware(struct iwn_softc *sc)
      */
     sc->reset_noise_gain = IWN5000_PHY_CALIB_RESET_NOISE_GAIN;
     sc->noise_gain = IWN5000_PHY_CALIB_NOISE_GAIN;
+    sc->tlv_feature_flags = 0;
 
     memset(fw, 0, sizeof (*fw));
 
@@ -7555,6 +7927,17 @@ iwn_hw_stop(struct iwn_softc *sc)
         return;
     }
     dmaEpoch++;
+#endif
+#ifdef AIRPORT_WCL
+    sc->pan_requested = false;
+    sc->pan_configured = false;
+    sc->pan_cleanup_failed = false;
+    sc->pan_addr_gen = 0;
+    sc->pan_deactivation_pending = false;
+    sc->sc_ic.ic_awdl_listener_chan = 0;
+    sc->sc_ic.ic_awdl_listen_chan = 0;
+    sc->sc_ic.ic_awdl_listener_code = 0;
+    getMainCommandGate()->commandWakeup(&sc->pan_deactivation_pending);
 #endif
     int chnl, qid, ntries;
 

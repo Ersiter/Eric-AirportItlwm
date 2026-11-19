@@ -620,6 +620,8 @@ struct ieee80211com {
     uint32_t        ic_awdl_ba_req;
     uint32_t        ic_awdl_ba_resp_sent;
     uint8_t         ic_awdl_listener_chan;  /* standing listener's channel, 0 = none */
+    uint8_t         ic_awdl_home_chan;      /* required infrastructure channel, 0 = unrestricted */
+    void            (*ic_awdl_stop)(struct ieee80211com *);
     uint8_t         ic_awdl_listener_stage; /* last failed bring-up stage */
     uint8_t         ic_awdl_listener_tries;
     int             ic_awdl_listener_code;  /* error of that stage */

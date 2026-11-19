@@ -870,8 +870,11 @@ stopAWTimeline()
     fPeerValid = false;
     fPeerChanValid = false;
     if (fController) {
-        if (ieee80211com *ic = fController->fHalService->get80211Controller())
+        if (ieee80211com *ic = fController->fHalService->get80211Controller()) {
             ic->ic_awdl_want_data = 0;
+            if (ic->ic_awdl_stop)
+                ic->ic_awdl_stop(ic);
+        }
     }
     if (fListenTimer)
         fListenTimer->cancelTimeout();
@@ -899,6 +902,11 @@ stopAWTimeline()
 void AirportItlwmAWDLInterface::
 teardownAW()
 {
+    if (fAWRunning && fController) {
+        ieee80211com *ic = fController->fHalService->get80211Controller();
+        if (ic->ic_awdl_stop)
+            ic->ic_awdl_stop(ic);
+    }
     fAWRunning = false;
     fListenAlignedActive = false;
     if (fListenTimer) {
@@ -995,6 +1003,12 @@ postAWEvents()
     // there: sanityCheckAWStart counts the skipped slots and only complains
     // about skipped slots that have a channel.
     unsigned count = fChanSeqValid ? fChanSeq[kChanSeqCount] : 0;
+    const ieee80211com *ic = fController->fHalService->get80211Controller();
+    if (ic->ic_awdl_home_chan && ic->ic_awdl_listener_chan != ic->ic_awdl_home_chan) {
+        if (!fListenAlignedActive && awListenAllowed())
+            scheduleAlignedListen(now);
+        return;
+    }
     const apple80211_channel *slotChan = count ?
         (const apple80211_channel *)(fChanSeq + kChanSeqEntries) + (seq / pm) % count : nullptr;
     if (slotChan && !slotChan->channel) {
@@ -1014,7 +1028,6 @@ postAWEvents()
     if (slotChan) {
         ev.chan.channel = ownChannelAt(seq);
         ev.chan.flags = slotChan->flags;
-        const ieee80211com *ic = fController->fHalService->get80211Controller();
         if (ic->ic_awdl_listener_chan)
             ev.chan.flags = (ev.chan.channel <= 14 ? APPLE80211_C_FLAG_2GHZ :
                 APPLE80211_C_FLAG_5GHZ) | APPLE80211_C_FLAG_20MHZ;
@@ -1282,7 +1295,11 @@ maybeListen(uint32_t slotChannel, uint16_t seq)
     unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
     if (unsigned forced = awListenChannelOverride())
         slotChannel = forced;
-    if (home == slotChannel) {
+    if (ic->ic_awdl_home_chan) {
+        if (home != ic->ic_awdl_home_chan)
+            return;
+        slotChannel = home;
+    } else if (home == slotChannel) {
         fListenSkippedHome++;
         return;
     }
@@ -1442,6 +1459,8 @@ ownChannelAt(uint16_t seq) const
     // A standing link cannot follow the system's hopping sequence. Keep idle slots.
     if (c->channel && ic && ic->ic_awdl_listener_chan)
         return ic->ic_awdl_listener_chan;
+    if (c->channel && ic && ic->ic_awdl_home_chan)
+        return ic->ic_awdl_home_chan;
     return (uint8_t)c->channel;
 }
 
@@ -1457,6 +1476,9 @@ scheduleOwnListen(uint64_t afterUs)
     if (!ic || ic->ic_state != IEEE80211_S_RUN || !ic->ic_bss)
         return false;
     unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
+    const bool homeOnly = ic->ic_awdl_home_chan != 0;
+    if (homeOnly && home != ic->ic_awdl_home_chan)
+        return false;
     uint64_t now = hostUs();
     // Data frames are only accepted while a peer is around (see ic_awdl_want_data);
     // the P2P MAC picks the change up before the next dwell.
@@ -1474,7 +1496,8 @@ scheduleOwnListen(uint64_t afterUs)
         for (unsigned i = 0; i < 4; i++)
             if (kSocial[i] != home)
                 list[n++] = kSocial[i];
-        fListenNextChan = listener ? listener : list[(now / kHuntStepUs) % n];
+        fListenNextChan = homeOnly ? home :
+            listener ? listener : list[(now / kHuntStepUs) % n];
         fListenNextDwellTU = kHuntDwellTU;
         // On hardware an iPhone's unicast frames to awdl0 arrived while none of its broadcast
         // PSF/MIF did, so the firmware filter drops broadcast frames that carry the AWDL BSSID.
@@ -1502,14 +1525,17 @@ scheduleOwnListen(uint64_t afterUs)
         uint16_t seq = (uint16_t)(fRefSeq + k * pm);
         uint8_t chan = ownChannelAt(seq);
         bool fromPeer = false;
-        if ((!chan || chan == home) && usePeer) {
+        if (homeOnly && usePeer &&
+            peerChannelAt((uint64_t)(fRefUs + k * slot + slot / 2)) != home)
+            continue;
+        if (!homeOnly && (!chan || chan == home) && usePeer) {
             unsigned pc = peerChannelAt((uint64_t)(fRefUs + k * slot + slot / 2));
             if (pc && pc != home) {
                 chan = (uint8_t)pc;
                 fromPeer = true;
             }
         }
-        if (!chan || chan == home ||
+        if (!chan || (!homeOnly && chan == home) ||
             (ic->ic_awdl_listener_chan && chan != ic->ic_awdl_listener_chan))
             continue;
         unsigned run = 1;
@@ -1591,7 +1617,10 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *)
     ieee80211com *ic = that->fController->fHalService->get80211Controller();
     if (ic && ic->ic_awdl_listen && ic->ic_state == IEEE80211_S_RUN && ic->ic_bss) {
         unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
-        if (home != that->fListenNextChan && !(++that->fListenSlot % that->fListenEveryNth)) {
+        const bool matches = ic->ic_awdl_home_chan ?
+            home == ic->ic_awdl_home_chan && that->fListenNextChan == home :
+            home != that->fListenNextChan;
+        if (matches && !(++that->fListenSlot % that->fListenEveryNth)) {
             uint64_t before = that->fListenStarted;
             that->startListen(that->fListenNextChan, dwell, home, true);
             if (that->fListenStarted != before) {

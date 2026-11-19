@@ -32,7 +32,7 @@ Every card it supported still works, on macOS's own Wi-Fi, with no HeliPort and 
 | 6 GHz | AX210/AX211/AX411, BE | ✅ on BE200 |
 | 802.11be (EHT), 320 MHz, multi-link (eMLSR) | BE | ✅ 320 MHz on hardware; a multi-link router joins; link pairing still experimental |
 | Sleep and wake, recovery from firmware errors | all | ✅ |
-| AirDrop / AWDL | iwm, AX, BE | 🧪 experimental, see [Continuity](#continuity) |
+| AirDrop / AWDL | iwn (PAN), iwm, AX, BE | 🧪 experimental, see [Continuity](#continuity) |
 | Instant Hotspot (iPhone in the Wi-Fi menu) | all | 🧪 in development |
 
 **Measured on a BE200** (macOS 26, 6 GHz, 320 MHz, two streams): link rate 2882 Mbit/s, **2.55 Gbit/s
@@ -95,6 +95,7 @@ radio (Wi-Fi 7 eMLSR is single radio too), so the firmware time-shares the two:
   station link (the combination Linux allows on two channels). The firmware's activation rules are being
   worked out from its own code; not working yet.
 - **iwm cards** (7000, 8000 and 9000 series): the standing listener starts after joining Wi-Fi. All bundled iwm firmware advertises the required P2P and DQA capabilities. The expanded hardware coverage is experimental and awaits hardware results.
+- **iwn cards with PAN and P2P** (first targets: 6205 and 6235): connect to a Wi-Fi network on channel 6 and boot with `-itlawdl`. The driver checks firmware and EEPROM capabilities and uses the PAN context on that same channel. AirDrop is experimental and awaits hardware verification.
 
 Bluetooth LE advertising and scanning must work on macOS first. Test packages ship a matching
 [BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM) whose Intel patches are on by default: LE
