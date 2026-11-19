@@ -113,6 +113,7 @@
 #include <HAL/ItlAWDLBootArg.hpp>
 
 static bool iwx_awdl_legacy_ba_enabled();
+static bool iwx_awdl_client_enabled();
 #include "if_iwxapi86.h"
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -7130,12 +7131,14 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         return;
     const bool awdlListener = sc->sc_use_mld_api && sc->sc_listener_up &&
         ba_res->sta_id == IWX_LISTENER_STA_ID;
+    const bool awdlClient = sc->sc_use_mld_api && sc->sc_listener_up && iwx_awdl_client_enabled();
+    const bool awdlBroadcast = awdlClient && ba_res->sta_id == IWX_AWDL_BCAST_STA_ID;
     const bool awdlPeer = sc->sc_use_mld_api && sc->sc_awdl_peer_added &&
         ba_res->sta_id == IWX_AWDL_PEER_STA_ID;
     if (ba_res->sta_id >= 32 ||
         (sc->sc_use_mld_api ?
             (!(sc->sc_mld_sta_mask & (1U << ba_res->sta_id)) &&
-             !awdlPeer && !awdlListener) :
+             !awdlPeer && !awdlListener && !awdlBroadcast) :
             ba_res->sta_id != IWX_STATION_ID))
         return;
     if (le32toh(ba_res->flags) != IWX_BA_RESP_TX_BAR && le32toh(ba_res->flags) != IWX_BA_RESP_TX_AGG){
@@ -7158,9 +7161,11 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         qid = le16toh(ba_tfd->q_num);
         if (qid >= nitems(sc->txq) || !sc->txq[qid].ring_count)
             continue;
-        /* The listener's queues belong to a separate firmware station. */
-        if (awdlListener && qid != sc->sc_aux_roc_qid &&
-            qid != sc->sc_awdl_listener_data_qid && qid != sc->sc_awdl_listener_llw_qid)
+        if (awdlBroadcast && qid != sc->sc_aux_roc_qid)
+            continue;
+        if (awdlListener && qid != sc->sc_awdl_listener_data_qid &&
+            qid != sc->sc_awdl_listener_llw_qid &&
+            (awdlClient || qid != sc->sc_aux_roc_qid))
             continue;
         if (awdlPeer) {
             const uint8_t tid = ba_tfd->tid;
@@ -7169,6 +7174,8 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
                 expected_qid = sc->sc_awdl_peer_qid;
             else if (tid == 6)
                 expected_qid = sc->sc_awdl_peer_llw_qid;
+            else if (tid == IWX_MGMT_TID)
+                expected_qid = sc->sc_awdl_peer_mgmt_qid;
             if (qid != expected_qid)
                 continue;
         }
@@ -7179,7 +7186,7 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         reclaimed |= ring->queued < queued;
         iwx_clear_oactive(sc, ring);
     }
-    if ((awdlListener || awdlPeer) && reclaimed) {
+    if ((awdlListener || awdlBroadcast || awdlPeer) && reclaimed) {
         const uint32_t txed = le16toh(ba_res->txed);
         const uint32_t done = le16toh(ba_res->done);
         sc->sc_ic.ic_awdl_tx_ok += done;
@@ -12639,18 +12646,24 @@ iwx_awdl_listener_width(struct iwx_softc *sc, uint8_t chan)
  * the firmware crashed (NMI_INTERRUPT_LMAC_FATAL, 26 times in 3 minutes) every time it was activated
  * on 149 beside a station on 44/157, the same band on a different channel. Linux iwl-mld likewise only
  * runs links on different bands together. Failure stage: 1 MAC, 2 link add, 3 PHY, 4 link rates, 5 link
- * active, 6 station, 7 queue. A failure leaves the ROC listens as before.
+ * active, 6 station, 8 association, 11 broadcast station, 7 management queue, 9 data queue,
+ * 10 LLW queue and initial latency settings. A failure leaves the ROC listens as before.
  */
 int ItlIwx::
 iwx_mld_listener_setup(struct iwx_softc *sc)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     uint32_t stage = 0;
-    int err = 0, queue, dataQueue = -1, llwQueue = -1, qtid;
+    int err = 0, queue, dataQueue = -1, llwQueue = -1;
     uint32_t qbit, qhad;
     bool mac_added = false, link_added = false, phy_added = false, phy_incomplete = false;
-    bool link_active = false, sta_added = false, mac_associated = false;
+    bool link_active = false, sta_added = false, mac_associated = false, bcast_added = false;
     bool queue_added = false, data_queue_added = false, llw_queue_added = false;
+    const bool client = iwx_awdl_client_enabled();
+    const int mgmtSta = client ? IWX_AWDL_BCAST_STA_ID : IWX_LISTENER_STA_ID;
+    const int mgmtTid = client ? IWX_MGMT_TID : IWX_MAX_TID_COUNT;
+    const size_t staCmdSize = iwx_lookup_cmd_ver(sc, IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD) == 2 ?
+        sizeof(struct iwx_mld_sta_cfg_cmd_v2) : sizeof(struct iwx_mld_mvm_sta_cfg_cmd);
     const uint8_t chan = iwx_awdl_listener_pick(sc);
     int generation = sc->sc_generation;
     /*
@@ -12664,7 +12677,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         sc->sc_pcitag->setProperty("AirportItlwm-AWDLSetupStage", value, 32);
     };
 
-    if (ic->ic_mld_link_count > 2 || sc->sc_capa_num_stations <= IWX_LISTENER_STA_ID || !chan)
+    if (ic->ic_mld_link_count > 2 || sc->sc_capa_num_stations <= mgmtSta || !chan)
         return ENOTSUP;
 
     sc->sc_listener_bi = ic->ic_awdl_sync_period_tu;
@@ -12682,7 +12695,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         memset(&cmd, 0, sizeof(cmd));
         cmd.id_and_color = htole32(IWX_LISTENER_MAC_ID);
         cmd.action = htole32(IWX_FW_CTXT_ACTION_ADD);
-        cmd.mac_type = htole32(iwx_awdl_client_enabled() ? IWX_FW_MAC_TYPE_P2P_STA :
+        cmd.mac_type = htole32(client ? IWX_FW_MAC_TYPE_P2P_STA :
             IWX_FW_MAC_TYPE_LISTENER);
         if (ic->ic_awdl_addr_gen)
             IEEE80211_ADDR_COPY(cmd.local_mld_addr, ic->ic_awdl_addr);
@@ -12690,7 +12703,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
             IEEE80211_ADDR_COPY(cmd.local_mld_addr, ic->ic_myaddr);
             cmd.local_mld_addr[0] ^= 0x02;
         }
-        if (iwx_awdl_client_enabled()) {
+        if (client) {
             /* iwl_mld_fill_mac_cmd_sta(): GRP, and beacons until associated. */
             cmd.filter_flags = htole32(IWX_MLD_MAC_CFG_FILTER_ACCEPT_GRP |
                 IWX_MLD_MAC_CFG_FILTER_ACCEPT_BEACON |
@@ -12742,7 +12755,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
     }
     if ((err = iwx_mld_listener_link(sc, IWX_FW_CTXT_ACTION_MODIFY,
         IWX_MLD_LINK_CONTEXT_MODIFY_RATES_INFO | IWX_MLD_LINK_CONTEXT_MODIFY_QOS_PARAMS |
-        (iwx_awdl_client_enabled() ? IWX_MLD_LINK_CONTEXT_MODIFY_BEACON_TIMING : 0), 0)) != 0)
+        (client ? IWX_MLD_LINK_CONTEXT_MODIFY_BEACON_TIMING : 0), 0)) != 0)
         goto fail;
     setupStage(5);
     if (generation != sc->sc_generation) {
@@ -12759,13 +12772,10 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         goto fail;
     }
     {
-        struct iwx_mld_sta_cfg_cmd_v2 cmd;
-        int cmd_ver = iwx_lookup_cmd_ver(sc, IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD);
-        size_t size = (cmd_ver == 2) ? sizeof(cmd) : sizeof(struct iwx_mld_mvm_sta_cfg_cmd);
-        memset(&cmd, 0, sizeof(cmd));
+        struct iwx_mld_sta_cfg_cmd_v2 cmd = {};
         cmd.sta_id = htole32(IWX_LISTENER_STA_ID);
         cmd.link_id = htole32(IWX_LISTENER_LINK_ID);
-        if (iwx_awdl_client_enabled()) {
+        if (client) {
             /* The 'AP' of this client: the AWDL BSSID, as a peer link station. */
             static const uint8_t kBssid[6] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
             const uint8_t *bssid = ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : kBssid;
@@ -12774,16 +12784,16 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
             IEEE80211_ADDR_COPY(cmd.peer_link_address, bssid);
             cmd.assoc_id = htole32(1);
         } else {
-            cmd.station_type = htole32(1);      /* STATION_TYPE_BCAST_MGMT */
+            cmd.station_type = htole32(IWX_STA_GENERAL_PURPOSE);
             cmd.mfp = htole32(1);
         }
         err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD),
-            0, size, &cmd);
+            0, staCmdSize, &cmd);
         if (err)
             goto fail;
         sta_added = true;
     }
-    if (iwx_awdl_client_enabled()) {
+    if (client) {
         /* iwl_mld_fill_mac_cmd_sta(): is_assoc is not allowed on ADD, set it when the station exists. */
         struct iwx_mld_mac_config_cmd cmd;
         setupStage(8);
@@ -12812,6 +12822,26 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
             goto fail;
         mac_associated = true;
     }
+    if (client) {
+        setupStage(11);
+        if (generation != sc->sc_generation) {
+            err = ENXIO;
+            goto fail;
+        }
+        /* Broadcast management has its own station on the same firmware link. */
+        struct iwx_mld_sta_cfg_cmd_v2 cmd = {};
+        cmd.sta_id = htole32(mgmtSta);
+        cmd.link_id = htole32(IWX_LISTENER_LINK_ID);
+        cmd.station_type = htole32(IWX_STA_GENERAL_PURPOSE);
+        cmd.mfp = htole32(1);
+        memset(cmd.peer_mld_address, 0xff, sizeof(cmd.peer_mld_address));
+        memset(cmd.peer_link_address, 0xff, sizeof(cmd.peer_link_address));
+        err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD),
+            0, staCmdSize, &cmd);
+        if (err)
+            goto fail;
+        bcast_added = true;
+    }
     setupStage(7);
     if (generation != sc->sc_generation) {
         err = ENXIO;
@@ -12821,11 +12851,9 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         err = EBUSY;
         goto fail;
     }
-    /* Keep the listener's control queue separate from its non-QoS group-data queue. */
-    qtid = iwx_awdl_client_enabled() ? IWX_MGMT_TID : IWX_MAX_TID_COUNT;
-    qbit = 1U << qtid;
+    qbit = 1U << mgmtTid;
     qhad = sc->sc_mld_txq_tidmask & qbit;
-    queue = iwx_tvqm_enable_txq(sc, qtid, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_LISTENER_STA_ID);
+    queue = iwx_tvqm_enable_txq(sc, mgmtTid, 0, IWX_DEFAULT_QUEUE_SIZE, mgmtSta);
     iwx_nic_unlock(sc);
     if (generation != sc->sc_generation) {
         err = ENXIO;
@@ -12885,6 +12913,8 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
     ic->ic_awdl_listener_chan = chan;
     sc->sc_listener_up = 1;
     if ((err = iwx_awdl_update_low_latency(sc)) != 0) {
+        if (generation != sc->sc_generation)
+            return err;
         sc->sc_listener_up = 0;
         sc->sc_p2p_queue = 0;
         sc->sc_aux_roc_qid = -1;
@@ -12911,11 +12941,12 @@ fail:
         }
         int cleanup = 0;
         if (queue_added && generation == sc->sc_generation) {
-            uint32_t tid = iwx_awdl_client_enabled() ? IWX_MGMT_TID : IWX_MAX_TID_COUNT;
-            uint32_t tidbit = 1U << tid;
+            const uint32_t tidbit = 1U << mgmtTid;
             uint32_t saved = sc->sc_mld_txq_tidmask & tidbit;
-            cleanup = iwx_mld_queue_cmd(sc, 1U << IWX_LISTENER_STA_ID,
-                tid, 1, 0, 0, 0, NULL, NULL);
+            cleanup = iwx_mld_queue_cmd(sc, 1U << mgmtSta,
+                mgmtTid, 1, 0, 0, 0, NULL, NULL);
+            if (generation != sc->sc_generation)
+                return err;
             sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~tidbit) | saved;
             if (!cleanup)
                 iwx_free_tx_ring(sc, &sc->txq[queue]);
@@ -12924,6 +12955,8 @@ fail:
             uint32_t saved = sc->sc_mld_txq_tidmask & (1U << 6);
             cleanup = iwx_mld_queue_cmd(sc, 1U << IWX_LISTENER_STA_ID,
                 6, 1, 0, 0, 0, NULL, NULL);
+            if (generation != sc->sc_generation)
+                return err;
             sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~(1U << 6)) | saved;
             if (!cleanup)
                 iwx_free_tx_ring(sc, &sc->txq[llwQueue]);
@@ -12932,11 +12965,19 @@ fail:
             uint32_t saved = sc->sc_mld_txq_tidmask & 1U;
             cleanup = iwx_mld_queue_cmd(sc, 1U << IWX_LISTENER_STA_ID,
                 0, 1, 0, 0, 0, NULL, NULL);
+            if (generation != sc->sc_generation)
+                return err;
             sc->sc_mld_txq_tidmask = (sc->sc_mld_txq_tidmask & ~1U) | saved;
             if (!cleanup)
                 iwx_free_tx_ring(sc, &sc->txq[dataQueue]);
         }
-        if (mac_associated) {
+        if (!cleanup && generation == sc->sc_generation && bcast_added) {
+            struct iwx_mld_mvm_remove_sta_cmd cmd = {};
+            cmd.sta_id = htole32(mgmtSta);
+            cleanup = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
+                IWX_MLD_STA_REMOVE_CMD), 0, sizeof(cmd), &cmd);
+        }
+        if (!cleanup && generation == sc->sc_generation && mac_associated) {
             struct iwx_mld_mac_config_cmd cmd = {};
             cmd.id_and_color = htole32(IWX_LISTENER_MAC_ID);
             cmd.action = htole32(IWX_FW_CTXT_ACTION_MODIFY);

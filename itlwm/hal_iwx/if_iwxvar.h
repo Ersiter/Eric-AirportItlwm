@@ -1041,6 +1041,7 @@ struct iwx_node {
 #define IWX_LISTENER_LINK_ID  3
 #define IWX_LISTENER_STA_ID   9
 #define IWX_AWDL_PEER_STA_ID 10
+#define IWX_AWDL_BCAST_STA_ID 11
 #define IWX_MONITOR_STA_ID 2
 
 #define IWX_ICT_SIZE		4096
