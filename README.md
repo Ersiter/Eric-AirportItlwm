@@ -18,7 +18,7 @@ macOS Tahoe 26 and Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 and 
 ---
 
 AirportItlwm taken from Wi-Fi 6 to Wi-Fi 7 (BE200, BE201), with AirDrop and Instant Hotspot on the way.
-Every card it supported still works, on macOS's own Wi-Fi, with no HeliPort.
+Every card it supported still works, on macOS's own Wi-Fi, with no HeliPort and no OpenCore Legacy Patcher Wi-Fi patches.
 
 ## What works
 

@@ -11,7 +11,7 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 ---
 
 在 AirportItlwm 的 Wi-Fi 6 基础上做到了 Wi-Fi 7（BE200、BE201），并在做隔空投送、即时热点。
-原有网卡全部保留，用的是 macOS 自带的 Wi-Fi，不需要 HeliPort。
+原有网卡全部保留，用的是 macOS 自带的 Wi-Fi，不需要 HeliPort，也不需要 OCLP 的无线补丁。
 
 ## 功能
 
