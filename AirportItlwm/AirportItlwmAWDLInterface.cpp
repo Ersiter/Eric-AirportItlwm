@@ -451,9 +451,10 @@ outputLowLatency(mbuf_t m, AirportItlwmLowLatencyEthernetInterface *source)
 {
     if (!awDataAllowed() || !fOwner || !_fCommandGate)
         return dropOutput(m, nullptr);
-    IOReturn result = _fCommandGate->runAction([](OSObject *, void *owner, void *pkt, void *sender, void *) -> IOReturn {
+    IOReturn result = _fCommandGate->runAction([](OSObject *target, void *owner, void *pkt, void *sender, void *) -> IOReturn {
         auto *awdl = static_cast<AirportItlwmAWDLInterface *>(owner);
-        auto *llw = awdl->fController ? awdl->fController->fLLWBsdIf : nullptr;
+        auto *driver = static_cast<AirportItlwm *>(target);
+        auto *llw = driver->fLLWBsdIf;
         if (!llw || llw != sender || !llw->bsdRegistrationComplete() ||
             llw->bsdRegistrationResult() != kIOReturnSuccess)
             return kIOReturnNotReady;
