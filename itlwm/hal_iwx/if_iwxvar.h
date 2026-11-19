@@ -977,6 +977,7 @@ struct iwx_softc {
 	uint8_t sc_awdl_rate_step;     /* data-frame rate ladder on the legacy listener, 0 = 54 Mbit/s OFDM */
 	uint16_t sc_awdl_rate_ok, sc_awdl_rate_fail;
 	uint8_t sc_listener_tries;
+	bool sc_listener_restore_pending;
 	struct iwx_phy_ctxt sc_listener_phy;
 	uint8_t sc_awdl_mc_variant;	/* multicast filter variant active during this listen (0 = station's) */
 	uint32_t sc_awdl_mc_roc_count;

@@ -10959,14 +10959,11 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
         ((iwx_awdl_listener_enabled() || iwx_awdl_client_enabled()) && sc->sc_use_mld_api)) {
         if (sc->sc_use_mld_api && iwx_awdl_client_enabled() && ic->ic_awdl_sync_period_tu < 17)
             return EAGAIN;
-        /*
-         * sc_listener_tries survives firmware restarts: one attempt per boot, never a crash loop.
-         * Only with the station associated: the hunt runs from the first scan on, and in AWDL-8 both
-         * attempts were spent right after a firmware start, in INIT, where ic_bss is a placeholder node
-         * whose channel says nothing, and neither the band choice nor the result meant anything.
-         */
-        if (!sc->sc_listener_up && sc->sc_listener_tries < 1 && ic->ic_state == IEEE80211_S_RUN &&
+        /* Allow one initial setup and one restore of an established MLD listener per boot. */
+        if (!sc->sc_listener_up && (!sc->sc_listener_tries || sc->sc_listener_restore_pending) &&
+            ic->ic_state == IEEE80211_S_RUN &&
             ic->ic_bss && ic->ic_bss->ni_chan != IEEE80211_CHAN_ANYC) {
+            sc->sc_listener_restore_pending = false;
             sc->sc_listener_tries++;
             ic->ic_awdl_listener_tries = sc->sc_listener_tries;
             err = sc->sc_use_mld_api ?
@@ -13091,9 +13088,10 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
     sc->sc_listener_up = 1;
-    if ((err = iwx_awdl_update_low_latency(sc)) != 0) {
-        if (generation != sc->sc_generation)
-            return err;
+    err = iwx_awdl_update_low_latency(sc);
+    if (generation != sc->sc_generation)
+        return ENXIO;
+    if (err) {
         sc->sc_listener_up = 0;
         sc->sc_p2p_queue = 0;
         sc->sc_aux_roc_qid = -1;
@@ -13105,6 +13103,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         goto fail;
     }
     setupStage(0);
+    sc->sc_listener_restore_pending = sc->sc_listener_tries == 1;
     static const uint8_t noPeer[IEEE80211_ADDR_LEN] = {};
     if (!IEEE80211_ADDR_EQ(sc->sc_awdl_peer_target, noPeer))
         task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
