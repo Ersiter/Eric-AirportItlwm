@@ -5,16 +5,19 @@
 Needs `pip install budoux` for line-break hints in Chinese. Without it the Chinese pages still build, with
 breaks anywhere, which is what this script exists to avoid.
 """
+import hashlib
 import html
 import os
 import re
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from strings import BASE, LANGS, S, URLS  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 DOCS = os.path.join(ROOT, 'docs')
+STYLE_VERSION = hashlib.sha256(Path(DOCS, 'style.css').read_bytes()).hexdigest()[:12]
 
 try:
     import budoux
@@ -163,7 +166,7 @@ def page(code, folder, native, hl):
 <link rel="canonical" href="{BASE + (folder + '/' if folder else '')}">
 {alternates}
 <link rel="icon" type="image/png" href="{up}be200-icon.png">
-<link rel="stylesheet" href="{up}style.css">
+<link rel="stylesheet" href="{up}style.css?v={STYLE_VERSION}">
 {root_js}<script src="{up}lang.js"></script>
 <script defer src="{up}app.js"></script>
 </head>
