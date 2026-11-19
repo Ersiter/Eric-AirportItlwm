@@ -124,6 +124,7 @@ h1 { font-size: clamp(2rem, 1.2rem + 3.2vw, 3.2rem); letter-spacing: -.02em; max
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .credit-line { color: var(--muted); font-size: .95rem; margin-top: 4px; }
+.star-line { font-size: .95rem; margin-top: 4px; }
 .hero-art img { width: 100%; max-width: 220px; display: block; margin-inline: auto; filter: drop-shadow(0 14px 22px rgba(10, 40, 110, .35)); }
 @media (prefers-color-scheme: dark) { .hero-art img { filter: drop-shadow(0 10px 28px rgba(90, 168, 255, .28)); } }
 

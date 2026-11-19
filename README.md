@@ -13,6 +13,8 @@ macOS Tahoe 26 and Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 and 
 
 <p align="center"><a href="README.zh-CN.md">简体中文</a></p>
 
+<p align="center">If it works for you, a ⭐ at the top right of this page helps other Intel users find it.</p>
+
 ---
 
 AirportItlwm taken from Wi-Fi 6 to Wi-Fi 7 (BE200, BE201), with AirDrop and Instant Hotspot on the way.

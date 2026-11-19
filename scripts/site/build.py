@@ -191,6 +191,7 @@ def page(code, folder, native, hl):
 <p class="lead">{md_(t['lead'])}</p>
 <p class="cta"><a class="btn primary" href="{URLS['latest']}">{t['cta'][0]}</a><a class="btn" href="{URLS['repo']}">{t['cta'][1]}</a><a class="btn" href="{URLS['issues']}">{t['cta'][2]}</a></p>
 <p class="credit-line">{md_(t['credit'])}</p>
+<p class="star-line">{md_(t['star'])}</p>
 </div>
 <div class="hero-art"><img src="{up}be200-icon.png" width="256" height="256" alt="Eric-AirportItlwm"></div>
 </div>

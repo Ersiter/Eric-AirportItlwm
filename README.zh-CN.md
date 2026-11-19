@@ -6,6 +6,8 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 
 <p align="center"><a href="README.md">English</a></p>
 
+<p align="center">如果觉得好用，欢迎点一下页面右上角的 ⭐ Star，让更多用 Intel 网卡的人看到。</p>
+
 ---
 
 在 AirportItlwm 的 Wi-Fi 6 基础上做到了 Wi-Fi 7（BE200、BE201），并在做隔空投送、即时热点。
