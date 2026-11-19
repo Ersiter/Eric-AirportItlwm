@@ -27,6 +27,7 @@
 class AirportItlwm;
 class AirportItlwmLowLatencyEthernetInterface;
 struct ieee80211_rxinfo;
+struct ieee80211com;
 
 // IO80211Family buffer objects. On macOS 26 they are used only through their vtables and the
 // interface's exports (slot offsets from the Tahoe kernel collection); on macOS 15 IO80211Buffer has
@@ -220,8 +221,13 @@ private:
     // Peer timeline, so a listen can start when the peer is on the channel.
     static void listenTimerFired(OSObject *owner, IOTimerEventSource *sender);
     void trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsigned rxChan);
-    bool parsePeerChanSeq(const uint8_t *v, size_t len);
-    unsigned peerChannelAt(uint64_t us) const;
+    struct PeerSchedule;
+    static bool parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len);
+    static unsigned peerChannelAt(const PeerSchedule &peer, uint64_t us);
+    static bool peerScheduleFresh(const PeerSchedule &peer, uint64_t us);
+    const PeerSchedule *findPeerSchedule(const uint8_t *address, uint64_t us) const;
+    bool peerCanSend(const uint8_t *address, uint8_t chan, uint64_t now) const;
+    void updatePeerChannels(ieee80211com *ic, uint64_t now) const;
     void scheduleAlignedListen(uint64_t afterUs);
     // -itlawdldata: dwell on our own channel sequence (what we advertise), as
     // Broadcom firmware does, instead of chasing the peer's sequence.
@@ -263,15 +269,19 @@ private:
     uint64_t fListenNoSlot;
     uint64_t fListenHunt;
     uint64_t fHuntStartUs;
-    bool fPeerValid;
-    ether_addr fPeerMac;
-    uint64_t fPeerSeenUs;
-    int64_t fPeerRefUs;             // a slot boundary of the peer
-    uint16_t fPeerRefSeq;
-    uint16_t fPeerPm;
-    uint32_t fPeerSlotUs;
-    uint8_t fPeerChan[16];
-    bool fPeerChanValid;
+    struct PeerSchedule {
+        ether_addr mac;
+        uint64_t seenUs;
+        int64_t refUs;
+        uint16_t refSeq, pm;
+        uint32_t slotUs;
+        uint8_t channels[16];
+        bool hasChannels;
+    };
+    PeerSchedule fPeers[8];
+    unsigned fListenPeer;
+    ether_addr fTxPeer;
+    uint64_t fTxPeerUs;
     uint64_t fPeerUpdates;
     uint64_t fPeerPredHit;
     uint64_t fPeerPredMiss;
@@ -305,7 +315,7 @@ private:
     // Stage 3 step 1 (-itlawdltx): send a PSF and an MI in the peer's AW
     // during each aligned listen dwell.
     static void txTimerFired(OSObject *owner, IOTimerEventSource *sender);
-    void scheduleTx(uint8_t chan, uint64_t slotStartUs);
+    void scheduleTx(uint8_t chan, uint64_t slotStartUs, uint64_t windowEndUs);
     void scheduleTxTimer();
     int sendAWDLFrame(bool mi, uint8_t chan, const uint8_t *destination,
         const uint8_t *payload, size_t payloadLen);
@@ -324,14 +334,15 @@ public:
     void publishDataState();
     // Ethernet frames from awdl0, sent as AWDL data frames during a dwell.
     void enqueueData(mbuf_t m);
-    void flushData();
+    void kickDataTx(uint64_t now);
+    bool flushData(ieee80211com *ic, bool lowLatency, uint64_t now);
     void enqueueLowLatencyData(mbuf_t m);
-    void flushLowLatencyData();
     void clearLowLatencyData();
     // 32 overflowed during AirDrop (AWDLDataTxDropFull): data only
     // leaves in the peer's slots, so a burst from the stack has to wait.
     enum { kDataQueueLen = 256 };
     mbuf_t fDataQ[kDataQueueLen];
+    uint64_t fDataQUs[kDataQueueLen];
     unsigned fDataQHead;
     unsigned fDataQCount;
     uint16_t fDataSeq;
@@ -341,12 +352,14 @@ public:
     uint64_t fDataTxDeferred;
     uint64_t fDataTxErr;
     mbuf_t fLowLatencyDataQ[kDataQueueLen];
+    uint64_t fLowLatencyDataQUs[kDataQueueLen];
     unsigned fLowLatencyDataQHead;
     unsigned fLowLatencyDataQCount;
     uint16_t fLowLatencySeq;
 private:
     IOTimerEventSource *fTxTimer;
     uint8_t fTxChan;
+    uint64_t fTxEndUs, fTxDataUs, fTxPollUs;
     uint8_t fTxPending;              // Pending PSF, data and MI events
     uint32_t fTxMIOffsetUs;
     uint32_t fTxMIBitmap;

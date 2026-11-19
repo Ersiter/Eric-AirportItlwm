@@ -681,6 +681,8 @@ struct ieee80211com {
     /* AWDL Block Ack negotiation handled against the listener peer station. */
     uint32_t        ic_awdl_ba_req;
     uint32_t        ic_awdl_ba_resp_sent;
+    uint8_t         ic_awdl_peer_channel_slots[3]; /* slots on 149, 44, 6 */
+    int             (*ic_awdl_tx_ready)(struct ieee80211com *, uint8_t);
     uint8_t         ic_awdl_listener_chan;  /* standing listener's channel, 0 = none */
     uint8_t         ic_awdl_home_chan;      /* required infrastructure channel, 0 = unrestricted */
     void            (*ic_awdl_stop)(struct ieee80211com *);

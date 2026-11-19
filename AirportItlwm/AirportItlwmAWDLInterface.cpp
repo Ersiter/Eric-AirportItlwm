@@ -459,7 +459,6 @@ outputLowLatency(mbuf_t m, AirportItlwmLowLatencyEthernetInterface *source)
             llw->bsdRegistrationResult() != kIOReturnSuccess)
             return kIOReturnNotReady;
         awdl->enqueueLowLatencyData((mbuf_t)pkt);
-        awdl->flushLowLatencyData();
         return kIOReturnSuccess;
     }, fOwner, m, source);
     return result == kIOReturnSuccess ? kIOReturnOutputSuccess : dropOutput(m, nullptr);
@@ -867,11 +866,13 @@ stopAWTimeline()
     if (fAWTimer)
         fAWTimer->cancelTimeout();
     fListenAlignedActive = false;
-    fPeerValid = false;
-    fPeerChanValid = false;
+    memset(fPeers, 0, sizeof(fPeers));
+    fListenPeer = 0;
+    fTxPeerUs = 0;
     if (fController) {
         if (ieee80211com *ic = fController->fHalService->get80211Controller()) {
             ic->ic_awdl_want_data = 0;
+            memset(ic->ic_awdl_peer_channel_slots, 0, sizeof(ic->ic_awdl_peer_channel_slots));
             if (ic->ic_awdl_stop)
                 ic->ic_awdl_stop(ic);
         }
@@ -879,6 +880,7 @@ stopAWTimeline()
     if (fListenTimer)
         fListenTimer->cancelTimeout();
     fTxPending = 0;
+    fTxEndUs = 0;
     if (fTxTimer)
         fTxTimer->cancelTimeout();
     // Nothing can leave without the timeline; do not send stale frames later.
@@ -1219,10 +1221,10 @@ publishListenState()
     setProperty("AWDLPeerPredHit", fPeerPredHit, 64);
     setProperty("AWDLPeerPredMiss", fPeerPredMiss, 64);
     setProperty("AWDLPeerErrUs", (uint64_t)(fPeerLastErrUs < 0 ? -fPeerLastErrUs : fPeerLastErrUs), 32);
-    if (fPeerChanValid) {
+    if (fPeers[fListenPeer].hasChannels) {
         char seq[16 * 4 + 1] = {};
         for (unsigned i = 0, n = 0; i < 16; i++)
-            n += snprintf(seq + n, sizeof(seq) - n, " %u", fPeerChan[i]);
+            n += snprintf(seq + n, sizeof(seq) - n, " %u", fPeers[fListenPeer].channels[i]);
         setProperty("AWDLPeerChanSeq", seq);
     }
     ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
@@ -1358,89 +1360,144 @@ static int64_t floorDiv(int64_t a, int64_t b)
 // Channel sequence as in a TLV 18 value (seemoo-lab/owl rx.c): count - 1,
 // encoding, duplicate count, step count, fill channel (2), then the entries.
 bool AirportItlwmAWDLInterface::
-parsePeerChanSeq(const uint8_t *v, size_t len)
+parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len)
 {
     if (len < 6 || v[0] + 1 != 16)
         return false;
-    size_t size = v[1] == 0 ? 1 : (v[1] == 1 || v[1] == 3) ? 2 : 0;
+    const size_t size = v[1] == 0 ? 1 : (v[1] == 1 || v[1] == 3) ? 2 : 0;
     if (!size || len < 6 + 16 * size)
         return false;
-    // Legacy keeps the channel in the second byte, op class in the first.
-    size_t at = v[1] == 1 ? 1 : 0;
+    const size_t at = v[1] == 1 ? 1 : 0;
     for (unsigned i = 0; i < 16; i++)
-        fPeerChan[i] = v[6 + i * size + at];
-    fPeerChanValid = true;
+        peer.channels[i] = v[6 + i * size + at];
+    peer.hasChannels = true;
     return true;
 }
 
-unsigned AirportItlwmAWDLInterface::
-peerChannelAt(uint64_t us) const
+bool AirportItlwmAWDLInterface::
+peerScheduleFresh(const PeerSchedule &peer, uint64_t us)
 {
-    if (!fPeerValid || !fPeerChanValid || !fPeerSlotUs || !fPeerPm)
-        return 0;
-    int64_t k = floorDiv((int64_t)us - fPeerRefUs, fPeerSlotUs);
-    uint16_t seq = (uint16_t)(fPeerRefSeq + k * fPeerPm);
-    return fPeerChan[(seq / fPeerPm) % 16];
+    return peer.seenUs && peer.hasChannels && us >= peer.seenUs && us - peer.seenUs <= kPeerStaleUs;
 }
 
-// Keep the timeline of the peer we hear, whoever our sync master is: when we
-// are master ourselves syncFromFrame learns nothing about it.
+unsigned AirportItlwmAWDLInterface::
+peerChannelAt(const PeerSchedule &peer, uint64_t us)
+{
+    if (!peer.hasChannels || !peer.slotUs || !peer.pm)
+        return 0;
+    const int64_t k = floorDiv((int64_t)us - peer.refUs, peer.slotUs);
+    const uint16_t seq = (uint16_t)(peer.refSeq + k * peer.pm);
+    return peer.channels[(seq / peer.pm) % 16];
+}
+
+const AirportItlwmAWDLInterface::PeerSchedule *AirportItlwmAWDLInterface::
+findPeerSchedule(const uint8_t *address, uint64_t us) const
+{
+    for (const auto &peer : fPeers)
+        if (peerScheduleFresh(peer, us) && IEEE80211_ADDR_EQ(&peer.mac, address))
+            return &peer;
+    return nullptr;
+}
+
+bool AirportItlwmAWDLInterface::
+peerCanSend(const uint8_t *address, uint8_t chan, uint64_t now) const
+{
+    if (IEEE80211_IS_MULTICAST(address))
+        return true;
+    const auto *peer = findPeerSchedule(address, now);
+    // A peer can be discovered through Bonjour before its first sync frame arrives.
+    return !peer || (peerChannelAt(*peer, now) == chan &&
+        peerChannelAt(*peer, now + 2 * 1024) == chan);
+}
+
+void AirportItlwmAWDLInterface::
+updatePeerChannels(ieee80211com *ic, uint64_t now) const
+{
+    const bool haveTarget = fTxPeerUs && now - fTxPeerUs <= kPeerReplaceUs;
+    const auto *peer = haveTarget ? findPeerSchedule((const uint8_t *)&fTxPeer, now) : nullptr;
+    if (!peer && !haveTarget)
+        peer = &fPeers[fListenPeer];
+    auto &slots = ic->ic_awdl_peer_channel_slots;
+    memset(slots, 0, sizeof(slots));
+    if (!peer || !peerScheduleFresh(*peer, now))
+        return;
+    for (const uint8_t channel : peer->channels) {
+        if (channel == 149)
+            slots[0]++;
+        else if (channel == 44)
+            slots[1]++;
+        else if (channel == 6)
+            slots[2]++;
+    }
+}
+
 void AirportItlwmAWDLInterface::
 trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsigned rxChan)
 {
     if (!fAWRunning || !awListenAllowed())
         return;
-    if (fPeerValid && memcmp(src, &fPeerMac, sizeof(fPeerMac))) {
-        if ((int64_t)(rxUs - fPeerSeenUs) < (int64_t)kPeerReplaceUs)
-            return;
-        fPeerValid = false;
-        fPeerChanValid = false;
+
+    unsigned index = 0;
+    for (unsigned i = 0; i < nitems(fPeers); i++) {
+        if (fPeers[i].seenUs && IEEE80211_ADDR_EQ(&fPeers[i].mac, src)) {
+            index = i;
+            break;
+        }
+        if (fPeers[i].seenUs < fPeers[index].seenUs)
+            index = i;
     }
-    // Checks the slot-to-channel mapping, which is inferred for a peer.
-    if (unsigned predicted = peerChannelAt(rxUs)) {
-        if (predicted == rxChan)
-            fPeerPredHit++;
-        else
-            fPeerPredMiss++;
-    }
+    const auto &old = fPeers[index];
+    const bool known = old.seenUs && IEEE80211_ADDR_EQ(&old.mac, src);
+    PeerSchedule peer = known ? old : PeerSchedule{};
     size_t off = kAWDLFixedHeaderLen;
     bool sync = false;
     while (off + 3 <= len) {
-        uint8_t type = af[off];
-        uint16_t tlen = af[off + 1] | (af[off + 2] << 8);
+        const uint8_t type = af[off];
+        const uint16_t tlen = af[off + 1] | (af[off + 2] << 8);
         const uint8_t *v = af + off + 3;
         if (off + 3 + tlen > len)
             break;
         if (type == kAWDLSyncParamsTLV && tlen >= 31) {
-            uint16_t down = v[1] | (v[2] << 8);
-            uint16_t period = v[5] | (v[6] << 8);
-            uint16_t pm = v[27];
-            uint16_t nextSeq = v[29] | (v[30] << 8);
+            const uint16_t down = v[1] | (v[2] << 8);
+            const uint16_t period = v[5] | (v[6] << 8);
+            const uint16_t pm = v[27];
+            const uint16_t nextSeq = v[29] | (v[30] << 8);
             if (period >= 4 && period <= 64 && pm >= 1 && pm <= 16) {
-                int64_t boundary = (int64_t)rxUs + (int64_t)down * 1024;
-                uint32_t slot = (uint32_t)period * pm * 1024;
-                if (fPeerValid && fPeerSlotUs == slot) {
-                    int64_t d = boundary - fPeerRefUs;
+                const int64_t boundary = (int64_t)rxUs + (int64_t)down * 1024;
+                const uint32_t slot = (uint32_t)period * pm * 1024;
+                if (known && index == fListenPeer && old.slotUs == slot) {
+                    const int64_t d = boundary - old.refUs;
                     fPeerLastErrUs = d - floorDiv(d + slot / 2, slot) * slot;
                 }
-                fPeerRefUs = boundary;
-                fPeerRefSeq = (uint16_t)(nextSeq / pm * pm + pm);
-                fPeerPm = pm;
-                fPeerSlotUs = slot;
+                peer.refUs = boundary;
+                peer.refSeq = (uint16_t)(nextSeq / pm * pm + pm);
+                peer.pm = pm;
+                peer.slotUs = slot;
                 sync = true;
             }
             if (tlen > 33)
-                parsePeerChanSeq(v + 33, tlen - 33);
+                parsePeerChanSeq(peer, v + 33, tlen - 33);
         } else if (type == kAWDLChanSeqTLV) {
-            parsePeerChanSeq(v, tlen);
+            parsePeerChanSeq(peer, v, tlen);
         }
         off += 3 + tlen;
     }
     if (!sync)
         return;
-    memcpy(&fPeerMac, src, sizeof(fPeerMac));
-    fPeerValid = true;
-    fPeerSeenUs = rxUs;
+    if (known && peerScheduleFresh(old, rxUs)) {
+        if (unsigned predicted = peerChannelAt(old, rxUs)) {
+            if (predicted == rxChan)
+                fPeerPredHit++;
+            else
+                fPeerPredMiss++;
+        }
+    }
+    const uint64_t referenceSeen = fPeers[fListenPeer].seenUs;
+    IEEE80211_ADDR_COPY(&peer.mac, src);
+    peer.seenUs = rxUs;
+    fPeers[index] = peer;
+    if (!referenceSeen || (rxUs >= referenceSeen && rxUs - referenceSeen >= kPeerReplaceUs))
+        fListenPeer = index;
     fPeerUpdates++;
     if (!fListenAlignedActive)
         scheduleAlignedListen(hostUs());
@@ -1482,7 +1539,9 @@ scheduleOwnListen(uint64_t afterUs)
     uint64_t now = hostUs();
     // Data frames are only accepted while a peer is around (see ic_awdl_want_data);
     // the P2P MAC picks the change up before the next dwell.
-    ic->ic_awdl_want_data = fPeerValid && now - fPeerSeenUs <= kPeerStaleUs;
+    const auto &peer = fPeers[fListenPeer];
+    ic->ic_awdl_want_data = peerScheduleFresh(peer, now);
+    updatePeerChannels(ic, now);
     uint64_t from = afterUs > now ? afterUs : now;
     if (awHuntAllowed() && !fHuntStartUs)
         fHuntStartUs = now;
@@ -1519,17 +1578,16 @@ scheduleOwnListen(uint64_t afterUs)
     // few seconds or IO80211Family drops it from NDP (lastAF ~6 s). When our own
     // slot keeps us home (or off AWDL) but the peer's slot at that time is on a
     // non-home channel, listen there instead (on unless -itlawdlnopeerlisten).
-    bool usePeer = awPeerListenAllowed() && fPeerValid && fPeerChanValid && fPeerSlotUs &&
-        fPeerPm && now - fPeerSeenUs <= kPeerStaleUs;
+    const bool usePeer = awPeerListenAllowed() && peerScheduleFresh(peer, now);
     for (int i = 0; i < 32; i++, k++) {
         uint16_t seq = (uint16_t)(fRefSeq + k * pm);
         uint8_t chan = ownChannelAt(seq);
         bool fromPeer = false;
         if (homeOnly && usePeer &&
-            peerChannelAt((uint64_t)(fRefUs + k * slot + slot / 2)) != home)
+            peerChannelAt(peer, (uint64_t)(fRefUs + k * slot + slot / 2)) != home)
             continue;
         if (!homeOnly && (!chan || chan == home) && usePeer) {
-            unsigned pc = peerChannelAt((uint64_t)(fRefUs + k * slot + slot / 2));
+            unsigned pc = peerChannelAt(peer, (uint64_t)(fRefUs + k * slot + slot / 2));
             if (pc && pc != home) {
                 chan = (uint8_t)pc;
                 fromPeer = true;
@@ -1569,27 +1627,28 @@ scheduleAlignedListen(uint64_t afterUs)
         scheduleOwnListen(afterUs);
         return;
     }
-    if (!fListenTimer || !fListenAlign || !fAWRunning || !fPeerValid || !fPeerChanValid || !fController)
+    if (!fListenTimer || !fListenAlign || !fAWRunning || !fController)
         return;
-    uint64_t now = hostUs();
-    if (now - fPeerSeenUs > kPeerStaleUs)
+    const uint64_t now = hostUs();
+    const auto &peer = fPeers[fListenPeer];
+    if (!peerScheduleFresh(peer, now))
         return;
     ieee80211com *ic = fController->fHalService->get80211Controller();
     if (!ic || ic->ic_state != IEEE80211_S_RUN || !ic->ic_bss)
         return;
     unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
     unsigned forced = awListenChannelOverride();
-    int64_t slot = fPeerSlotUs;
+    int64_t slot = peer.slotUs;
     uint64_t from = afterUs > now ? afterUs : now;
-    int64_t k = floorDiv((int64_t)from + kListenLeadUs - fPeerRefUs, slot) + 1;
+    int64_t k = floorDiv((int64_t)from + kListenLeadUs - peer.refUs, slot) + 1;
     for (int i = 0; i < 32; i++, k++) {
-        uint16_t seq = (uint16_t)(fPeerRefSeq + k * fPeerPm);
-        unsigned chan = fPeerChan[(seq / fPeerPm) % 16];
+        uint16_t seq = (uint16_t)(peer.refSeq + k * peer.pm);
+        unsigned chan = peer.channels[(seq / peer.pm) % 16];
         if (!chan || chan == home || (forced && chan != forced))
             continue;
         // Stay for the whole run of slots on this channel, up to the dwell limit.
         unsigned run = 1;
-        while (run < 16 && fPeerChan[((seq / fPeerPm) + run) % 16] == chan)
+        while (run < 16 && peer.channels[((seq / peer.pm) + run) % 16] == chan)
             run++;
         uint32_t dwell = (uint32_t)((run * slot + kListenLeadUs) / 1024);
         if (dwell > fListenDwellTU)
@@ -1597,7 +1656,7 @@ scheduleAlignedListen(uint64_t afterUs)
         fListenNextChan = (uint8_t)chan;
         fListenNextDwellTU = dwell;
         uint64_t abs;
-        nanoseconds_to_absolutetime((uint64_t)(fPeerRefUs + k * slot - kListenLeadUs) * 1000, &abs);
+        nanoseconds_to_absolutetime((uint64_t)(peer.refUs + k * slot - kListenLeadUs) * 1000, &abs);
         fListenTimer->cancelTimeout();
         fListenTimer->wakeAtTime(abs);
         fListenAlignedActive = true;
@@ -1626,7 +1685,8 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *)
             if (that->fListenStarted != before) {
                 if (awDataAllowed())
                     that->fListenOwn++;
-                that->scheduleTx(that->fListenNextChan, now + kListenLeadUs);
+                that->scheduleTx(that->fListenNextChan, now + kListenLeadUs,
+                    now + (uint64_t)dwell * 1024);
             }
         }
     }
@@ -1652,16 +1712,15 @@ enum : uint8_t {
 };
 
 void AirportItlwmAWDLInterface::
-scheduleTx(uint8_t chan, uint64_t slotStartUs)
+scheduleTx(uint8_t chan, uint64_t slotStartUs, uint64_t windowEndUs)
 {
     if (!awTxAllowed() || !fTxTimer || !fAWRunning)
         return;
-    if (fAfTxMode == 3) {
-        fTxSkipMode++;
-        return;
-    }
     fTxChan = chan;
     fTxSlotUs = slotStartUs;
+    fTxEndUs = windowEndUs;
+    fTxDataUs = kTxDataAtUs;
+    fTxPollUs = 0;
     fTxPending = kTxPendingPSF | kTxPendingData;
     if (fMITmplLen && fChanSeqValid) {
         const uint32_t count = fChanSeq[kChanSeqCount];
@@ -1683,12 +1742,12 @@ scheduleTxTimer()
     uint64_t nextUs = 0xffffffffffffffffULL;
     if (fTxPending & kTxPendingPSF)
         nextUs = kTxPSFAtUs;
-    if ((fTxPending & kTxPendingData) && kTxDataAtUs < nextUs)
-        nextUs = kTxDataAtUs;
+    if ((fTxPending & kTxPendingData) && fTxDataUs < nextUs)
+        nextUs = fTxDataUs;
     if ((fTxPending & kTxPendingMI) && fTxMIOffsetUs < nextUs)
         nextUs = fTxMIOffsetUs;
     uint64_t abs;
-    nanoseconds_to_absolutetime((fTxSlotUs + nextUs) * 1000, &abs);
+    nanoseconds_to_absolutetime(MIN(fTxEndUs, MAX(fTxSlotUs + nextUs, fTxPollUs)) * 1000, &abs);
     fTxTimer->cancelTimeout();
     fTxTimer->wakeAtTime(abs);
 }
@@ -1700,22 +1759,36 @@ txTimerFired(OSObject *owner, IOTimerEventSource *)
     if (!that || !that->fTxPending || !that->fAWRunning)
         return;
     uint64_t now = hostUs();
+    if (now >= that->fTxEndUs) {
+        that->fTxPending = 0;
+        return;
+    }
+    ieee80211com *ic = that->fController->fHalService->get80211Controller();
+    if (!ic || (ic->ic_awdl_tx_ready && !ic->ic_awdl_tx_ready(ic, that->fTxChan))) {
+        that->fTxPollUs = now + 1024;
+        that->scheduleTxTimer();
+        return;
+    }
+    that->fTxPollUs = 0;
     uint64_t elapsed = now > that->fTxSlotUs ? now - that->fTxSlotUs : 0;
     if ((that->fTxPending & kTxPendingPSF) && elapsed >= kTxPSFAtUs) {
-        if (that->fSyncTmplLen)
+        if (that->fAfTxMode == 3 && !that->isSyncMaster())
+            that->fTxSkipMode++;
+        else if (that->fSyncTmplLen)
             that->sendAWDLFrame(false, that->fTxChan, nullptr, that->fSyncTmpl, that->fSyncTmplLen);
         that->fTxPending &= ~kTxPendingPSF;
     }
-    if ((that->fTxPending & kTxPendingData) && elapsed >= kTxDataAtUs) {
+    if ((that->fTxPending & kTxPendingData) && elapsed >= that->fTxDataUs) {
+        bool pending = false;
         if (awDataAllowed()) {
-            that->flushLowLatencyData();
-            unsigned pc = that->peerChannelAt(now);
-            if (!pc || pc == that->fTxChan)
-                that->flushData();
-            else if (that->fDataQCount)
-                that->fDataTxNotCommon++;
+            pending = that->flushData(ic, true, now);
+            pending |= that->flushData(ic, false, now);
+            that->updatePeerChannels(ic, now);
         }
-        that->fTxPending &= ~kTxPendingData;
+        if (pending)
+            that->fTxDataUs = elapsed + 1024;
+        else
+            that->fTxPending &= ~kTxPendingData;
     }
     if ((that->fTxPending & kTxPendingMI) && elapsed >= that->fTxMIOffsetUs) {
         if (that->fMITmplLen &&
@@ -1895,69 +1968,134 @@ enqueueData(mbuf_t m)
         mbuf_freem(m);
         return;
     }
-    fDataQ[(fDataQHead + fDataQCount) % kDataQueueLen] = m;
+    const auto index = (fDataQHead + fDataQCount) % kDataQueueLen;
+    const auto now = hostUs();
+    fDataQ[index] = m;
+    fDataQUs[index] = now;
     fDataQCount++;
     fDataTxQueued++;
+    kickDataTx(now);
 }
 
-// Ethernet -> 802.11 data (no QoS) + LLC/SNAP 00:17:f2 0x0800 + AWDL data
-// header (0x0403 LE, sequence LE, pad, ethertype BE) + payload, as OWL's
-// awdl_init_full_data_frame. Sent on the P2P queue while dwelling on the
-// peer's channel; frames that cannot go out yet stay queued.
 void AirportItlwmAWDLInterface::
-flushData()
+kickDataTx(uint64_t now)
 {
-    ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
-    if (!ic || !ic->ic_awdl_tx)
+    if (!fAWRunning || !fTxTimer || now < fTxSlotUs || now >= fTxEndUs ||
+        (fTxPending & kTxPendingData))
         return;
-    static uint8_t frame[2048];             // work loop only
-    while (fDataQCount) {
-        mbuf_t m = fDataQ[fDataQHead];
-        size_t plen = mbuf_pkthdr_len(m);
-        const size_t hdr = sizeof(struct ieee80211_frame), llc = 8, ad = 8;
-        if (plen < 14 || hdr + llc + ad + plen - 14 > sizeof(frame)) {
-            fDataTxErr++;
+    fTxPending |= kTxPendingData;
+    fTxDataUs = MAX((uint64_t)kTxDataAtUs, now - fTxSlotUs);
+    scheduleTxTimer();
+}
+
+static const uint64_t kDataMaxAgeUs = 10000000;
+
+// Keep held frames in order per destination while other destinations can use this window.
+bool AirportItlwmAWDLInterface::
+flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
+{
+    auto transmit = lowLatency ? ic->ic_awdl_llw_tx : ic->ic_awdl_tx;
+    if (!transmit)
+        return false;
+    auto &queue = lowLatency ? fLowLatencyDataQ : fDataQ;
+    auto &queuedUs = lowLatency ? fLowLatencyDataQUs : fDataQUs;
+    const unsigned head = lowLatency ? fLowLatencyDataQHead : fDataQHead;
+    auto &count = lowLatency ? fLowLatencyDataQCount : fDataQCount;
+    auto *interface = lowLatency ?
+        static_cast<AirportItlwmEthernetInterface *>(fController->fLLWBsdIf) :
+        static_cast<AirportItlwmEthernetInterface *>(fController->fAWDLBsdIf);
+    ifnet_t ifp = interface ? interface->getIfnet() : nullptr;
+    static uint8_t frame[2048]; // work loop only
+    const size_t hdr = sizeof(struct ieee80211_frame);
+    const size_t qos = lowLatency && ic->ic_awdl_llw_qos ? 2 : 0;
+    const size_t overhead = hdr + qos + 8 + (lowLatency ? 0 : 8);
+    unsigned kept = 0;
+    bool backpressure = false;
+
+    for (unsigned i = 0; i < count; i++) {
+        const unsigned index = (head + i) % kDataQueueLen;
+        mbuf_t m = queue[index];
+        queue[index] = nullptr;
+        uint8_t eh[14];
+        const size_t length = mbuf_pkthdr_len(m);
+        int err = 0;
+        if (now - queuedUs[index] > kDataMaxAgeUs) {
+            err = ETIMEDOUT;
+        } else if (backpressure) {
+            err = EAGAIN;
+        } else if (length < sizeof(eh) || overhead + length - sizeof(eh) > sizeof(frame) ||
+            mbuf_copydata(m, 0, sizeof(eh), eh)) {
+            err = EINVAL;
         } else {
-            uint8_t eh[14];
-            mbuf_copydata(m, 0, sizeof(eh), eh);
-            memset(frame, 0, hdr + llc + ad);
-            struct ieee80211_frame *wh = (struct ieee80211_frame *)frame;
-            wh->i_fc[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_DATA | IEEE80211_FC0_SUBTYPE_DATA;
-            memcpy(wh->i_addr1, eh, 6);
-            memcpy(wh->i_addr2, &fMac, 6);
-            memcpy(wh->i_addr3, ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : kAWDLBssid, 6);
-            uint16_t sc = (uint16_t)(fTxSeq++ << 4);
-            wh->i_seq[0] = sc & 0xff;
-            wh->i_seq[1] = sc >> 8;
-            uint8_t *l = frame + hdr;
-            l[0] = 0xaa; l[1] = 0xaa; l[2] = 0x03;
-            l[3] = 0x00; l[4] = 0x17; l[5] = 0xf2;
-            l[6] = 0x08; l[7] = 0x00;
-            uint8_t *a = l + llc;
-            a[0] = 0x03; a[1] = 0x04;
-            a[2] = fDataSeq & 0xff; a[3] = fDataSeq >> 8;
-            a[6] = eh[12]; a[7] = eh[13];
-            mbuf_copydata(m, 14, plen - 14, a + ad);
-            int err = ic->ic_awdl_tx(ic, fTxChan, frame, hdr + llc + ad + plen - 14);
-            if (err == EAGAIN) {
-                fDataTxDeferred++;
-                return;             // keep it for the next dwell
+            if (!IEEE80211_IS_MULTICAST(eh) &&
+                (!fTxPeerUs || now - fTxPeerUs > kPeerReplaceUs || IEEE80211_ADDR_EQ(&fTxPeer, eh))) {
+                IEEE80211_ADDR_COPY(&fTxPeer, eh);
+                fTxPeerUs = now;
             }
-            if (err) {
-                fDataTxErr++;
+            const auto txUs = hostUs();
+            if (txUs >= fTxEndUs) {
+                backpressure = true;
+                err = EAGAIN;
+            } else if (!peerCanSend(eh, fTxChan, txUs)) {
+                fDataTxNotCommon++;
+                err = EAGAIN;
             } else {
-                fDataTx++;
-                fDataSeq++;
-                // if_output counts the bytes; packets come from the driver stats.
-                if (fController && fController->fAWDLBsdIf && fController->fAWDLBsdIf->getIfnet())
-                    ifnet_stat_increment_out(fController->fAWDLBsdIf->getIfnet(), 1, 0, 0);
+                memset(frame, 0, overhead);
+                auto *wh = reinterpret_cast<struct ieee80211_frame *>(frame);
+                wh->i_fc[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_DATA |
+                    (qos ? IEEE80211_FC0_SUBTYPE_QOS : IEEE80211_FC0_SUBTYPE_DATA);
+                IEEE80211_ADDR_COPY(wh->i_addr1, eh);
+                IEEE80211_ADDR_COPY(wh->i_addr2, &fMac);
+                IEEE80211_ADDR_COPY(wh->i_addr3, ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : kAWDLBssid);
+                const uint16_t sequence = (uint16_t)((lowLatency ? fLowLatencySeq : fTxSeq) << 4);
+                wh->i_seq[0] = sequence & 0xff;
+                wh->i_seq[1] = sequence >> 8;
+                if (qos)
+                    frame[hdr] = 6;
+                uint8_t *snap = frame + hdr + qos;
+                snap[0] = 0xaa; snap[1] = 0xaa; snap[2] = 0x03;
+                if (lowLatency) {
+                    snap[6] = eh[12]; snap[7] = eh[13];
+                } else {
+                    snap[4] = 0x17; snap[5] = 0xf2; snap[6] = 0x08;
+                    uint8_t *awdl = snap + 8;
+                    awdl[0] = 0x03; awdl[1] = 0x04;
+                    awdl[2] = fDataSeq & 0xff; awdl[3] = fDataSeq >> 8;
+                    awdl[6] = eh[12]; awdl[7] = eh[13];
+                }
+                mbuf_copydata(m, sizeof(eh), length - sizeof(eh), frame + overhead);
+                err = transmit(ic, fTxChan, frame, overhead + length - sizeof(eh));
+                backpressure = err == EAGAIN || err == EBUSY || err == ENOBUFS;
+                if (backpressure)
+                    fDataTxDeferred++;
             }
         }
+        if (err == EAGAIN || err == EBUSY || err == ENOBUFS) {
+            const unsigned to = (head + kept++) % kDataQueueLen;
+            queue[to] = m;
+            queuedUs[to] = queuedUs[index];
+            continue;
+        }
+        if (err) {
+            if (!lowLatency)
+                fDataTxErr++;
+            else if (ifp)
+                ifnet_stat_increment_out(ifp, 0, 1, 0);
+        } else {
+            if (lowLatency) {
+                fLowLatencySeq++;
+            } else {
+                fTxSeq++;
+                fDataSeq++;
+                fDataTx++;
+            }
+            if (ifp)
+                ifnet_stat_increment_out(ifp, 1, 0, 0);
+        }
         mbuf_freem(m);
-        fDataQ[fDataQHead] = nullptr;
-        fDataQHead = (fDataQHead + 1) % kDataQueueLen;
-        fDataQCount--;
     }
+    count = kept;
+    return count != 0;
 }
 
 void AirportItlwmAWDLInterface::
@@ -1973,8 +2111,12 @@ enqueueLowLatencyData(mbuf_t m)
         mbuf_freem(m);
         return;
     }
-    fLowLatencyDataQ[(fLowLatencyDataQHead + fLowLatencyDataQCount) % kDataQueueLen] = m;
+    const auto index = (fLowLatencyDataQHead + fLowLatencyDataQCount) % kDataQueueLen;
+    const auto now = hostUs();
+    fLowLatencyDataQ[index] = m;
+    fLowLatencyDataQUs[index] = now;
     fLowLatencyDataQCount++;
+    kickDataTx(now);
 }
 
 void AirportItlwmAWDLInterface::
@@ -1982,68 +2124,6 @@ clearLowLatencyData()
 {
     while (fLowLatencyDataQCount) {
         mbuf_freem(fLowLatencyDataQ[fLowLatencyDataQHead]);
-        fLowLatencyDataQ[fLowLatencyDataQHead] = nullptr;
-        fLowLatencyDataQHead = (fLowLatencyDataQHead + 1) % kDataQueueLen;
-        fLowLatencyDataQCount--;
-    }
-}
-
-void AirportItlwmAWDLInterface::
-flushLowLatencyData()
-{
-    ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
-    if (!ic || !ic->ic_awdl_llw_tx || !ic->ic_awdl_listener_chan)
-        return;
-    ifnet_t llwIfp = fController && fController->fLLWBsdIf ?
-        fController->fLLWBsdIf->getIfnet() : nullptr;
-    static uint8_t frame[2048];
-    const size_t hdr = sizeof(struct ieee80211_frame);
-    const size_t qos = ic->ic_awdl_llw_qos ? 2 : 0;
-    const size_t llc = 8;
-    static const uint8_t snap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
-
-    while (fLowLatencyDataQCount) {
-        mbuf_t m = fLowLatencyDataQ[fLowLatencyDataQHead];
-        size_t plen = mbuf_pkthdr_len(m);
-        if (plen < 14 || hdr + qos + llc + plen - 14 > sizeof(frame)) {
-            if (llwIfp)
-                ifnet_stat_increment_out(llwIfp, 0, 1, 0);
-        } else {
-            uint8_t eh[14];
-            mbuf_copydata(m, 0, sizeof(eh), eh);
-            memset(frame, 0, hdr + qos + llc);
-            struct ieee80211_frame *wh = (struct ieee80211_frame *)frame;
-            wh->i_fc[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_DATA;
-            if (qos)
-                wh->i_fc[0] |= IEEE80211_FC0_SUBTYPE_QOS;
-            memcpy(wh->i_addr1, eh, 6);
-            memcpy(wh->i_addr2, &fMac, 6);
-            memcpy(wh->i_addr3,
-                ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : kAWDLBssid, 6);
-            const uint16_t sc = (uint16_t)((fLowLatencySeq & 0x0fff) << 4);
-            wh->i_seq[0] = sc & 0xff;
-            wh->i_seq[1] = sc >> 8;
-            if (qos)
-                frame[hdr] = 6;
-            uint8_t *l = frame + hdr + qos;
-            memcpy(l, snap, sizeof(snap));
-            l[6] = eh[12];
-            l[7] = eh[13];
-            mbuf_copydata(m, 14, plen - 14, l + llc);
-            int err = ic->ic_awdl_llw_tx(ic, ic->ic_awdl_listener_chan, frame,
-                hdr + qos + llc + plen - 14);
-            if (err == EAGAIN || err == EBUSY || err == ENOBUFS)
-                return;
-            if (err) {
-                if (llwIfp)
-                    ifnet_stat_increment_out(llwIfp, 0, 1, 0);
-            } else {
-                fLowLatencySeq++;
-                if (llwIfp)
-                    ifnet_stat_increment_out(llwIfp, 1, 0, 0);
-            }
-        }
-        mbuf_freem(m);
         fLowLatencyDataQ[fLowLatencyDataQHead] = nullptr;
         fLowLatencyDataQHead = (fLowLatencyDataQHead + 1) % kDataQueueLen;
         fLowLatencyDataQCount--;
@@ -2689,13 +2769,9 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fListenNoSlot = 0;
     fListenHunt = 0;
     fHuntStartUs = 0;
-    fPeerValid = false;
-    fPeerSeenUs = 0;
-    fPeerRefUs = 0;
-    fPeerRefSeq = 0;
-    fPeerPm = 0;
-    fPeerSlotUs = 0;
-    fPeerChanValid = false;
+    memset(fPeers, 0, sizeof(fPeers));
+    fListenPeer = 0;
+    fTxPeerUs = 0;
     fPeerUpdates = 0;
     fPeerPredHit = 0;
     fPeerPredMiss = 0;
@@ -2717,7 +2793,7 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fTxPending = 0;
     fTxMIOffsetUs = 0;
     fTxMIBitmap = 0;
-    fTxSlotUs = 0;
+    fTxSlotUs = fTxEndUs = fTxDataUs = fTxPollUs = 0;
     fTxSeq = 0;
     fMasterChannel = 0;
     fTxPSF = 0;
