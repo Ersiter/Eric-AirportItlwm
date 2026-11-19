@@ -155,11 +155,18 @@ iwm_update_beacon_abort(struct iwm_softc *sc, struct iwm_node *in, int enable)
     return iwm_beacon_filter_send_cmd(sc, &cmd);
 }
 
+static bool
+iwm_power_save_allowed(struct iwm_softc *sc)
+{
+    return sc->sc_ic.ic_opmode != IEEE80211_M_MONITOR &&
+        (!sc->sc_awdl_binding_up ||
+         isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DYNAMIC_QUOTA));
+}
+
 void ItlIwm::
 iwm_power_build_cmd(struct iwm_softc *sc, struct iwm_node *in,
                     struct iwm_mac_power_cmd *cmd)
 {
-    struct ieee80211com *ic = &sc->sc_ic;
     struct ieee80211_node *ni = &in->in_ni;
     int dtim_period, dtim_msec, keep_alive;
     
@@ -181,7 +188,7 @@ iwm_power_build_cmd(struct iwm_softc *sc, struct iwm_node *in,
     keep_alive = roundup(keep_alive, 1000) / 1000;
     cmd->keep_alive_seconds = htole16(keep_alive);
     
-    if (ic->ic_opmode != IEEE80211_M_MONITOR)
+    if (iwm_power_save_allowed(sc))
         cmd->flags = htole16(IWM_POWER_FLAGS_POWER_SAVE_ENA_MSK);
 }
 
@@ -211,9 +218,8 @@ iwm_power_update_device(struct iwm_softc *sc)
 {
     XYLog("%s\n", __FUNCTION__);
     struct iwm_device_power_cmd cmd = { };
-    struct ieee80211com *ic = &sc->sc_ic;
     
-    if (ic->ic_opmode != IEEE80211_M_MONITOR)
+    if (iwm_power_save_allowed(sc))
         cmd.flags = htole16(IWM_DEVICE_POWER_FLAGS_POWER_SAVE_ENA_MSK);
     
     return iwm_send_cmd_pdu(sc,

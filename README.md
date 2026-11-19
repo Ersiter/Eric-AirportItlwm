@@ -30,7 +30,7 @@ Every card it supported still works, on macOS's own Wi-Fi, with no HeliPort.
 | 6 GHz | AX210/AX211/AX411, BE | ✅ on BE200 |
 | 802.11be (EHT), 320 MHz, multi-link (eMLSR) | BE | ✅ 320 MHz on hardware; a multi-link router joins; link pairing still experimental |
 | Sleep and wake, recovery from firmware errors | all | ✅ |
-| AirDrop / AWDL | AC (9260/9560), AX, BE | 🧪 experimental: a test package exists, results on real hardware are pending, see [Continuity](#continuity) |
+| AirDrop / AWDL | iwm, AX, BE | 🧪 experimental, see [Continuity](#continuity) |
 | Instant Hotspot (iPhone in the Wi-Fi menu) | all | 🧪 in development |
 
 **Measured on a BE200** (macOS 26, 6 GHz, 320 MHz, two streams): link rate 2882 Mbit/s, **2.55 Gbit/s
@@ -72,7 +72,7 @@ regulatory logic, as on Linux. There is nothing to set.
 | Argument | Effect |
 |---|---|
 | `-itlawdl` | Experimental AirDrop: this one switch turns on all of it, see below. Leave out unless testing |
-| `-itlawdlllw` | Experimental companion interface (`llw0`) for Sidecar and Continuity Camera on the BE, AX and 9260/9560 AWDL paths. Requires `-itlawdl` and, on 9260/9560, `-itlawdlac`. Off by default |
+| `-itlawdlllw` | Experimental companion interface (`llw0`) for Sidecar and Continuity Camera on the BE, AX and iwm AWDL paths. Requires `-itlawdl`. Off by default |
 | `itlwm_he=0` | Turn HE/EHT (802.11ax/be) off. On by default |
 | `itlwm_log=1` | Verbose driver log in `dmesg`. Release builds only log errors and what the device is doing; Debug builds log everything |
 
@@ -92,7 +92,7 @@ radio (Wi-Fi 7 eMLSR is single radio too), so the firmware time-shares the two:
 - **BE cards** (MLD firmware): the same idea in the MLD command set, as a P2P client link next to the
   station link (the combination Linux allows on two channels). The firmware's activation rules are being
   worked out from its own code; not working yet.
-- **AC cards** (9260/9560): the same standing listener in the IWM firmware's command set; a test package exists and the first results on real hardware are pending. 9461/9462, 8265 and older: not planned.
+- **iwm cards** (7000, 8000 and 9000 series): the standing listener starts after joining Wi-Fi. All bundled iwm firmware advertises the required P2P and DQA capabilities. The expanded hardware coverage is experimental and awaits hardware results.
 
 Bluetooth LE advertising and scanning must work on macOS first. Test packages ship a matching
 [BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM) whose Intel patches are on by default: LE

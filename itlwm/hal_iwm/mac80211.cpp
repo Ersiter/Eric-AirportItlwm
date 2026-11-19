@@ -2873,8 +2873,9 @@ void ItlIwm::
 iwm_awdl_listener_reset(struct iwm_softc *sc)
 {
     struct ieee80211com *ic = &sc->sc_ic;
+    const int generation = sc->sc_generation;
     const bool can_send = !(sc->sc_flags & (IWM_FLAG_SHUTDOWN | IWM_FLAG_HW_ERR)) &&
-        sc->sc_awdl_generation == sc->sc_generation;
+        sc->sc_awdl_generation == generation;
     int cleanup_err = 0;
     bool queues_safe = true;
 
@@ -2937,6 +2938,17 @@ iwm_awdl_listener_reset(struct iwm_softc *sc)
                 cleanup_err = err;
         } else {
             sc->sc_awdl_binding_up = 0;
+            if (!isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DYNAMIC_QUOTA)) {
+                err = iwm_power_update_device(sc);
+                if (generation != sc->sc_generation)
+                    return;
+                if (!err && ic->ic_state == IEEE80211_S_RUN)
+                    err = iwm_power_mac_update_mode(sc, (struct iwm_node *)ic->ic_bss);
+                if (generation != sc->sc_generation)
+                    return;
+                if (err && !cleanup_err)
+                    cleanup_err = err;
+            }
         }
     }
     if (can_send && !sc->sc_awdl_binding_up && sc->sc_awdl_mac_up) {
@@ -2988,11 +3000,12 @@ iwm_awdl_listener_reset(struct iwm_softc *sc)
     if (!isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DYNAMIC_QUOTA) &&
         ic->ic_state == IEEE80211_S_RUN) {
         int err = iwm_update_quotas(sc, (struct iwm_node *)ic->ic_bss, 1);
-        if (err) {
-            ic->ic_awdl_listener_stage = 7;
-            ic->ic_awdl_listener_code = err;
-            return;
-        }
+        if (err && !cleanup_err)
+            cleanup_err = err;
+    }
+    if (cleanup_err) {
+        ic->ic_awdl_listener_stage = 7;
+        ic->ic_awdl_listener_code = cleanup_err;
     }
 }
 
@@ -3018,10 +3031,7 @@ iwm_awdl_listener_setup(struct iwm_softc *sc, uint8_t chan)
             return EBUSY;
         }
     }
-    if (!sc->sc_awdl_supported ||
-        !(sc->sc_capaflags & IWM_UCODE_TLV_FLAGS_P2P) ||
-        !isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DQA_SUPPORT) ||
-        !bss || !bss->in_phyctxt || ic->ic_state != IEEE80211_S_RUN ||
+    if (!bss || !bss->in_phyctxt || ic->ic_state != IEEE80211_S_RUN ||
         !chan || chan > IEEE80211_CHAN_MAX || phy == bss->in_phyctxt)
         return ENOTSUP;
 
@@ -3119,8 +3129,21 @@ iwm_awdl_listener_setup(struct iwm_softc *sc, uint8_t chan)
     }
 
     if (!isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DYNAMIC_QUOTA)) {
+        /* Legacy LISTENER needs power save disabled before assigning its quota. */
+        stage = 8;
+        err = iwm_power_update_device(sc);
+        if (!err && generation == sc->sc_generation)
+            err = iwm_power_mac_update_mode(sc, bss);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            goto fail;
+
+        stage = 9;
         sc->sc_awdl_listener_up = 1;
         err = iwm_update_quotas(sc, bss, 1);
+        if (generation != sc->sc_generation)
+            return ENXIO;
         if (err) {
             sc->sc_awdl_listener_up = 0;
             goto fail;
@@ -3141,12 +3164,6 @@ fail:
     return err;
 }
 
-static bool
-iwm_awdl_enabled(void)
-{
-    return itlAWDLEnabled();
-}
-
 int ItlIwm::
 iwm_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
 {
@@ -3155,8 +3172,6 @@ iwm_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
     ItlIwm *that = container_of(sc, ItlIwm, com);
     const uint8_t selected = that->iwm_awdl_listener_pick(sc);
 
-    if (!iwm_awdl_enabled() || !sc->sc_awdl_supported)
-        return ENOTSUP;
     if (sc->sc_flags & (IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN |
                         IWM_FLAG_SHUTDOWN | IWM_FLAG_HW_ERR | IWM_FLAG_RFKILL))
         return EBUSY;
@@ -3210,7 +3225,7 @@ iwm_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     mbuf_t m = NULL;
     int err;
 
-    if (!iwm_awdl_enabled() || !sc->sc_awdl_listener_up ||
+    if (!sc->sc_awdl_listener_up ||
         !sc->sc_awdl_listener_active || !in ||
         chan != sc->sc_awdl_listener_chan || !frame ||
         len < sizeof(struct ieee80211_frame) || len > MCLBYTES) {
@@ -3723,10 +3738,9 @@ iwm_run_stop(struct iwm_softc *sc)
 
     if (sc->sc_awdl_listener_up || sc->sc_awdl_context_up ||
         sc->sc_awdl_mac_up || sc->sc_awdl_binding_up || sc->sc_awdl_sta_up ||
-        sc->sc_awdl_mgmt_qid >= 0 || sc->sc_awdl_data_qid >= 0) {
+        sc->sc_awdl_mgmt_qid >= 0 || sc->sc_awdl_data_qid >= 0)
         iwm_awdl_listener_reset(sc);
-        sc->sc_awdl_listener_tries = 0;
-    }
+    sc->sc_awdl_listener_tries = 0;
     
     /*
      * Stop Tx/Rx BA sessions now. We cannot rely on the BA task
@@ -5863,7 +5877,6 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
             sc->non_shared_ant = IWM_ANT_A;
             break;
         case PCI_PRODUCT_INTEL_WL_9260_1:
-            sc->sc_awdl_supported = 1;
             sc->sc_fwname = "iwm-9260-46";
             sc->host_interrupt_operation_mode = 0;
             sc->sc_device_family = IWM_DEVICE_FAMILY_9000;
@@ -5890,12 +5903,6 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
         case PCI_PRODUCT_INTEL_WL_9461_3:
         case PCI_PRODUCT_INTEL_WL_9461_4:
             sc->sc_fwname = "iwm-9000-46";
-            sc->sc_awdl_supported = pa_id == PCI_PRODUCT_INTEL_WL_9560_1 ||
-                pa_id == PCI_PRODUCT_INTEL_WL_9560_2 ||
-                pa_id == PCI_PRODUCT_INTEL_WL_9560_3 ||
-                pa_id == PCI_PRODUCT_INTEL_WL_9560_4 ||
-                pa_id == PCI_PRODUCT_INTEL_WL_9560_5 ||
-                pa_id == PCI_PRODUCT_INTEL_WL_9560_6;
             sc->host_interrupt_operation_mode = 0;
             sc->sc_device_family = IWM_DEVICE_FAMILY_9000;
             sc->sc_fwdmasegsz = IWM_FWDMASEGSZ_8000;
@@ -6120,7 +6127,12 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
     ic->ic_ampdu_tx_start = iwm_ampdu_tx_start;
     ic->ic_ampdu_tx_stop = iwm_ampdu_tx_stop;
     ic->ic_update_chw = iwm_update_chw;
-    if (sc->sc_awdl_supported && iwm_awdl_enabled()) {
+
+    if (iwm_preinit(sc))
+        goto fail5;
+
+    if (itlAWDLEnabled() && (sc->sc_capaflags & IWM_UCODE_TLV_FLAGS_P2P) &&
+        isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DQA_SUPPORT)) {
         ic->ic_awdl_listen = iwm_awdl_listen;
         ic->ic_awdl_tx = iwm_awdl_tx;
         ic->ic_awdl_llw_tx = iwm_awdl_tx;
@@ -6130,14 +6142,6 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
         ic->ic_awdl_crypto = iwm_awdl_crypto;
         ic->ic_awdl_set_encryption = iwm_awdl_set_encryption;
         ic->ic_awdl_set_low_latency = iwm_awdl_set_low_latency;
-    }
-    /*
-     * We cannot read the MAC address without loading the
-     * firmware from disk. Postpone until mountroot is done.
-     */
-    //    config_mountroot(self, iwm_attach_hook);
-    if (iwm_preinit(sc)) {
-        goto fail5;
     }
     
     XYLogE("attach succeed.\n");

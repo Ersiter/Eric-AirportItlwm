@@ -81,7 +81,7 @@ S['en-US'] = dict(
     th_works=['Feature', 'Cards', 'Status'],
     ok='Works', dev='In development',
     cards_all='all', cards_ac='AC and newer', cards_axbe='AX and BE', cards_ax210='AX210/AX211/AX411, BE', cards_be='BE',
-    cards_awdl='AC (9260/9560), AX, BE',
+    cards_awdl='iwm, AX, BE',
     works=[
         ('Scan, join, roam, private Wi-Fi address', 'all', 'ok', ''),
         ('WPA2-Personal, WPA2-Enterprise (PEAP), WPA2/WPA3 transition networks', 'all', 'ok', ''),
@@ -117,7 +117,7 @@ S['en-US'] = dict(
     awdl_li=[
         '**AX cards** (pre-MLD firmware): a standing listener with its own channel context, the construction [ForbiddenItlwm](forbidden) runs on the AX211 with AirDrop working both ways.',
         "**BE cards** (MLD firmware): the same idea in the MLD command set, as a P2P client link next to the station link (the combination Linux allows on two channels). The firmware's activation rules are being worked out from its own code; not working yet.",
-        "**AC cards** (9260/9560): the same standing listener in the IWM firmware's command set; a test package exists and the first results on real hardware are pending. 9461/9462, 8265 and older: not planned.",
+        '**iwm cards** (7000, 8000 and 9000 series): the standing listener starts after joining Wi-Fi. The expanded hardware coverage is experimental and awaits hardware results.',
     ],
     awdl_p2="Bluetooth LE advertising and scanning must work on macOS first. Test packages ship a matching [BlueToolFixup](bpr) with `-btlfxadvsets` (LE advertising sets for third-party controllers, macOS 26.4–26.7.3) and `-btlfxrpa` (connecting to an iPhone that uses a private address; macOS 26.4 and 26.7 so far). With `-itlawdl` the driver first checks that Apple's AWDL interface table has the layout it was built for (`AWDLBuildCheck` in the I/O Registry) and otherwise runs as plain Wi-Fi, so a macOS update cannot turn it into a kernel panic. The listening channel is 149, then 44, then 6, and only one the country allows transmitting on (44 where there is no 149; a passive channel once a nearby router is heard beaconing on it). 149 is fastest: routers on 149 and an iPhone on 149 or off Wi-Fi give the best AirDrop speed.",
     rep_h2='Reporting a problem',
@@ -167,7 +167,7 @@ S['zh-Hans'] = dict(
     th_works=['功能', '网卡', '状态'],
     ok='可用', dev='开发中',
     cards_all='全部', cards_ac='AC 及以上', cards_axbe='AX、BE', cards_ax210='AX210/AX211/AX411、BE', cards_be='BE',
-    cards_awdl='AC（9260/9560）、AX、BE',
+    cards_awdl='iwm、AX、BE',
     works=[
         ('扫描、连接、漫游、私有 Wi-Fi 地址', 'all', 'ok', ''),
         ('WPA2 个人级、WPA2 企业级（PEAP）、WPA2/WPA3 过渡网络', 'all', 'ok', ''),
@@ -203,7 +203,7 @@ S['zh-Hans'] = dict(
     awdl_li=[
         '**AX 系列**（非 MLD 固件）：常驻监听器，有自己的信道上下文，与 [ForbiddenItlwm](forbidden) 在 AX211 上实现双向隔空的做法相同。',
         '**BE 系列**（MLD 固件）：同样的思路换成 MLD 命令集，在主链路旁加一条 P2P 客户端链路（Linux 允许两条不同信道的组合）。正在按固件自身代码梳理它的激活条件，尚未走通。',
-        '**AC 系列**（9260/9560）：同样的常驻监听器，换成 IWM 固件的命令集；已有测试包，等第一批实机结果。9461/9462、8265 及更早的卡：不在计划内。',
+        '**iwm 网卡**（7000、8000 和 9000 系列）在连上 Wi-Fi 后启动常驻监听器。新增型号仍待实机验证。',
     ],
     awdl_p2='前提是蓝牙 LE 广播与扫描在 macOS 上可用。测试包附带配套的 [BlueToolFixup](bpr)，支持 `-btlfxadvsets`（第三方控制器的 LE 广播集，macOS 26.4–26.7.3）和 `-btlfxrpa`（连接使用私有地址的 iPhone，目前支持 macOS 26.4 与 26.7）。加了 `-itlawdl` 时，驱动先检查 Apple 的 AWDL 接口表是否与编译时一致（I/O Registry 里的 `AWDLBuildCheck`），不一致就只做普通 Wi-Fi，系统更新不会因此变成内核崩溃。监听信道依次选 149、44、6，只用当地允许发射的信道（没有 149 的国家用 44；被动信道在听到附近路由器的信标后才算可用）。149 最快：路由器在 149、iPhone 也在 149 或没连 Wi-Fi 时隔空速度最好。',
     rep_h2='反馈问题',
@@ -253,7 +253,7 @@ S['zh-Hant'] = dict(
     th_works=['功能', '網卡', '狀態'],
     ok='可用', dev='開發中',
     cards_all='全部', cards_ac='AC 及以上', cards_axbe='AX、BE', cards_ax210='AX210/AX211/AX411、BE', cards_be='BE',
-    cards_awdl='AC（9260/9560）、AX、BE',
+    cards_awdl='iwm、AX、BE',
     works=[
         ('掃描、連線、漫遊、私人 Wi-Fi 位址', 'all', 'ok', ''),
         ('WPA2 個人級、WPA2 企業級（PEAP）、WPA2/WPA3 過渡網路', 'all', 'ok', ''),
@@ -289,7 +289,7 @@ S['zh-Hant'] = dict(
     awdl_li=[
         '**AX 系列**（非 MLD 韌體）：常駐監聽器，擁有自己的頻道上下文，與 [ForbiddenItlwm](forbidden) 在 AX211 上實現雙向 AirDrop 的做法相同。',
         '**BE 系列**（MLD 韌體）：同樣的思路改用 MLD 指令集，在主連結旁加一條 P2P 用戶端連結（Linux 允許兩個不同頻道的組合）。正在依韌體自身程式碼梳理它的啟用條件，尚未走通。',
-        '**AC 系列**（9260/9560）：同樣的常駐監聽器，改用 IWM 韌體的指令集；已有測試套件，等第一批實機結果。9461/9462、8265 及更早的網卡：不在規劃內。',
+        '**iwm 網卡**（7000、8000 和 9000 系列）在連上 Wi-Fi 後啟動常駐監聽器。新增型號仍待實機驗證。',
     ],
     awdl_p2='前提是藍牙 LE 廣播與掃描在 macOS 上可用。測試套件附帶配套的 [BlueToolFixup](bpr)，支援 `-btlfxadvsets`（第三方控制器的 LE 廣播組，macOS 26.4–26.7.3）與 `-btlfxrpa`（連接使用私人位址的 iPhone，目前支援 macOS 26.4 與 26.7）。加入 `-itlawdl` 時，驅動會先檢查 Apple 的 AWDL 介面表是否與編譯時一致（I/O Registry 中的 `AWDLBuildCheck`），不一致就只做一般 Wi-Fi，系統更新不會因此造成核心當機。監聽頻道依序選 149、44、6，只使用當地允許發射的頻道（沒有 149 的國家使用 44；被動頻道在聽到附近路由器的信標後才算可用）。149 最快：路由器在 149、iPhone 也在 149 或未連接 Wi-Fi 時，AirDrop 速度最好。',
     rep_h2='回報問題',
@@ -339,7 +339,7 @@ S['de'] = dict(
     th_works=['Funktion', 'Karten', 'Status'],
     ok='Funktioniert', dev='In Entwicklung',
     cards_all='alle', cards_ac='AC und neuer', cards_axbe='AX und BE', cards_ax210='AX210/AX211/AX411, BE', cards_be='BE',
-    cards_awdl='AC (9260/9560), AX, BE',
+    cards_awdl='iwm, AX, BE',
     works=[
         ('Suchen, Verbinden, Roaming, private WLAN-Adresse', 'all', 'ok', ''),
         ('WPA2-Personal, WPA2-Enterprise (PEAP), WPA2/WPA3-Übergangsnetze', 'all', 'ok', ''),
@@ -375,7 +375,7 @@ S['de'] = dict(
     awdl_li=[
         '**AX-Karten** (Firmware ohne MLD): ein dauerhafter Listener mit eigenem Kanalkontext, so wie [ForbiddenItlwm](forbidden) ihn auf der AX211 betreibt, mit AirDrop in beide Richtungen.',
         '**BE-Karten** (MLD-Firmware): derselbe Gedanke mit dem MLD-Befehlssatz, als P2P-Client-Link neben dem Station-Link (die Kombination, die Linux auf zwei Kanälen erlaubt). Die Aktivierungsregeln der Firmware werden aus deren eigenem Code erarbeitet; funktioniert noch nicht.',
-        '**AC-Karten** (9260/9560): derselbe dauerhafte Listener mit dem Befehlssatz der IWM-Firmware; ein Testpaket liegt vor, erste Ergebnisse auf echter Hardware stehen aus. 9461/9462, 8265 und ältere Karten: nicht geplant.',
+        '**iwm-Karten** (Serien 7000, 8000 und 9000): Der dauerhafte Listener startet nach dem Verbinden mit dem WLAN. Für die neu hinzugekommenen Modelle stehen Praxistests aus.',
     ],
     awdl_p2='Bluetooth-LE-Advertising und -Scannen müssen unter macOS zuerst funktionieren. Die Testpakete enthalten ein passendes [BlueToolFixup](bpr) mit `-btlfxadvsets` (LE-Advertising-Sets für Controller von Drittanbietern, macOS 26.4–26.7.3) und `-btlfxrpa` (Verbindung zu einem iPhone mit privater Adresse; bisher macOS 26.4 und 26.7). Mit `-itlawdl` prüft der Treiber zuerst, ob Apples AWDL-Schnittstellentabelle das Layout hat, für das er gebaut wurde (`AWDLBuildCheck` in der I/O-Registry), und läuft sonst als reines WLAN, sodass ein macOS-Update keinen Kernel-Panic auslösen kann. Der Lauschkanal ist 149, dann 44, dann 6, und zwar nur einer, auf dem das Land das Senden erlaubt (44, wo es keine 149 gibt; ein passiver Kanal, sobald ein Router in der Nähe dort Beacons sendet). 149 ist am schnellsten: Router auf 149 und ein iPhone auf 149 oder ohne WLAN ergeben die beste AirDrop-Geschwindigkeit.',
     rep_h2='Fehler melden',
@@ -425,7 +425,7 @@ S['fr'] = dict(
     th_works=['Fonction', 'Cartes', 'État'],
     ok='Fonctionne', dev='En développement',
     cards_all='toutes', cards_ac='AC et plus récentes', cards_axbe='AX et BE', cards_ax210='AX210/AX211/AX411, BE', cards_be='BE',
-    cards_awdl='AC (9260/9560), AX, BE',
+    cards_awdl='iwm, AX, BE',
     works=[
         ("Recherche, connexion, itinérance, adresse Wi-Fi privée", 'all', 'ok', ''),
         ('WPA2 Personnel, WPA2 Entreprise (PEAP), réseaux de transition WPA2/WPA3', 'all', 'ok', ''),
@@ -461,7 +461,7 @@ S['fr'] = dict(
     awdl_li=[
         "**Cartes AX** (micrologiciel sans MLD) : un écouteur permanent avec son propre contexte de canal, la construction que [ForbiddenItlwm](forbidden) fait tourner sur l'AX211 avec AirDrop dans les deux sens.",
         "**Cartes BE** (micrologiciel MLD) : la même idée avec le jeu de commandes MLD, sous la forme d'un lien client P2P à côté du lien station (la combinaison que Linux autorise sur deux canaux). Les règles d'activation du micrologiciel sont en cours d'élucidation à partir de son propre code ; ne fonctionne pas encore.",
-        '**Cartes AC** (9260/9560) : le même écouteur permanent avec le jeu de commandes du micrologiciel IWM ; un paquet de test existe, les premiers résultats sur matériel réel sont attendus. 9461/9462, 8265 et plus anciennes : non prévu.',
+        '**Cartes iwm** (séries 7000, 8000 et 9000) : l’écouteur permanent démarre après la connexion au Wi-Fi. Les nouveaux modèles restent à vérifier sur le matériel.',
     ],
     awdl_p2="La publicité et le balayage Bluetooth LE doivent d'abord fonctionner sous macOS. Les paquets de test embarquent un [BlueToolFixup](bpr) assorti avec `-btlfxadvsets` (ensembles de publicité LE pour contrôleurs tiers, macOS 26.4–26.7.3) et `-btlfxrpa` (connexion à un iPhone qui utilise une adresse privée ; macOS 26.4 et 26.7 pour l'instant). Avec `-itlawdl`, le pilote vérifie d'abord que la table d'interface AWDL d'Apple a la disposition pour laquelle il a été compilé (`AWDLBuildCheck` dans l'I/O Registry), sinon il fonctionne comme un simple Wi-Fi : une mise à jour de macOS ne peut donc pas provoquer de kernel panic. Le canal d'écoute est 149, puis 44, puis 6, et seulement un canal sur lequel le pays autorise l'émission (44 là où il n'y a pas de 149 ; un canal passif dès qu'un routeur voisin y émet des balises). Le 149 est le plus rapide : routeurs sur 149 et iPhone sur 149 ou hors Wi-Fi donnent la meilleure vitesse AirDrop.",
     rep_h2='Signaler un problème',
@@ -511,7 +511,7 @@ S['ru'] = dict(
     th_works=['Функция', 'Карты', 'Состояние'],
     ok='Работает', dev='В разработке',
     cards_all='все', cards_ac='AC и новее', cards_axbe='AX и BE', cards_ax210='AX210/AX211/AX411, BE', cards_be='BE',
-    cards_awdl='AC (9260/9560), AX, BE',
+    cards_awdl='iwm, AX, BE',
     works=[
         ('Поиск сетей, подключение, роуминг, частный адрес Wi-Fi', 'all', 'ok', ''),
         ('WPA2 Personal, WPA2 Enterprise (PEAP), переходные сети WPA2/WPA3', 'all', 'ok', ''),
@@ -547,7 +547,7 @@ S['ru'] = dict(
     awdl_li=[
         '**Карты AX** (прошивка без MLD): постоянный слушатель с собственным контекстом канала — та же конструкция, которую [ForbiddenItlwm](forbidden) запускает на AX211, с AirDrop в обе стороны.',
         '**Карты BE** (прошивка MLD): та же идея на наборе команд MLD — линк P2P-клиента рядом с линком станции (сочетание, которое Linux допускает на двух каналах). Правила активации прошивки выясняются по её собственному коду; пока не работает.',
-        '**Карты AC** (9260/9560): тот же постоянный слушатель на наборе команд прошивки IWM; тестовый пакет есть, первые результаты на реальном железе ожидаются. 9461/9462, 8265 и старше: не планируется.',
+        '**Карты iwm** (серии 7000, 8000 и 9000): постоянный приём запускается после подключения к Wi-Fi. Новые модели ещё предстоит проверить на реальном оборудовании.',
     ],
     awdl_p2='Сначала в macOS должны работать рекламные пакеты и сканирование Bluetooth LE. Тестовые пакеты содержат подходящий [BlueToolFixup](bpr) с `-btlfxadvsets` (наборы LE-рекламы для сторонних контроллеров, macOS 26.4–26.7.3) и `-btlfxrpa` (подключение к iPhone с приватным адресом; пока macOS 26.4 и 26.7). С `-itlawdl` драйвер сначала проверяет, что таблица интерфейса AWDL от Apple имеет ту раскладку, под которую он собран (`AWDLBuildCheck` в I/O Registry), и иначе работает как обычный Wi-Fi, так что обновление macOS не приведёт к kernel panic. Канал прослушивания — 149, затем 44, затем 6, причём только тот, на котором страна разрешает передачу (44 там, где нет 149; пассивный канал — после того как рядом услышан роутер, передающий на нём маяки). Быстрее всего 149: роутеры на 149 и iPhone на 149 или без Wi-Fi дают лучшую скорость AirDrop.',
     rep_h2='Сообщить о проблеме',

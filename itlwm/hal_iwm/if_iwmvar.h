@@ -705,7 +705,6 @@ struct iwm_softc {
     int sc_awdl_peer_valid;
     int sc_awdl_generation;
     struct iwm_awdl_key sc_awdl_keys[IEEE80211_GROUP_NKID];
-    int sc_awdl_supported;
     int sc_awdl_listener_up;
     int sc_awdl_listener_active;
     int sc_awdl_context_up;
