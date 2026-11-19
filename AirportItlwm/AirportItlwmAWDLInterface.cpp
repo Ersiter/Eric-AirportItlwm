@@ -3343,21 +3343,9 @@ getAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(apple80211_awdl_sync_channel_sequence *
 {
     if (!fChanSeqValid)
         return kIOReturnUnsupported;
+    // IO80211Family reads back the programmed schedule. The host maps its active
+    // slots to the available RF channel when scheduling and encoding on-air frames.
     memcpy(d, fChanSeq, sizeof(fChanSeq));
-    const ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
-    if (ic && ic->ic_awdl_listener_chan) {
-        uint8_t *raw = (uint8_t *)d;
-        if (raw[9] && raw[9] != 255)
-            raw[9] = ic->ic_awdl_listener_chan;
-        auto channels = (apple80211_channel *)(raw + kChanSeqEntries);
-        for (unsigned i = 0; i < raw[kChanSeqCount]; ++i) {
-            if (!channels[i].channel)
-                continue;
-            channels[i].channel = ic->ic_awdl_listener_chan;
-            channels[i].flags = (channels[i].channel <= 14 ? APPLE80211_C_FLAG_2GHZ :
-                APPLE80211_C_FLAG_5GHZ) | APPLE80211_C_FLAG_20MHZ;
-        }
-    }
     return kIOReturnSuccess;
 }
 
