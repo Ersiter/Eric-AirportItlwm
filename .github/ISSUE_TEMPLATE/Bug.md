@@ -15,17 +15,18 @@ assignees: ''
 
 **Environment**
 
-- Kext Version: 
+- AirportItlwm version and download source:
+- Bluetooth kext and version, if applicable:
 - WiFi Card Model: 
 - PCI Product ID: 
-- macOS Version: 
+- macOS version and build:
 
 **Description**
 <!---A clear and concise description of what the bug is--->
 
 **Bug Report Archive**
-<!---Open HeliPort while clicking Option, click "create diagnostic report", then drag and drop the zip file into this window--->
-<!---Read this guide if you are using AirportItlwm http://docs.oiw.workers.dev/itlwm/Troubleshooting.html#manually-for-airportitlwm--->
+Run `Collect-EricWirelessDiagnostics.command` from the Debug package before reproducing.
+Include the selected mode and result. Send archives with network details or system samples privately.
 
 **Kext Download Source**
 <!---To help us identify your issue, please tell us where did you download the kext and whether it's custom built--->

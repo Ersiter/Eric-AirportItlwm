@@ -66,6 +66,9 @@ firmware and the highest adapted API is tried first. Not supported yet: the Wi-F
    Skywalk replacement: this driver uses the system's own Wi-Fi stack.
 4. Keep a bootable copy of your EFI and test from a USB stick first.
 
+Get the optional Bluetooth companion from [Eric-BlueToolFixup Releases](https://github.com/Ersiter/Eric-BlueToolFixup/releases).
+It has its own version. Keep your current Bluetooth setup when updating Wi-Fi if it works for your configuration.
+
 The country and the channels allowed in it come from the networks around you, through the card's own
 regulatory logic, as on Linux. There is nothing to set.
 
@@ -97,11 +100,10 @@ radio (Wi-Fi 7 eMLSR is single radio too), so the firmware time-shares the two:
 - **iwm cards** (7000, 8000 and 9000 series): the standing listener starts after joining Wi-Fi. All bundled iwm firmware advertises the required P2P and DQA capabilities. The expanded hardware coverage is experimental and awaits hardware results.
 - **iwn cards with PAN and P2P** (first targets: 6205 and 6235): connect to a Wi-Fi network on channel 6 and boot with `-itlawdl`. The driver checks firmware and EEPROM capabilities and uses the PAN context on that same channel. AirDrop is experimental and awaits hardware verification.
 
-Bluetooth LE advertising and scanning must work on macOS first. Test packages ship a matching
-[BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM) whose Intel patches are on by default: LE
-advertising sets for third-party controllers (macOS 26.4–26.7.3; on macOS 15.8 advertising, scanning and connections, not yet
-run on a machine) and connecting to an iPhone that uses a private address (macOS 26.4 and 26.7 so far);
-`-btlfxnointel` turns them off. It works with Lilu,
+Bluetooth LE advertising and scanning must work on macOS first. [Eric-BlueToolFixup](https://github.com/Ersiter/Eric-BlueToolFixup)
+provides the optional Intel BLE patches and tracks their macOS compatibility. Regular Wi-Fi releases link to the
+separate Bluetooth download. A community test package includes a specific pair for reproducing the same setup.
+Eric-BlueToolFixup works with Lilu,
 IntelBluetoothFirmware and IntelBTPatcher enabled. ForbiddenItlwm's BTLEAdvFixup does the same job with the
 stock BlueToolFixup instead: use one of the two, never both, and IntelBTPatcher must be off with BTLEAdvFixup
 (Lilu panics if both hook the same function). Coming from ForbiddenItlwm: its `-itlawdliface` counts as `-itlawdl` and `-itlawdlcoexbatx` as `-itlawdllegacyba`; its other `-itlawdlcoex*` arguments mean nothing here. With `-itlawdl` the driver first checks that Apple's AWDL interface
@@ -113,11 +115,10 @@ best AirDrop speed.
 
 ## Reporting a problem
 
-Use the Debug package. Reproduce the problem once, then run `Collect-WiFi-Community.command` from the
-package and attach the archive to a [GitHub issue](https://github.com/Ersiter/Eric-AirportItlwm/issues)
-with your card, macOS build, router model, security mode and what you did. For a Wi-Fi 7 router say
-whether MLO is on and which bands it combines. The archive holds network metadata: send it privately if
-you prefer. A build that compiles is not a result; please say what you saw on your machine.
+Use the Debug package and start `Collect-EricWirelessDiagnostics.command` before reproducing the issue.
+Choose Wi-Fi, AirDrop / Instant Hotspot, or Bluetooth discovery. In your [GitHub issue](https://github.com/Ersiter/Eric-AirportItlwm/issues),
+include the adapter, router or other device, and what happened. For AirDrop, say which device was sending.
+Send the ZIP privately if it contains network metadata or a `bluetoothd` sample.
 
 ## Build
 

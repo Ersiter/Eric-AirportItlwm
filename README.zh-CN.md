@@ -55,6 +55,9 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
    就是系统自带的无线栈。
 4. 保留一份能启动的 EFI，先用 U 盘测试。
 
+蓝牙配套可从 [Eric-BlueToolFixup Releases](https://github.com/Ersiter/Eric-BlueToolFixup/releases) 单独下载。
+它独立发版，更新 Wi-Fi 时可以继续沿用适合自己机器的蓝牙配置。
+
 国家码和可用信道由周围的路由器经网卡自身的法规逻辑确定，与 Linux 相同，不需要设置。
 
 ### 启动参数
@@ -82,9 +85,9 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 - **iwm 网卡**（7000、8000 和 9000 系列）在连上 Wi-Fi 后启动常驻监听器。随驱动提供的 iwm 固件均声明监听器所需的 P2P 和 DQA 能力。新增型号仍待实机验证。
 - **支持 PAN 和 P2P 的 iwn 网卡**（首批目标为 6205、6235）用 `-itlawdl` 启动并连接信道 6 的 Wi-Fi。驱动检查固件和 EEPROM 能力后，在同一信道使用 PAN 上下文。隔空投送待实机验证。
 
-前提是蓝牙 LE 广播与扫描在 macOS 上可用。测试包附带配套的 [BlueToolFixup](https://github.com/acidanthera/BrcmPatchRAM)，
-它的 Intel 补丁默认开启：第三方控制器的 LE 广播集（macOS 26.4–26.7.3；macOS 15.8 上是广播、扫描和连接，还没在真机上跑过）、连接使用私有地址的 iPhone
-（目前支持 macOS 26.4 与 26.7），`-btlfxnointel` 可关闭。搭配 Lilu、IntelBluetoothFirmware、已启用的 IntelBTPatcher 使用。
+前提是蓝牙 LE 广播与扫描在 macOS 上可用。[Eric-BlueToolFixup](https://github.com/Ersiter/Eric-BlueToolFixup)
+提供可选的 Intel BLE 补丁，并记录各系统版本的兼容情况。正式 Wi-Fi 发布链接到独立的蓝牙下载，
+社区测试包带同一套 Wi-Fi 与蓝牙版本方便复现。搭配 Lilu、IntelBluetoothFirmware、已启用的 IntelBTPatcher 使用。
 ForbiddenItlwm 的 BTLEAdvFixup 用原版 BlueToolFixup 做同样的事：两套任选其一，不要同时用；用 BTLEAdvFixup 时
 必须停用 IntelBTPatcher（两者钩同一个函数，Lilu 会 panic）。从 ForbiddenItlwm 换过来：它的 `-itlawdliface` 视同 `-itlawdl`，`-itlawdlcoexbatx` 视同 `-itlawdllegacyba`，其余 `-itlawdlcoex*` 在这里没有意义。加了 `-itlawdl` 时，驱动先检查 Apple 的 AWDL 接口表是否与编译时一致
 （I/O Registry 里的 `AWDLBuildCheck`），不一致就只做普通 Wi-Fi，系统更新不会因此变成内核崩溃。
@@ -93,10 +96,9 @@ ForbiddenItlwm 的 BTLEAdvFixup 用原版 BlueToolFixup 做同样的事：两套
 
 ## 反馈问题
 
-请用 Debug 包。先复现一次问题，再运行包里的 `Collect-WiFi-Community.command`，把生成的压缩包附到
-[GitHub Issue](https://github.com/Ersiter/Eric-AirportItlwm/issues)，写明网卡、macOS 版本、路由器型号、
-加密方式和操作过程；Wi-Fi 7 路由器请说明是否开了 MLO、组合了哪些频段。压缩包含网络元数据，可以私下发送。
-能编译不等于能用，请写你在自己机器上看到的结果。
+用 Debug 包，复现前运行 `Collect-EricWirelessDiagnostics.command`，按提示选择 Wi-Fi、隔空投送／即时热点或蓝牙发现。
+在 [GitHub Issue](https://github.com/Ersiter/Eric-AirportItlwm/issues) 写明网卡、路由器或对端设备及实测结果。
+隔空投送请注明发送方向。ZIP 包含网络元数据或 `bluetoothd` 样本时请私下发送。
 
 ## 编译
 
