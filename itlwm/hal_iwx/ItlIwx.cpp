@@ -17716,6 +17716,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             case IWX_MCC_UPDATE_CMD:
             case IWX_TIME_EVENT_CMD:
             case IWX_STATISTICS_CMD:
+            case IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_LOW_LATENCY_CMD):
             case IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_MAC_CONFIG_CMD):
             case IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_LINK_CONFIG_CMD):
             case IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD):
