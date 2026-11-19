@@ -7117,6 +7117,21 @@ iwx_clear_oactive(struct iwx_softc *sc, struct iwx_tx_ring *ring)
     }
 }
 
+static int
+iwx_awdl_peer_queue(const struct iwx_softc *sc, uint16_t tid)
+{
+    switch (tid) {
+    case 0:
+        return sc->sc_awdl_peer_qid;
+    case 6:
+        return sc->sc_awdl_peer_llw_qid;
+    case IWX_MGMT_TID:
+        return sc->sc_awdl_peer_mgmt_qid;
+    default:
+        return -1;
+    }
+}
+
 void ItlIwx::
 iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_rx_data *data)
 {
@@ -7167,18 +7182,8 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
             qid != sc->sc_awdl_listener_llw_qid &&
             (awdlClient || qid != sc->sc_aux_roc_qid))
             continue;
-        if (awdlPeer) {
-            const uint8_t tid = ba_tfd->tid;
-            int expected_qid = IWX_INVALID_QUEUE;
-            if (tid == 0)
-                expected_qid = sc->sc_awdl_peer_qid;
-            else if (tid == 6)
-                expected_qid = sc->sc_awdl_peer_llw_qid;
-            else if (tid == IWX_MGMT_TID)
-                expected_qid = sc->sc_awdl_peer_mgmt_qid;
-            if (qid != expected_qid)
-                continue;
-        }
+        if (awdlPeer && qid != iwx_awdl_peer_queue(sc, ba_tfd->tid))
+            continue;
         ring = &sc->txq[qid];
 
         const int queued = ring->queued;
@@ -8816,8 +8821,12 @@ iwx_flush_sta_tids(struct iwx_softc *sc, int sta_id, uint16_t tids)
         if (qid >= nitems(sc->txq) || !sc->txq[qid].ring_count ||
             tid > IWX_MGMT_TID)
             continue;
-        if (tid == IWX_MGMT_TID && qid != sc->first_data_qid)
+        if (sc->sc_use_mld_api && sta_id == IWX_AWDL_PEER_STA_ID) {
+            if (qid != iwx_awdl_peer_queue(sc, tid))
+                continue;
+        } else if (tid == IWX_MGMT_TID && qid != sc->first_data_qid) {
             continue;
+        }
         txq = &sc->txq[qid];
         DPRINTFN(3, ("%s: flush sta=%d tid=%u qid=%u read-before=%u read-after=%u\n",
             __FUNCTION__, sta_id, tid, qid, read_before, read_after));
@@ -11664,6 +11673,11 @@ iwx_awdl_peer_task(void *arg)
     const uint32_t llwTidbit = 1U << 6;
     const uint32_t mgmtTidbit = 1U << IWX_MGMT_TID;
     uint32_t saved;
+    auto queuesPending = [sc]() {
+        return (sc->sc_awdl_peer_qid >= 0 && sc->txq[sc->sc_awdl_peer_qid].queued) ||
+            (sc->sc_awdl_peer_llw_qid >= 0 && sc->txq[sc->sc_awdl_peer_llw_qid].queued) ||
+            (sc->sc_awdl_peer_mgmt_qid >= 0 && sc->txq[sc->sc_awdl_peer_mgmt_qid].queued);
+    };
 
     if (sc->sc_awdl_ba_pending &&
         !IEEE80211_ADDR_EQ(sc->sc_awdl_ba_peer, target)) {
@@ -11678,10 +11692,16 @@ iwx_awdl_peer_task(void *arg)
     if (sc->sc_awdl_peer_added) {
         if (IEEE80211_ADDR_EQ(target, sc->sc_awdl_peer_addr))
             goto done;
-        if ((sc->sc_awdl_peer_qid >= 0 && sc->txq[sc->sc_awdl_peer_qid].queued) ||
-            (sc->sc_awdl_peer_llw_qid >= 0 && sc->txq[sc->sc_awdl_peer_llw_qid].queued) ||
-            (sc->sc_awdl_peer_mgmt_qid >= 0 && sc->txq[sc->sc_awdl_peer_mgmt_qid].queued))
-            goto done;
+        if (queuesPending()) {
+            err = that->iwx_flush_sta_tids(sc, IWX_AWDL_PEER_STA_ID, 0xffff);
+            if (generation != sc->sc_generation)
+                return;
+            if (err || queuesPending()) {
+                sc->sc_awdl_peer_error = err ? err : EBUSY;
+                iwx_awdl_record_peer(&sc->sc_ic, 3, target, sc->sc_awdl_peer_error);
+                goto done;
+            }
+        }
         for (int i = 0; i < nitems(sc->sc_rxba_data); i++) {
             struct iwx_rxba_data *rxba = &sc->sc_rxba_data[i];
             if (rxba->baid == IWX_RX_REORDER_DATA_INVALID_BAID ||
@@ -11737,7 +11757,7 @@ iwx_awdl_peer_task(void *arg)
             return;
         if (err)
             goto failed;
-        iwx_awdl_record_peer(&sc->sc_ic, 4, target, 0);
+        iwx_awdl_record_peer(&sc->sc_ic, 4, sc->sc_awdl_peer_addr, 0);
         sc->sc_awdl_peer_added = 0;
         sc->sc_awdl_peer_tlc_configured = 0;
         sc->sc_awdl_peer_tx_seq = 0;
@@ -11872,6 +11892,7 @@ iwx_awdl_peer_task(void *arg)
         }
         sc->sc_awdl_peer_llw_qid = qid;
     }
+    sc->sc_awdl_peer_error = 0;
 
 done:
     if (sc->sc_awdl_ba_pending && sc->sc_awdl_peer_added &&
@@ -11893,10 +11914,7 @@ done:
     that->iwx_awdl_ba_reply(sc);
     if ((sc->sc_awdl_ba_pending && sc->sc_awdl_peer_added &&
          IEEE80211_ADDR_EQ(sc->sc_awdl_ba_peer, sc->sc_awdl_peer_addr)) ||
-        (!IEEE80211_ADDR_EQ(target, sc->sc_awdl_peer_target) &&
-         (sc->sc_awdl_peer_qid < 0 || !sc->txq[sc->sc_awdl_peer_qid].queued) &&
-         (sc->sc_awdl_peer_mgmt_qid < 0 || !sc->txq[sc->sc_awdl_peer_mgmt_qid].queued) &&
-         (sc->sc_awdl_peer_llw_qid < 0 || !sc->txq[sc->sc_awdl_peer_llw_qid].queued)))
+        (!IEEE80211_ADDR_EQ(target, sc->sc_awdl_peer_target) && !queuesPending()))
         task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
     return;
 
