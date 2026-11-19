@@ -1004,16 +1004,19 @@ postAWEvents()
     // Channel 0 in the sequence is an idle slot. The firmware sends no AW start
     // there: sanityCheckAWStart counts the skipped slots and only complains
     // about skipped slots that have a channel.
-    unsigned count = fChanSeqValid ? fChanSeq[kChanSeqCount] : 0;
     const ieee80211com *ic = fController->fHalService->get80211Controller();
     if (ic->ic_awdl_home_chan && ic->ic_awdl_listener_chan != ic->ic_awdl_home_chan) {
         if (!fListenAlignedActive && awListenAllowed())
             scheduleAlignedListen(now);
         return;
     }
-    const apple80211_channel *slotChan = count ?
-        (const apple80211_channel *)(fChanSeq + kChanSeqEntries) + (seq / pm) % count : nullptr;
-    if (slotChan && !slotChan->channel) {
+    if (!fChanSeqValid) {
+        maybeListen(6, seq);
+        return;
+    }
+    const auto *channels = reinterpret_cast<const apple80211_channel *>(fChanSeq + kChanSeqEntries);
+    const auto &slotChannel = channels[channelSequenceIndex(seq)];
+    if (!slotChannel.channel) {
         fLastValid = true;
         fLastSeq = seq;
         return;
@@ -1026,20 +1029,11 @@ postAWEvents()
     memcpy(ev.master, &master, sizeof(ev.master));
     memcpy(ev.topMaster, &master, sizeof(ev.topMaster));
     ev.startUsBE = OSSwapHostToBigInt32((uint32_t)start);
-    ev.chan.version = APPLE80211_VERSION;
-    if (slotChan) {
-        ev.chan.channel = ownChannelAt(seq);
-        ev.chan.flags = slotChan->flags;
-        if (ic->ic_awdl_listener_chan)
-            ev.chan.flags = (ev.chan.channel <= 14 ? APPLE80211_C_FLAG_2GHZ :
-                APPLE80211_C_FLAG_5GHZ) | APPLE80211_C_FLAG_20MHZ;
-    }
-    if (!ev.chan.channel) {
-        ev.chan.channel = 6;
-        ev.chan.flags = APPLE80211_C_FLAG_2GHZ | APPLE80211_C_FLAG_20MHZ;
-    }
+    // sanityCheckAWStart compares this event with the programmed schedule.
+    // The firmware listener's channel is selected separately for radio work.
+    ev.chan = slotChannel;
     postMessage(kAWDLMsgAWStart, &ev, sizeof(ev), true);
-    maybeListen(ev.chan.channel, seq);
+    maybeListen(ownChannelAt(seq), seq);
 
     fInAW = true;
     fLastValid = true;
@@ -1503,15 +1497,21 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
         scheduleAlignedListen(hostUs());
 }
 
-// Arm the listen timer for the next run of peer slots we should visit.
+unsigned AirportItlwmAWDLInterface::
+channelSequenceIndex(uint16_t seq) const
+{
+    // reportDataPathEvents uses (seq % (count * step)) / step.
+    const unsigned step = static_cast<unsigned>(fChanSeq[kChanSeqStep]) + 1;
+    return (seq / step) % fChanSeq[kChanSeqCount];
+}
+
 uint8_t AirportItlwmAWDLInterface::
 ownChannelAt(uint16_t seq) const
 {
-    unsigned count = fChanSeqValid ? fChanSeq[kChanSeqCount] : 0;
-    if (!count)
+    if (!fChanSeqValid)
         return 0;
-    uint16_t pm = presenceMode();
-    const apple80211_channel *c = (const apple80211_channel *)(fChanSeq + kChanSeqEntries) + (seq / pm) % count;
+    const auto *channels = reinterpret_cast<const apple80211_channel *>(fChanSeq + kChanSeqEntries);
+    const auto *c = &channels[channelSequenceIndex(seq)];
     const ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
     // A standing link cannot follow the system's hopping sequence. Keep idle slots.
     if (c->channel && ic && ic->ic_awdl_listener_chan)
@@ -1723,12 +1723,10 @@ scheduleTx(uint8_t chan, uint64_t slotStartUs, uint64_t windowEndUs)
     fTxPollUs = 0;
     fTxPending = kTxPendingPSF | kTxPendingData;
     if (fMITmplLen && fChanSeqValid) {
-        const uint32_t count = fChanSeq[kChanSeqCount];
-        const uint32_t step = static_cast<uint32_t>(fChanSeq[kChanSeqStep]) + 1;
         const int64_t k = floorDiv(static_cast<int64_t>(slotStartUs) - fRefUs,
             static_cast<int64_t>(slotUs()));
-        const uint32_t awSequence = static_cast<uint16_t>(fRefSeq + k * step);
-        const uint32_t slot = (awSequence % (count * step)) / step;
+        const uint16_t awSequence = static_cast<uint16_t>(fRefSeq + k * presenceMode());
+        const unsigned slot = channelSequenceIndex(awSequence);
         // Tahoe 25G229 tests miBitmap with 1 << channel-sequence slot.
         fTxMISlot = static_cast<uint8_t>(MIN(slot, 15U));
         fTxPending |= kTxPendingMI;

@@ -232,6 +232,7 @@ private:
     // -itlawdldata: dwell on our own channel sequence (what we advertise), as
     // Broadcom firmware does, instead of chasing the peer's sequence.
     bool scheduleOwnListen(uint64_t afterUs);
+    unsigned channelSequenceIndex(uint16_t seq) const;
     uint8_t ownChannelAt(uint16_t seq) const;
     uint64_t fListenOwn;            // own-sequence dwells started
     uint64_t fBssidSets;
