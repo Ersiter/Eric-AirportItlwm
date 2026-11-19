@@ -2097,6 +2097,42 @@ publishTxState()
     setProperty("AWDLRxUcChan149", ic->ic_awdl_rx_uc_by_chan[2], 32);
     setProperty("AWDLRxUcChanOther", ic->ic_awdl_rx_uc_by_chan[3], 32);
     setProperty("AWDLBaAccept", ic->ic_awdl_ba_accept ? true : false);
+    // What was actually handed to the firmware, and where the listener stood: a report of "the iPhone does not list the
+    // Mac" shows from these whether our advertisement left and on which channel.
+    for (unsigned int i = 0; i < IEEE80211_AWDL_TX_RECORDS; i++) {
+        const struct ieee80211_awdl_tx_record *record = &ic->ic_awdl_tx_records[i];
+        uint32_t sequence = __atomic_load_n(&record->sequence, __ATOMIC_ACQUIRE);
+        if (!sequence)
+            continue;
+        char key[32], value[8 + 2 * IEEE80211_AWDL_TX_RECORD_BYTES + 96];
+        char hex[2 * IEEE80211_AWDL_TX_RECORD_BYTES + 1];
+        for (unsigned int b = 0; b < record->saved; b++)
+            snprintf(hex + 2 * b, 3, "%02x", record->frame[b]);
+        hex[2 * record->saved] = 0;
+        uint64_t nanos;
+        absolutetime_to_nanoseconds(record->rx_uptime, &nanos);
+        snprintf(key, sizeof(key), "AWDLTxFrame%02u", i);
+        snprintf(value, sizeof(value), "seq=%u uptime_us=%llu chan=%u qid=%u len=%u frame=%s",
+                 sequence, nanos / 1000, record->chan, record->qid, record->len, hex);
+        setProperty(key, value);
+    }
+    setProperty("AWDLTxFrames", __atomic_load_n(&ic->ic_awdl_tx_record_count, __ATOMIC_ACQUIRE), 32);
+    for (unsigned int i = 0; i < IEEE80211_AWDL_LISTEN_RECORDS; i++) {
+        const struct ieee80211_awdl_listen_record *record = &ic->ic_awdl_listen_records[i];
+        uint32_t sequence = __atomic_load_n(&record->sequence, __ATOMIC_ACQUIRE);
+        if (!sequence)
+            continue;
+        char key[32], value[160];
+        uint64_t nanos;
+        absolutetime_to_nanoseconds(record->rx_uptime, &nanos);
+        snprintf(key, sizeof(key), "AWDLListenEvent%02u", i);
+        snprintf(value, sizeof(value),
+                 "seq=%u uptime_us=%llu event=%u chan=%u home=%u width=%u err=%d stage=%u",
+                 sequence, nanos / 1000, record->event, record->chan, record->home_chan, record->width,
+                 record->err, record->stage);
+        setProperty(key, value);
+    }
+    setProperty("AWDLListenEvents", __atomic_load_n(&ic->ic_awdl_listen_record_count, __ATOMIC_ACQUIRE), 32);
     {
         char ls[96];
         snprintf(ls, sizeof(ls), "chan=%u tries=%u failStage=%u failCode=%d", ic->ic_awdl_listener_chan,

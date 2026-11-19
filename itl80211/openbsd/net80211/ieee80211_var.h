@@ -440,6 +440,34 @@ struct ieee80211_mld_link_info {
 
 #define IEEE80211_AWDL_DEFAULT_SYNC_PERIOD_TU 110
 
+/*
+ * The first frames the driver hands the firmware for AWDL, and every listener bring-up or refusal, kept so a report can
+ * show what was sent (the iPhone listing the Mac depends on the advertisement's bytes and on the listener's channel)
+ * without a second run. Written from the transmit path of any context with plain stores, published by the AWDL
+ * interface on its counter timer.
+ */
+#define IEEE80211_AWDL_TX_RECORDS 12
+#define IEEE80211_AWDL_TX_RECORD_BYTES 48
+#define IEEE80211_AWDL_LISTEN_RECORDS 8
+struct ieee80211_awdl_tx_record {
+    uint64_t        rx_uptime;
+    uint16_t        len;
+    uint8_t         chan;
+    uint8_t         qid;
+    uint8_t         saved;
+    uint8_t         frame[IEEE80211_AWDL_TX_RECORD_BYTES];
+    volatile uint32_t sequence;
+};
+struct ieee80211_awdl_listen_record {
+    uint64_t        rx_uptime;
+    uint8_t         chan;       /* channel the AWDL stack asked for */
+    uint8_t         home_chan;  /* station channel at that moment */
+    uint8_t         width;      /* station width (ieee80211_chan_width) */
+    uint8_t         event;      /* 1 request, 2 success, 3 failure, 4 refusal (listener elsewhere) */
+    int32_t         err;
+    uint32_t        stage;
+    volatile uint32_t sequence;
+};
 struct ieee80211com {
 	struct arpcom		ic_ac;
 	LIST_ENTRY(ieee80211com) ic_list;	/* chain of all ieee80211com */
@@ -595,6 +623,10 @@ struct ieee80211com {
     uint32_t        ic_awdl_tx_ok;       /* TX_CMD response success */
     uint32_t        ic_awdl_tx_fail;
     uint32_t        ic_awdl_tx_last_status;
+    struct ieee80211_awdl_tx_record ic_awdl_tx_records[IEEE80211_AWDL_TX_RECORDS];
+    volatile uint32_t ic_awdl_tx_record_count;
+    struct ieee80211_awdl_listen_record ic_awdl_listen_records[IEEE80211_AWDL_LISTEN_RECORDS];
+    volatile uint32_t ic_awdl_listen_record_count;
     /*
      * awdl0's address. The P2P device MAC takes it so the firmware ACKs and
      * delivers unicast frames peers send to awdl0. ic_awdl_addr_gen bumps on

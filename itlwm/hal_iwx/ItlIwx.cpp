@@ -10839,12 +10839,55 @@ iwx_bgscan(struct ieee80211com *ic)
  * and without IWX_FLAG_SCANNING/BGSCAN so net80211 never sees it.
  * Frames received off-channel reach ieee80211_inputm as usual.
  */
+/*
+ * The first frames sent on AWDL, with the channel and queue they went to: a report of "the iPhone does not list the
+ * Mac" then shows whether our advertisement left at all and where. Only the first frames of a boot are kept.
+ */
+static void
+iwx_awdl_record_tx(struct ieee80211com *ic, uint8_t chan, int qid, const uint8_t *frame, size_t len)
+{
+    uint32_t n = __sync_add_and_fetch(&ic->ic_awdl_tx_record_count, 1);
+    if (n > IEEE80211_AWDL_TX_RECORDS)
+        return;
+    struct ieee80211_awdl_tx_record *record = &ic->ic_awdl_tx_records[n - 1];
+    __atomic_store_n(&record->sequence, 0, __ATOMIC_RELEASE);
+    clock_get_uptime(&record->rx_uptime);
+    record->len = (uint16_t)(len > 0xffff ? 0xffff : len);
+    record->chan = chan;
+    record->qid = (uint8_t)(qid < 0 || qid > 0xff ? 0xff : qid);
+    record->saved = (uint8_t)(len < IEEE80211_AWDL_TX_RECORD_BYTES ? len : IEEE80211_AWDL_TX_RECORD_BYTES);
+    memcpy(record->frame, frame, record->saved);
+    __atomic_store_n(&record->sequence, n, __ATOMIC_RELEASE);
+}
+
+/* event: 1 the stack asked, 2 success, 3 failure, 4 refusal because the listener sits on another channel. */
+static void
+iwx_awdl_record_listen(struct ieee80211com *ic, uint8_t chan, uint8_t event, int err, uint32_t stage)
+{
+    uint32_t n = __sync_add_and_fetch(&ic->ic_awdl_listen_record_count, 1);
+    if (n > IEEE80211_AWDL_LISTEN_RECORDS)
+        return;
+    struct ieee80211_awdl_listen_record *record = &ic->ic_awdl_listen_records[n - 1];
+    __atomic_store_n(&record->sequence, 0, __ATOMIC_RELEASE);
+    clock_get_uptime(&record->rx_uptime);
+    record->chan = chan;
+    struct ieee80211_node *ni = ic->ic_bss;
+    record->home_chan = ni && ni->ni_chan && ni->ni_chan != IEEE80211_CHAN_ANYC ?
+        (uint8_t)ieee80211_chan2ieee(ic, ni->ni_chan) : 0;
+    record->width = ni ? (uint8_t)ni->ni_chw : 0;
+    record->event = event;
+    record->err = err;
+    record->stage = stage;
+    __atomic_store_n(&record->sequence, n, __ATOMIC_RELEASE);
+}
+
 int ItlIwx::
 iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
 {
     struct iwx_softc *sc = (struct iwx_softc *)IC2IFP(ic)->if_softc;
     ItlIwx *that = container_of(sc, ItlIwx, com);
-    
+
+    iwx_awdl_record_listen(ic, chan, 1, 0, 0);
     if (sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN | IWX_FLAG_SHUTDOWN |
                         IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL))
         return EBUSY;
@@ -10884,11 +10927,14 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
         }
         if (sc->sc_listener_up) {
             /* The radio is already there for good; only the listener's own channel is on offer. */
-            if (chan != sc->sc_listener_chan)
+            if (chan != sc->sc_listener_chan) {
+                iwx_awdl_record_listen(ic, chan, 4, EBUSY, sc->sc_listener_chan);
                 return EBUSY;
+            }
             ic->ic_awdl_listen_chan = chan;
             sc->sc_awdl_listen_active = 1;
             sc->sc_aux_roc_running = 1;
+            iwx_awdl_record_listen(ic, chan, 2, 0, 0);
             that->iwx_awdl_ba_reply(sc);
             return 0;
         }
@@ -10897,6 +10943,7 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
         err = that->iwx_p2p_roc(sc, chan, dwell_tu);
         if (!err)
             ic->ic_awdl_listen_chan = chan;
+        iwx_awdl_record_listen(ic, chan, err ? 3 : 2, err, 0);
         return err;
     }
     if (isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_HOTSPOT_SUPPORT)) {
@@ -10910,11 +10957,14 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             ic->ic_awdl_listen_chan = chan;
         return err;
     }
-    if (that->iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_SCAN_REQ_UMAC) != 14)
+    if (that->iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_SCAN_REQ_UMAC) != 14) {
+        iwx_awdl_record_listen(ic, chan, 3, ENOTSUP, 0);
         return ENOTSUP;
+    }
     err = that->iwx_awdl_listen_v14(sc, chan, dwell_tu);
     if (err) {
         sc->sc_awdl_listen_fail++;
+        iwx_awdl_record_listen(ic, chan, 3, err, 0);
         return err;
     }
     ic->ic_awdl_listen_chan = chan;
@@ -11900,8 +11950,10 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     }
     if (err)
         ic->ic_awdl_tx_err++;
-    else
+    else {
         ic->ic_awdl_tx_sent++;
+        iwx_awdl_record_tx(ic, chan, qid, frame, len);
+    }
     return err;
 }
 
