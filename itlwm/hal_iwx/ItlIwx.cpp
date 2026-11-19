@@ -10881,6 +10881,40 @@ iwx_awdl_record_listen(struct ieee80211com *ic, uint8_t chan, uint8_t event, int
     __atomic_store_n(&record->sequence, n, __ATOMIC_RELEASE);
 }
 
+/* Rolling ring of the last unicast frames and the reason each one did or did not go (see ieee80211_var.h). */
+static void
+iwx_awdl_record_uc(struct ieee80211com *ic, uint8_t chan, int qid, const uint8_t *frame, size_t len, uint8_t result)
+{
+    uint32_t n = __sync_add_and_fetch(&ic->ic_awdl_uc_record_count, 1);
+    struct ieee80211_awdl_uc_record *record = &ic->ic_awdl_uc_records[(n - 1) % IEEE80211_AWDL_UC_RECORDS];
+    __atomic_store_n(&record->sequence, 0, __ATOMIC_RELEASE);
+    clock_get_uptime(&record->rx_uptime);
+    record->len = (uint16_t)(len > 0xffff ? 0xffff : len);
+    record->chan = chan;
+    record->qid = (uint8_t)(qid < 0 || qid > 0xff ? 0xff : qid);
+    record->result = result;
+    record->saved = (uint8_t)(len < IEEE80211_AWDL_UC_RECORD_BYTES ? len : IEEE80211_AWDL_UC_RECORD_BYTES);
+    memcpy(record->frame, frame, record->saved);
+    __atomic_store_n(&record->sequence, n, __ATOMIC_RELEASE);
+}
+
+static void
+iwx_awdl_record_peer(struct ieee80211com *ic, uint8_t event, const uint8_t *addr, int err)
+{
+    uint32_t n = __sync_add_and_fetch(&ic->ic_awdl_peer_record_count, 1);
+    struct ieee80211_awdl_peer_record *record =
+        &ic->ic_awdl_peer_records[(n - 1) % IEEE80211_AWDL_PEER_RECORDS];
+    __atomic_store_n(&record->sequence, 0, __ATOMIC_RELEASE);
+    clock_get_uptime(&record->rx_uptime);
+    record->event = event;
+    if (addr)
+        IEEE80211_ADDR_COPY(record->addr, addr);
+    else
+        memset(record->addr, 0, sizeof(record->addr));
+    record->err = err;
+    __atomic_store_n(&record->sequence, n, __ATOMIC_RELEASE);
+}
+
 int ItlIwx::
 iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
 {
@@ -11623,6 +11657,7 @@ iwx_awdl_peer_task(void *arg)
     uint8_t target[IEEE80211_ADDR_LEN];
     static const uint8_t zero[IEEE80211_ADDR_LEN] = {};
     IEEE80211_ADDR_COPY(target, sc->sc_awdl_peer_target);
+    iwx_awdl_record_peer(&sc->sc_ic, 1, target, 0);
     sc->sc_awdl_peer_busy = 1;
     int err = 0;
     const uint32_t dataTidbit = 1U << 0;
@@ -11702,6 +11737,7 @@ iwx_awdl_peer_task(void *arg)
             return;
         if (err)
             goto failed;
+        iwx_awdl_record_peer(&sc->sc_ic, 4, target, 0);
         sc->sc_awdl_peer_added = 0;
         sc->sc_awdl_peer_tlc_configured = 0;
         sc->sc_awdl_peer_tx_seq = 0;
@@ -11780,6 +11816,7 @@ iwx_awdl_peer_task(void *arg)
         }
         sc->sc_awdl_peer_added = 1;
         IEEE80211_ADDR_COPY(sc->sc_awdl_peer_addr, target);
+        iwx_awdl_record_peer(&sc->sc_ic, 2, target, 0);
     }
     {
         if (!that->iwx_nic_lock(sc)) {
@@ -11864,6 +11901,7 @@ done:
     return;
 
 failed:
+    iwx_awdl_record_peer(&sc->sc_ic, 3, target, err);
     sc->sc_awdl_peer_error = err;
     sc->sc_awdl_ba_error = err;
     sc->sc_awdl_ba_pending = 0;
@@ -11901,8 +11939,11 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     const int llwFrame = llwData || llwBaResponse;
     const int unicast = !IEEE80211_IS_MULTICAST(wh->i_addr1);
     if (llwFrame && (!sc->sc_use_mld_api || !sc->sc_listener_up ||
-        !sc->sc_awdl_low_latency))
+        !sc->sc_awdl_low_latency)) {
+        if (unicast)
+            iwx_awdl_record_uc(ic, chan, -1, frame, len, 2);
         return EAGAIN;
+    }
     if ((!iwx_p2p_listen_enabled() && !sc->sc_listener_up) ||
         !sc->sc_p2p_queue ||
         (!llwFrame && (!sc->sc_aux_roc_running ||
@@ -11910,6 +11951,8 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         ic->ic_bss == NULL ||
         (sc->sc_flags & (IWX_FLAG_SHUTDOWN | IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL))) {
         ic->ic_awdl_tx_busy++;
+        if (unicast)
+            iwx_awdl_record_uc(ic, chan, -1, frame, len, 1);
         return EAGAIN;
     }
     int qid = sc->sc_aux_roc_qid;
@@ -11918,25 +11961,34 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         if (isData && !unicast) {
             qid = llwData ? sc->sc_awdl_listener_llw_qid :
                 sc->sc_awdl_listener_data_qid;
-            if (qid < 0)
+            if (qid < 0) {
+                iwx_awdl_record_uc(ic, chan, -1, frame, len, 4);
                 return ENXIO;
+            }
         } else if (unicast) {
             const uint8_t *peer = wh->i_addr1;
-            if (sc->sc_capa_num_stations <= IWX_AWDL_PEER_STA_ID)
+            if (sc->sc_capa_num_stations <= IWX_AWDL_PEER_STA_ID) {
+                iwx_awdl_record_uc(ic, chan, -1, frame, len, 4);
                 return ENOSPC;
+            }
             if (!IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_target)) {
                 IEEE80211_ADDR_COPY(sc->sc_awdl_peer_target, peer);
                 sc->sc_awdl_peer_error = 0;
             }
-            if (sc->sc_awdl_peer_error)
+            if (sc->sc_awdl_peer_error) {
+                iwx_awdl_record_uc(ic, chan, -1, frame, len, 3);
                 return sc->sc_awdl_peer_error;
-            if (sc->sc_awdl_peer_busy)
+            }
+            if (sc->sc_awdl_peer_busy) {
+                iwx_awdl_record_uc(ic, chan, -1, frame, len, 2);
                 return EAGAIN;
+            }
             int peerQid = unicastData ?
                 (llwData ? sc->sc_awdl_peer_llw_qid : sc->sc_awdl_peer_qid) :
                 sc->sc_awdl_peer_mgmt_qid;
             if (!sc->sc_awdl_peer_added || peerQid < 0 ||
                 !IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_addr)) {
+                iwx_awdl_record_uc(ic, chan, peerQid, frame, len, 2);
                 task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
                 return EAGAIN;
             }
@@ -11946,13 +11998,19 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     int err = that->iwx_awdl_tx_frame(sc, frame, len, qid);
     if (err == ENOBUFS) {
         ic->ic_awdl_tx_busy++;
+        if (unicast)
+            iwx_awdl_record_uc(ic, chan, qid, frame, len, 5);
         return EAGAIN;
     }
-    if (err)
+    if (err) {
         ic->ic_awdl_tx_err++;
-    else {
+        if (unicast)
+            iwx_awdl_record_uc(ic, chan, qid, frame, len, 6);
+    } else {
         ic->ic_awdl_tx_sent++;
         iwx_awdl_record_tx(ic, chan, qid, frame, len);
+        if (unicast)
+            iwx_awdl_record_uc(ic, chan, qid, frame, len, 0);
     }
     return err;
 }

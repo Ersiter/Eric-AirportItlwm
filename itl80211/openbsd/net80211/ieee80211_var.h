@@ -468,6 +468,32 @@ struct ieee80211_awdl_listen_record {
     uint32_t        stage;
     volatile uint32_t sequence;
 };
+/*
+ * Unicast AWDL frames as they leave the driver: the last 16, with the result (0 sent, 1 not on the listener channel,
+ * 2 waiting for the peer station, 3 the peer's last error, 4 no station slot, 5 ring full, 6 other error) and the bytes.
+ * A TCP handshake that stalls shows here whether its SYN-ACK was handed over at all and to which address.
+ */
+#define IEEE80211_AWDL_UC_RECORDS 16
+#define IEEE80211_AWDL_UC_RECORD_BYTES 48
+struct ieee80211_awdl_uc_record {
+    uint64_t        rx_uptime;
+    uint16_t        len;
+    uint8_t         chan;
+    uint8_t         qid;
+    uint8_t         result;
+    uint8_t         saved;
+    uint8_t         frame[IEEE80211_AWDL_UC_RECORD_BYTES];
+    volatile uint32_t sequence;
+};
+/* Peer station bring-up and teardown: event 1 start, 2 added, 3 failed, 4 removed. */
+#define IEEE80211_AWDL_PEER_RECORDS 6
+struct ieee80211_awdl_peer_record {
+    uint64_t        rx_uptime;
+    uint8_t         event;
+    uint8_t         addr[IEEE80211_ADDR_LEN];
+    int32_t         err;
+    volatile uint32_t sequence;
+};
 struct ieee80211com {
 	struct arpcom		ic_ac;
 	LIST_ENTRY(ieee80211com) ic_list;	/* chain of all ieee80211com */
@@ -627,6 +653,10 @@ struct ieee80211com {
     volatile uint32_t ic_awdl_tx_record_count;
     struct ieee80211_awdl_listen_record ic_awdl_listen_records[IEEE80211_AWDL_LISTEN_RECORDS];
     volatile uint32_t ic_awdl_listen_record_count;
+    struct ieee80211_awdl_uc_record ic_awdl_uc_records[IEEE80211_AWDL_UC_RECORDS];
+    volatile uint32_t ic_awdl_uc_record_count;
+    struct ieee80211_awdl_peer_record ic_awdl_peer_records[IEEE80211_AWDL_PEER_RECORDS];
+    volatile uint32_t ic_awdl_peer_record_count;
     /*
      * awdl0's address. The P2P device MAC takes it so the firmware ACKs and
      * delivers unicast frames peers send to awdl0. ic_awdl_addr_gen bumps on

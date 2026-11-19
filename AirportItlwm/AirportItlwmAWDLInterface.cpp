@@ -2133,6 +2133,40 @@ publishTxState()
         setProperty(key, value);
     }
     setProperty("AWDLListenEvents", __atomic_load_n(&ic->ic_awdl_listen_record_count, __ATOMIC_ACQUIRE), 32);
+    // The last unicast frames with the reason each did or did not go, and the peer station's bring-up.
+    for (unsigned int i = 0; i < IEEE80211_AWDL_UC_RECORDS; i++) {
+        const struct ieee80211_awdl_uc_record *record = &ic->ic_awdl_uc_records[i];
+        uint32_t sequence = __atomic_load_n(&record->sequence, __ATOMIC_ACQUIRE);
+        if (!sequence)
+            continue;
+        char key[32], value[8 + 2 * IEEE80211_AWDL_UC_RECORD_BYTES + 96];
+        char hex[2 * IEEE80211_AWDL_UC_RECORD_BYTES + 1];
+        for (unsigned int b = 0; b < record->saved; b++)
+            snprintf(hex + 2 * b, 3, "%02x", record->frame[b]);
+        hex[2 * record->saved] = 0;
+        uint64_t nanos;
+        absolutetime_to_nanoseconds(record->rx_uptime, &nanos);
+        snprintf(key, sizeof(key), "AWDLUcFrame%02u", i);
+        snprintf(value, sizeof(value), "seq=%u uptime_us=%llu result=%u chan=%u qid=%u len=%u frame=%s",
+                 sequence, nanos / 1000, record->result, record->chan, record->qid, record->len, hex);
+        setProperty(key, value);
+    }
+    setProperty("AWDLUcFrames", __atomic_load_n(&ic->ic_awdl_uc_record_count, __ATOMIC_ACQUIRE), 32);
+    for (unsigned int i = 0; i < IEEE80211_AWDL_PEER_RECORDS; i++) {
+        const struct ieee80211_awdl_peer_record *record = &ic->ic_awdl_peer_records[i];
+        uint32_t sequence = __atomic_load_n(&record->sequence, __ATOMIC_ACQUIRE);
+        if (!sequence)
+            continue;
+        char key[32], value[160];
+        uint64_t nanos;
+        absolutetime_to_nanoseconds(record->rx_uptime, &nanos);
+        snprintf(key, sizeof(key), "AWDLPeerEvent%02u", i);
+        snprintf(value, sizeof(value), "seq=%u uptime_us=%llu event=%u addr=%02x:%02x:%02x:%02x:%02x:%02x err=%d",
+                 sequence, nanos / 1000, record->event, record->addr[0], record->addr[1], record->addr[2],
+                 record->addr[3], record->addr[4], record->addr[5], record->err);
+        setProperty(key, value);
+    }
+    setProperty("AWDLPeerEvents", __atomic_load_n(&ic->ic_awdl_peer_record_count, __ATOMIC_ACQUIRE), 32);
     {
         char ls[96];
         snprintf(ls, sizeof(ls), "chan=%u tries=%u failStage=%u failCode=%d", ic->ic_awdl_listener_chan,
