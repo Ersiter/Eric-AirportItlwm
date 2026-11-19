@@ -3250,7 +3250,16 @@ AWDL_GET_STUB(AWDL_TXCAL_PERIOD, apple80211_awdl_txcal_period)
 AWDL_GET_STUB(AWDL_DEV_STATS, apple80211_awdl_dev_stats)
 AWDL_GET_STUB(AWDL_DFSP_CONFIG, apple80211_awdl_dfsp_config)
 AWDL_GET_STUB(AWDL_CCA, apple80211_awdl_cca)
-AWDL_GET_STUB(AWDL_AF_SECONDARY_PAYLOAD_CAPABILITIES, apple80211_awdl_cap)
+IOReturn AirportItlwmAWDLInterface::
+getAWDL_AF_SECONDARY_PAYLOAD_CAPABILITIES(apple80211_awdl_cap *d)
+{
+    if (!d)
+        return kIOReturnBadArgument;
+    d->version = APPLE80211_VERSION;
+    d->cap = 0;
+    return kIOReturnSuccess;
+}
+
 IOReturn AirportItlwmAWDLInterface::
 getLLW_PARAMS(apple80211_llw_params *d)
 {
