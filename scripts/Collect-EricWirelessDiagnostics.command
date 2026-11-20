@@ -117,9 +117,15 @@ snapshot() {
     echo '[Wi-Fi and AWDL]'
     /usr/bin/wdutil info
     for interface in $wifi_interfaces awdl0 llw0; do
-        /sbin/ifconfig "$interface"
+        /sbin/ifconfig -v "$interface"
         /usr/sbin/netstat -I "$interface" -b
     done
+    echo '[IPv6 neighbours, routes and AirDrop connections on awdl0/llw0]'
+    /usr/sbin/ndp -an 2>&1 | /usr/bin/grep -E 'Neighbor|awdl0|llw0'
+    /usr/sbin/netstat -rn -f inet6 2>&1 | /usr/bin/grep -E 'awdl0|llw0'
+    /usr/sbin/ndp -p 2>&1 | /usr/bin/grep -A2 -E 'awdl0|llw0'
+    /usr/sbin/netstat -an -p tcp 2>&1 | /usr/bin/grep -E '\.8770 '
+    /usr/sbin/netstat -s -p tcp 2>&1 | /usr/bin/grep -E 'retransmit timeouts|connection requests|embryonic|listen queue'
     echo '[Bluetooth controller]'
     /usr/sbin/system_profiler -timeout 10 -detailLevel basic SPBluetoothDataType
     echo '[Driver properties]'
