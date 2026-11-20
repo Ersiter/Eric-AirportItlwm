@@ -256,10 +256,7 @@ attachToDataLinkLayer(IOOptionBits options, void *parameter)
          * peer's SYN reached this Mac and no SYN-ACK ever left. This driver has no such
          * manager, so give the kernel the interface back.
          */
-        const uint32_t eflags = ifnet_eflags(getIfnet());
-        if (eflags & 0x00040000u)
-            ifnet_set_eflags(getIfnet(), eflags & ~0x00040000u);
-        AWDL_LOG("eflags %x -> %x", eflags, ifnet_eflags(getIfnet()));
+
     }
     return ret;
 }
@@ -2167,6 +2164,20 @@ publishDataState()
 void AirportItlwmAWDLInterface::
 publishTxState()
 {
+    /*
+     * XNU leaves the neighbour cache of an AWDL interface to an alternate manager
+     * (IFEF_IPV6_ND6ALT): it installs no fe80::/64 route and never sends a neighbour solicitation.
+     * This driver has none, so every peer's SYN reached the Mac with no SYN-ACK ever leaving.
+     * The flag is put on after the interface attaches, so it is taken off again here, where the
+     * counter timer runs.
+     */
+    ifnet_t awdlIf = fController && fController->fAWDLBsdIf ?
+        fController->fAWDLBsdIf->getIfnet() : nullptr;
+    if (awdlIf && (ifnet_eflags(awdlIf) & 0x00040000u)) {
+        const uint32_t before = ifnet_eflags(awdlIf);
+        ifnet_set_eflags(awdlIf, before & ~0x00040000u);
+        AWDL_LOG("eflags %x -> %x", before, ifnet_eflags(awdlIf));
+    }
     setProperty("AWDLTxPSF", fTxPSF, 64);
     setProperty("AWDLTxMI", fTxMI, 64);
     setProperty("AWDLTxRefused", fTxRefused, 64);
