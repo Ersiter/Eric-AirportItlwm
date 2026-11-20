@@ -12102,11 +12102,11 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         frame[sizeof(*wh) + 1] == IEEE80211_ACTION_ADDBA_RESP &&
         sc->sc_awdl_ba_tid == 6;
     const int llwFrame = llwData || llwBaResponse;
-    if (llwFrame && (!sc->sc_use_mld_api || !sc->sc_listener_up ||
-        !sc->sc_awdl_low_latency)) {
+    const bool standing = sc->sc_use_mld_api && sc->sc_listener_up;
+    if (llwFrame && (!standing || !sc->sc_awdl_low_latency)) {
         if (unicast || isData)
             iwx_awdl_record_uc(ic, chan, -1, frame, len, 2);
-        return EAGAIN;
+        return standing && llwData ? EINPROGRESS : EAGAIN;
     }
     if ((!iwx_p2p_listen_enabled() && !sc->sc_listener_up) ||
         !sc->sc_p2p_queue ||
@@ -12121,8 +12121,8 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         return EAGAIN;
     }
     int qid = sc->sc_aux_roc_qid;
-    if (sc->sc_use_mld_api && sc->sc_listener_up) {
-        const int unicastData = isData && unicast;
+    const bool unicastData = isData && unicast;
+    if (standing) {
         if (isData && !unicast) {
             qid = iwx_awdl_client_enabled() ? sc->sc_awdl_mcast_qid : sc->sc_awdl_listener_data_qid;
             if (qid < 0) {
@@ -12137,7 +12137,7 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
             }
             if (sc->sc_awdl_peer_busy) {
                 iwx_awdl_record_uc(ic, chan, -1, frame, len, 2);
-                return EAGAIN;
+                return unicastData ? EINPROGRESS : EAGAIN;
             }
             if (!IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_target)) {
                 IEEE80211_ADDR_COPY(sc->sc_awdl_peer_target, peer);
@@ -12150,7 +12150,7 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
                     if (!queued(sc->sc_awdl_peer_qid) && !queued(sc->sc_awdl_peer_llw_qid) &&
                         !queued(sc->sc_awdl_peer_mgmt_qid))
                         task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
-                    return EAGAIN;
+                    return unicastData ? EINPROGRESS : EAGAIN;
                 }
                 iwx_awdl_record_uc(ic, chan, -1, frame, len, 3);
                 return peerError;
@@ -12162,7 +12162,7 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
                 !IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_addr)) {
                 iwx_awdl_record_uc(ic, chan, peerQid, frame, len, 2);
                 task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
-                return EAGAIN;
+                return unicastData ? EINPROGRESS : EAGAIN;
             }
             qid = peerQid;
         }
@@ -12172,7 +12172,7 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         ic->ic_awdl_tx_busy++;
         if (unicast || isData)
             iwx_awdl_record_uc(ic, chan, qid, frame, len, 5);
-        return EAGAIN;
+        return standing && unicastData ? EINPROGRESS : EAGAIN;
     }
     if (err) {
         ic->ic_awdl_tx_err++;

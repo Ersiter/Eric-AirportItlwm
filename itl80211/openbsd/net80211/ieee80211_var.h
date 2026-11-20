@@ -623,8 +623,9 @@ struct ieee80211com {
     uint32_t        ic_awdl_roc_rx_other;
     uint8_t         ic_awdl_roc_rx_last_chan;
     /*
-     * AWDL transmit (stage 3): send one complete 802.11 management frame on
-     * chan while a listen dwell is running there. EAGAIN when not on chan.
+     * Send a complete AWDL frame on chan during an active listen dwell.
+     * EAGAIN means TX is unavailable. EINPROGRESS defers unicast data
+     * waiting for the standing link's peer queue.
      */
     int             (*ic_awdl_tx)(struct ieee80211com *, uint8_t chan,
                         const uint8_t *frame, size_t len);

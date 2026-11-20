@@ -2341,6 +2341,7 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
     const size_t header = hdr + 8 + (lowLatency ? 0 : 8);
     unsigned kept = 0;
     bool backpressure = false;
+    bool peerWaiting = false;
 
     for (unsigned i = 0; i < count; i++) {
         const unsigned index = (head + i) % kDataQueueLen;
@@ -2360,7 +2361,7 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
             const bool group = IEEE80211_IS_MULTICAST(eh);
             qos = lowLatency && ic->ic_awdl_llw_qos && !group;
             const size_t overhead = header + (qos ? 2 : 0);
-            if (!group &&
+            if (!group && !peerWaiting &&
                 (!fTxPeerUs || now - fTxPeerUs > kPeerReplaceUs || IEEE80211_ADDR_EQ(&fTxPeer, eh))) {
                 IEEE80211_ADDR_COPY(&fTxPeer, eh);
                 fTxPeerUs = now;
@@ -2371,6 +2372,8 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
             } else if (txUs >= fTxEndUs) {
                 backpressure = true;
                 err = EAGAIN;
+            } else if (!group && peerWaiting) {
+                err = EINPROGRESS;
             } else if (!canSendData(eh, fTxChan, txUs)) {
                 fDataTxNotCommon++;
                 err = EAGAIN;
@@ -2401,11 +2404,13 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
                 mbuf_copydata(m, sizeof(eh), length - sizeof(eh), frame + overhead);
                 err = transmit(ic, fTxChan, frame, overhead + length - sizeof(eh));
                 backpressure = err == EAGAIN || err == EBUSY || err == ENOBUFS;
-                if (backpressure)
+                if (err == EINPROGRESS)
+                    peerWaiting = true;
+                if (backpressure || err == EINPROGRESS)
                     fDataTxDeferred++;
             }
         }
-        if (err == EAGAIN || err == EBUSY || err == ENOBUFS) {
+        if (err == EAGAIN || err == EBUSY || err == ENOBUFS || err == EINPROGRESS) {
             const unsigned to = (head + kept++) % kDataQueueLen;
             queue[to] = m;
             queuedUs[to] = queuedUs[index];
