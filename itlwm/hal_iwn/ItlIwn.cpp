@@ -667,6 +667,7 @@ iwn_attach(struct iwn_softc *sc, struct pci_attach_args *pa)
             ic->ic_awdl_home_chan = 6;
             ic->ic_awdl_listen = iwn_awdl_listen;
             ic->ic_awdl_tx = iwn_awdl_tx;
+            ic->ic_awdl_llw_tx = iwn_awdl_tx;
             ic->ic_awdl_stop = iwn_awdl_stop;
         }
     }
