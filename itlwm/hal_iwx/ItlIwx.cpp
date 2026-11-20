@@ -13681,9 +13681,9 @@ iwx_legacy_listener_setup(struct iwx_softc *sc)
         goto fail;
     }
     queue = iwx_tvqm_enable_txq(sc, IWX_MGMT_TID, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_LISTENER_STA_ID);
+    iwx_nic_unlock(sc);
     if (generation != sc->sc_generation)
         return ENXIO;
-    iwx_nic_unlock(sc);
     if (queue < 0) {
         err = -queue;
         goto fail;
@@ -13988,9 +13988,9 @@ iwx_aux_roc_add_sta(struct iwx_softc *sc, uint8_t chan)
         return EBUSY;
     }
     int qid = iwx_tvqm_enable_txq(sc, IWX_MGMT_TID, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_AUX_STA_ID);
+    iwx_nic_unlock(sc);
     if (generation != sc->sc_generation)
         return ENXIO;
-    iwx_nic_unlock(sc);
     if (qid < 0) {
         sc->sc_aux_roc_sta_stage = 3;
         sc->sc_aux_roc_sta_code = -qid;
