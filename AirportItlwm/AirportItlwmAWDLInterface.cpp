@@ -2338,8 +2338,7 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
     ifnet_t ifp = interface ? interface->getIfnet() : nullptr;
     static uint8_t frame[2048]; // work loop only
     const size_t hdr = sizeof(struct ieee80211_frame);
-    const size_t qos = lowLatency && ic->ic_awdl_llw_qos ? 2 : 0;
-    const size_t overhead = hdr + qos + 8 + (lowLatency ? 0 : 8);
+    const size_t header = hdr + 8 + (lowLatency ? 0 : 8);
     unsigned kept = 0;
     bool backpressure = false;
 
@@ -2350,21 +2349,26 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
         uint8_t eh[14];
         const size_t length = mbuf_pkthdr_len(m);
         int err = 0;
+        bool qos = false;
         if (now - queuedUs[index] > kDataMaxAgeUs) {
             err = ETIMEDOUT;
         } else if (backpressure) {
             err = EAGAIN;
-        } else if (length < sizeof(eh) || overhead + length - sizeof(eh) > sizeof(frame) ||
-            mbuf_copydata(m, 0, sizeof(eh), eh)) {
+        } else if (length < sizeof(eh) || mbuf_copydata(m, 0, sizeof(eh), eh)) {
             err = EINVAL;
         } else {
-            if (!IEEE80211_IS_MULTICAST(eh) &&
+            const bool group = IEEE80211_IS_MULTICAST(eh);
+            qos = lowLatency && ic->ic_awdl_llw_qos && !group;
+            const size_t overhead = header + (qos ? 2 : 0);
+            if (!group &&
                 (!fTxPeerUs || now - fTxPeerUs > kPeerReplaceUs || IEEE80211_ADDR_EQ(&fTxPeer, eh))) {
                 IEEE80211_ADDR_COPY(&fTxPeer, eh);
                 fTxPeerUs = now;
             }
             const auto txUs = hostUs();
-            if (txUs >= fTxEndUs) {
+            if (overhead + length - sizeof(eh) > sizeof(frame)) {
+                err = EMSGSIZE;
+            } else if (txUs >= fTxEndUs) {
                 backpressure = true;
                 err = EAGAIN;
             } else if (!canSendData(eh, fTxChan, txUs)) {
@@ -2378,12 +2382,12 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
                 IEEE80211_ADDR_COPY(wh->i_addr1, eh);
                 IEEE80211_ADDR_COPY(wh->i_addr2, &fMac);
                 IEEE80211_ADDR_COPY(wh->i_addr3, ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : kAWDLBssid);
-                const uint16_t sequence = (uint16_t)((lowLatency ? fLowLatencySeq : fTxSeq) << 4);
+                const uint16_t sequence = (uint16_t)((qos ? fLowLatencySeq : fTxSeq) << 4);
                 wh->i_seq[0] = sequence & 0xff;
                 wh->i_seq[1] = sequence >> 8;
                 if (qos)
                     frame[hdr] = 6;
-                uint8_t *snap = frame + hdr + qos;
+                uint8_t *snap = frame + hdr + (qos ? 2 : 0);
                 snap[0] = 0xaa; snap[1] = 0xaa; snap[2] = 0x03;
                 if (lowLatency) {
                     snap[6] = eh[12]; snap[7] = eh[13];
@@ -2413,10 +2417,11 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
             else if (ifp)
                 ifnet_stat_increment_out(ifp, 0, 1, 0);
         } else {
-            if (lowLatency) {
+            if (qos)
                 fLowLatencySeq++;
-            } else {
+            else
                 fTxSeq++;
+            if (!lowLatency) {
                 fDataSeq++;
                 fDataTx++;
             }

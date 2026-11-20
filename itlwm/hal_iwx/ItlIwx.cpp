@@ -7192,8 +7192,7 @@ static bool
 iwx_awdl_tx_queue(const struct iwx_softc *sc, int qid)
 {
     return sc->sc_p2p_queue && (qid == sc->sc_aux_roc_qid ||
-        qid == sc->sc_awdl_listener_data_qid || qid == sc->sc_awdl_listener_llw_qid ||
-        qid == sc->sc_awdl_mcast_qid ||
+        qid == sc->sc_awdl_listener_data_qid || qid == sc->sc_awdl_mcast_qid ||
         iwx_awdl_peer_tx_queue(sc, qid));
 }
 
@@ -8903,7 +8902,7 @@ iwx_flush_sta_tids(struct iwx_softc *sc, int sta_id, uint16_t tids)
             if (qid != sc->sc_awdl_mcast_qid)
                 continue;
         } else if (sc->sc_use_mld_api && sta_id == IWX_LISTENER_STA_ID) {
-            if (qid != sc->sc_awdl_listener_data_qid && qid != sc->sc_awdl_listener_llw_qid &&
+            if (qid != sc->sc_awdl_listener_data_qid &&
                 (iwx_awdl_client_enabled() || qid != sc->sc_aux_roc_qid))
                 continue;
         } else if (tid > IWX_MGMT_TID || (tid == IWX_MGMT_TID && qid != sc->first_data_qid)) {
@@ -11021,7 +11020,7 @@ iwx_awdl_dump(struct ieee80211com *ic, char *buf, size_t len)
     struct iwx_softc *sc = (struct iwx_softc *)IC2IFP(ic)->if_softc;
     const struct { const char *name; int qid; } queues[] = {
         { "mgmt", sc->sc_aux_roc_qid }, { "data", sc->sc_awdl_listener_data_qid },
-        { "llw", sc->sc_awdl_listener_llw_qid }, { "mcast", sc->sc_awdl_mcast_qid },
+        { "mcast", sc->sc_awdl_mcast_qid },
         { "peer", sc->sc_awdl_peer_qid }, { "peerllw", sc->sc_awdl_peer_llw_qid },
         { "peermgmt", sc->sc_awdl_peer_mgmt_qid },
     };
@@ -12093,7 +12092,8 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         len >= sizeof(*wh) + 2;
     const uint16_t qos = qosData ? frame[sizeof(*wh)] |
         ((uint16_t)frame[sizeof(*wh) + 1] << 8) : 0;
-    const int llwData = qosData && (qos & IEEE80211_QOS_TID) == 6;
+    const int unicast = !IEEE80211_IS_MULTICAST(wh->i_addr1);
+    const int llwData = unicast && qosData && (qos & IEEE80211_QOS_TID) == 6;
     const int llwBaResponse = sc->sc_awdl_low_latency && sc->sc_listener_up &&
         type == IEEE80211_FC0_TYPE_MGT &&
         subtype == IEEE80211_FC0_SUBTYPE_ACTION &&
@@ -12102,7 +12102,6 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         frame[sizeof(*wh) + 1] == IEEE80211_ACTION_ADDBA_RESP &&
         sc->sc_awdl_ba_tid == 6;
     const int llwFrame = llwData || llwBaResponse;
-    const int unicast = !IEEE80211_IS_MULTICAST(wh->i_addr1);
     if (llwFrame && (!sc->sc_use_mld_api || !sc->sc_listener_up ||
         !sc->sc_awdl_low_latency)) {
         if (unicast || isData)
@@ -12125,8 +12124,7 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     if (sc->sc_use_mld_api && sc->sc_listener_up) {
         const int unicastData = isData && unicast;
         if (isData && !unicast) {
-            qid = llwData ? sc->sc_awdl_listener_llw_qid :
-                (iwx_awdl_client_enabled() ? sc->sc_awdl_mcast_qid : sc->sc_awdl_listener_data_qid);
+            qid = iwx_awdl_client_enabled() ? sc->sc_awdl_mcast_qid : sc->sc_awdl_listener_data_qid;
             if (qid < 0) {
                 iwx_awdl_record_uc(ic, chan, -1, frame, len, 4);
                 return ENXIO;
@@ -12963,17 +12961,17 @@ iwx_awdl_listener_width(struct iwx_softc *sc, uint8_t chan)
  * on 149 beside a station on 44/157, the same band on a different channel. Linux iwl-mld likewise only
  * runs links on different bands together. Failure stage: 1 MAC, 2 link add, 3 PHY, 4 link rates, 5 link
  * active, 6 station, 8 association, 11 broadcast station, 7 management queue, 9 data queue,
- * 10 LLW queue and initial latency settings. A failure leaves the ROC listens as before.
+ * 10 initial latency settings. A failure leaves the ROC listens as before.
  */
 int ItlIwx::
 iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     uint32_t stage = 0;
-    int err = 0, queue, dataQueue = -1, llwQueue = -1, mcastQueue = -1;
+    int err = 0, queue, dataQueue = -1, mcastQueue = -1;
     bool mac_added = false, link_added = false, phy_added = false, phy_incomplete = false;
     bool link_active = false, sta_added = false, mac_associated = false, bcast_added = false;
-    bool queue_added = false, data_queue_added = false, llw_queue_added = false;
+    bool queue_added = false, data_queue_added = false;
     bool mcast_added = false, mcast_queue_added = false;
     const bool client = iwx_awdl_client_enabled();
     const int mgmtSta = client ? IWX_AWDL_BCAST_STA_ID : IWX_LISTENER_STA_ID;
@@ -13241,34 +13239,16 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         }
         mcast_queue_added = true;
     }
-    if (itlAWDLLlwFlag()) {
-        setupStage(10);
-        if (!iwx_nic_lock(sc)) {
-            err = EBUSY;
-            goto fail;
-        }
-        llwQueue = iwx_tvqm_enable_txq(sc, 6, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_LISTENER_STA_ID);
-        iwx_nic_unlock(sc);
-        if (generation != sc->sc_generation) {
-            err = ENXIO;
-            goto fail;
-        }
-        if (llwQueue < 0) {
-            err = -llwQueue;
-            goto fail;
-        }
-        llw_queue_added = true;
-    }
     sc->sc_p2p_queue = 1;
     sc->sc_aux_roc_qid = queue;
     sc->sc_awdl_listener_data_qid = dataQueue;
-    sc->sc_awdl_listener_llw_qid = llwQueue;
     sc->sc_awdl_mcast_qid = mcastQueue;
     ic->ic_awdl_roc_qid = queue;
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
     sc->sc_listener_up = 1;
     /* Reapply the traffic registration when rebuilding the firmware link. */
+    setupStage(10);
     err = iwx_awdl_update_low_latency(sc);
     if (generation != sc->sc_generation)
         return ENXIO;
@@ -13277,15 +13257,14 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         sc->sc_p2p_queue = 0;
         sc->sc_aux_roc_qid = -1;
         sc->sc_awdl_listener_data_qid = -1;
-        sc->sc_awdl_listener_llw_qid = -1;
         sc->sc_awdl_mcast_qid = -1;
         sc->sc_listener_chan = 0;
         ic->ic_awdl_roc_qid = -1;
         ic->ic_awdl_listener_chan = 0;
         goto fail;
     }
-    // The dedicated TID 6 queue belongs to this standing link. ROC uses AUX.
-    ic->ic_awdl_llw_qos = llw_queue_added;
+    // Only unicast on the standing link needs the peer's TID 6 queue.
+    ic->ic_awdl_llw_qos = itlAWDLLlwFlag();
     setupStage(0);
     sc->sc_listener_restore_pending = sc->sc_listener_tries == 1;
     static const uint8_t noPeer[IEEE80211_ADDR_LEN] = {};
@@ -13309,14 +13288,6 @@ fail:
                 return err;
             if (!cleanup)
                 iwx_free_tx_ring(sc, &sc->txq[queue]);
-        }
-        if (!cleanup && llw_queue_added && generation == sc->sc_generation) {
-            cleanup = iwx_mld_queue_cmd(sc, 1U << IWX_LISTENER_STA_ID,
-                6, 1, 0, 0, 0, NULL, NULL);
-            if (generation != sc->sc_generation)
-                return err;
-            if (!cleanup)
-                iwx_free_tx_ring(sc, &sc->txq[llwQueue]);
         }
         if (!cleanup && data_queue_added && generation == sc->sc_generation) {
             cleanup = iwx_mld_queue_cmd(sc, 1U << IWX_LISTENER_STA_ID,
@@ -13535,8 +13506,7 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
             IWX_AWDL_MCAST_STA_ID, IWX_AWDL_PEER_STA_ID};
         const auto hasPending = [&](int owner) {
             return (owner == mgmtSta && pending(sc->sc_aux_roc_qid)) ||
-                (owner == IWX_LISTENER_STA_ID &&
-                    (pending(sc->sc_awdl_listener_data_qid) || pending(sc->sc_awdl_listener_llw_qid))) ||
+                (owner == IWX_LISTENER_STA_ID && pending(sc->sc_awdl_listener_data_qid)) ||
                 (owner == IWX_AWDL_MCAST_STA_ID && pending(sc->sc_awdl_mcast_qid)) ||
                 (owner == IWX_AWDL_PEER_STA_ID &&
                     (pending(sc->sc_awdl_peer_qid) || pending(sc->sc_awdl_peer_llw_qid) ||
@@ -17472,7 +17442,6 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_awdl_peer_llw_qid = -1;
     sc->sc_awdl_peer_mgmt_qid = -1;
     sc->sc_awdl_listener_data_qid = -1;
-    sc->sc_awdl_listener_llw_qid = -1;
     sc->sc_awdl_mcast_qid = -1;
     sc->sc_awdl_encryption_type = 0;
     sc->sc_awdl_peer_error = 0;
@@ -20814,7 +20783,6 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     sc->sc_awdl_peer_llw_qid = -1;
     sc->sc_awdl_peer_mgmt_qid = -1;
     sc->sc_awdl_listener_data_qid = -1;
-    sc->sc_awdl_listener_llw_qid = -1;
     sc->sc_awdl_mcast_qid = -1;
     sc->sc_awdl_peer_tx_seq = 0;
     sc->sc_awdl_peer_llw_tx_seq = 0;

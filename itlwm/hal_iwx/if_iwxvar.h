@@ -962,7 +962,6 @@ struct iwx_softc {
 	int sc_awdl_peer_llw_qid;   /* low-latency unicast data, TID 6 */
 	int sc_awdl_peer_mgmt_qid;  /* management/action frames, TID 15 */
 	int sc_awdl_listener_data_qid; /* group data, listener STA TID 0 */
-	int sc_awdl_listener_llw_qid; /* LLW multicast, listener STA TID 6 */
 	int sc_awdl_mcast_qid; /* group data, multicast STA TID 0 */
 	int sc_awdl_peer_error;
 	uint8_t sc_awdl_peer_added;
