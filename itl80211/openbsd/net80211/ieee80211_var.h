@@ -689,6 +689,11 @@ struct ieee80211com {
     /* Why each of the listener's candidates (149, 44, 6) was left out, as bits: 1 no channel entry, 2 not in the
      * active set, 4 DFS, 8 passive and no beacon heard there, 16 band of a station link, 32 inside the station's 160 MHz group, 0x40 standing listener off on MLD; 0x80 chosen. */
     uint8_t         ic_awdl_listener_why[3];
+    /* Firmware notifications by (group << 8 | command), most frequent kept: what the firmware says while AWDL runs. */
+    uint32_t        ic_awdl_notif_code[64];
+    uint32_t        ic_awdl_notif_count[64];
+    /* Text with the state of the AWDL TX queues and links, written by the HAL. */
+    int             (*ic_awdl_dump)(struct ieee80211com *, char *buf, size_t len);
     uint8_t         ic_awdl_listener_station;   /* the station's channel the pick saw, 0 none */
     uint8_t         ic_awdl_listener_stage; /* last failed bring-up stage */
     uint8_t         ic_awdl_listener_tries;

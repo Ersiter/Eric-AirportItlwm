@@ -2432,6 +2432,18 @@ publishTxState()
         snprintf(ls, sizeof(ls), "station=%u 149:0x%02x 44:0x%02x 6:0x%02x", ic->ic_awdl_listener_station,
             ic->ic_awdl_listener_why[0], ic->ic_awdl_listener_why[1], ic->ic_awdl_listener_why[2]);
         setProperty("AWDLListenerPick", ls);
+        char dump[320] = {};
+        if (ic->ic_awdl_dump)
+            ic->ic_awdl_dump(ic, dump, sizeof(dump));
+        setProperty("AWDLQueues", dump);
+        char hist[900];
+        size_t used = 0;
+        hist[0] = 0;
+        for (unsigned i = 0; i < nitems(ic->ic_awdl_notif_code) && used + 24 < sizeof(hist); i++)
+            if (ic->ic_awdl_notif_count[i])
+                used += snprintf(hist + used, sizeof(hist) - used, "%u/%u:%u ", ic->ic_awdl_notif_code[i] >> 8,
+                    ic->ic_awdl_notif_code[i] & 0xff, ic->ic_awdl_notif_count[i]);
+        setProperty("AWDLNotifs", hist);
     }
     setProperty("AWDLBaReq", ic->ic_awdl_ba_req, 32);
     setProperty("AWDLBaRespSent", ic->ic_awdl_ba_resp_sent, 32);

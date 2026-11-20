@@ -10953,6 +10953,32 @@ iwx_awdl_record_peer(struct ieee80211com *ic, uint8_t event, const uint8_t *addr
 
 static uint8_t iwx_awdl_listener_pick(struct iwx_softc *sc, uint8_t only = 0);
 
+/* The AWDL TX queues as the driver sees them (index, queued, whether the TX watchdog is armed) and the listener's flags. */
+static int
+iwx_awdl_dump(struct ieee80211com *ic, char *buf, size_t len)
+{
+    struct iwx_softc *sc = (struct iwx_softc *)IC2IFP(ic)->if_softc;
+    const struct { const char *name; int qid; } queues[] = {
+        { "mgmt", sc->sc_aux_roc_qid }, { "data", sc->sc_awdl_listener_data_qid },
+        { "llw", sc->sc_awdl_listener_llw_qid }, { "mcast", sc->sc_awdl_mcast_qid },
+        { "peer", sc->sc_awdl_peer_qid }, { "peerllw", sc->sc_awdl_peer_llw_qid },
+        { "peermgmt", sc->sc_awdl_peer_mgmt_qid },
+    };
+    size_t used = snprintf(buf, len, "up=%d chan=%u refit=%d retry=%d peer_added=%d", sc->sc_listener_up,
+        sc->sc_listener_chan, sc->sc_listener_refitting, sc->sc_listener_retry_us != 0, sc->sc_awdl_peer_added);
+    for (unsigned i = 0; i < nitems(queues) && used < len; i++) {
+        const int qid = queues[i].qid;
+        if (qid <= 0 || qid >= (int)nitems(sc->txq)) {
+            used += snprintf(buf + used, len - used, " %s=-", queues[i].name);
+            continue;
+        }
+        const struct iwx_tx_ring *ring = &sc->txq[qid];
+        used += snprintf(buf + used, len - used, " %s=q%d:cur%d,n%d,t%d", queues[i].name, qid, ring->cur,
+            ring->queued, sc->sc_tx_timer[qid]);
+    }
+    return (int)used;
+}
+
 int ItlIwx::
 iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
 {
@@ -12773,9 +12799,14 @@ iwx_awdl_listener_pick(struct iwx_softc *sc, uint8_t only)
             why[i] |= 2;
         if (ch.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC))
             why[i] |= 4;
-        if ((ch.ic_flags & IEEE80211_CHAN_PASSIVE) && !isset(ic->ic_beacon_hint, c))
+        // -itlawdlstanding is a diagnostic for the standing link's transmit stall, which needs the link up on 149 even
+        // before an AP was heard there.
+        if ((ch.ic_flags & IEEE80211_CHAN_PASSIVE) && !isset(ic->ic_beacon_hint, c) && !itlAWDLStandingFlag())
             why[i] |= 8;
-        if (sc->sc_use_mld_api && ch.ic_flags && (bands & (1U << band(&ch))))
+        // Diagnostic (-itlawdlstanding): the standing link may share the station's own channel, to tell whether its
+        // transmit stall comes from time-sharing two bands on one radio.
+        const bool sharesStation = itlAWDLStandingFlag() && station && c == (unsigned)ieee80211_chan2ieee(ic, station);
+        if (sc->sc_use_mld_api && ch.ic_flags && (bands & (1U << band(&ch))) && !sharesStation)
             why[i] |= 16;
         if (why[i])
             continue;
@@ -12792,7 +12823,10 @@ iwx_awdl_listener_pick(struct iwx_softc *sc, uint8_t only)
             return c;
         }
         const uint8_t slots = ic->ic_awdl_peer_channel_slots[i];
-        if (!selected || slots > bestSlots || (slots == bestSlots && c == sc->sc_listener_chan)) {
+        if (sharesStation) {
+            selected = c;
+            bestSlots = 0xff;
+        } else if (!selected || (bestSlots != 0xff && (slots > bestSlots || (slots == bestSlots && c == sc->sc_listener_chan)))) {
             selected = c;
             bestSlots = slots;
         }
@@ -17900,6 +17934,19 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             KASSERT(data->m != m0, "data->m != m0");
         }
         
+        if (code != IWX_REPLY_RX_MPDU_CMD && code != IWX_REPLY_RX_PHY_CMD) {
+            const uint32_t key = (uint32_t)(pkt->hdr.group_id & ~IWX_CMD_FAILED_MSK) << 8 | pkt->hdr.cmd;
+            unsigned slot = 0;
+            for (; slot < nitems(sc->sc_ic.ic_awdl_notif_code); slot++)
+                if (sc->sc_ic.ic_awdl_notif_count[slot] && sc->sc_ic.ic_awdl_notif_code[slot] == key)
+                    break;
+            if (slot == nitems(sc->sc_ic.ic_awdl_notif_code))
+                for (slot = 0; slot < nitems(sc->sc_ic.ic_awdl_notif_code) - 1 && sc->sc_ic.ic_awdl_notif_count[slot]; slot++)
+                    ;
+            if (!sc->sc_ic.ic_awdl_notif_count[slot])
+                sc->sc_ic.ic_awdl_notif_code[slot] = key;
+            sc->sc_ic.ic_awdl_notif_count[slot]++;
+        }
         switch (code) {
             case IWX_REPLY_RX_PHY_CMD:
                 iwx_rx_rx_phy_cmd(sc, pkt, data);
@@ -20562,6 +20609,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
 #endif
     ic->ic_awdl_listen = iwx_awdl_listen;
     ic->ic_awdl_tx = iwx_awdl_tx;
+    ic->ic_awdl_dump = iwx_awdl_dump;
     ic->ic_awdl_tx_ready = iwx_awdl_tx_ready;
     ic->ic_awdl_llw_tx = iwx_awdl_tx;
     ic->ic_awdl_key = iwx_awdl_key;
