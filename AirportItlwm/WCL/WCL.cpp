@@ -514,11 +514,16 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
     // Instant Hotspot supplies one name plus a wildcard in the native SSID list.
     const auto raw = reinterpret_cast<const uint8_t *>(request);
     if (!scan.ssidLength && AirportWCL::read32(raw + 0x1318) == 2) {
-        uint32_t length = AirportWCL::read32(raw + 0x1320);
+        constexpr size_t kFirstLength = 0x1320;
+        constexpr size_t kEntrySize = 0x38;
+        const uint8_t *target = raw + kFirstLength;
+        if (!AirportWCL::read32(target))
+            target += kEntrySize;
+        const uint32_t length = AirportWCL::read32(target);
         if (length > sizeof(scan.ssid))
             return kIOReturnBadArgument;
         scan.ssidLength = length;
-        memcpy(scan.ssid, raw + 0x1324, length);
+        memcpy(scan.ssid, target + sizeof(length), length);
         XYLog("%s: native SSID list target length %u\n", __FUNCTION__, length);
     }
 #endif
