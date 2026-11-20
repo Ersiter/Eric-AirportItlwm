@@ -1094,6 +1094,15 @@ IOReturn AirportItlwm::setMulticastMode(IOEnetMulticastMode mode)
 
 IOReturn AirportItlwm::setMulticastList(IOEthernetAddress* addr, UInt32 len)
 {
+#ifdef AIRPORT_WCL
+    OSObject *client = getCommandClient();
+    if (OSDynamicCast(AirportItlwmAWDLEthernetInterface, client) ||
+        OSDynamicCast(AirportItlwmLowLatencyEthernetInterface, client)) {
+        // These interfaces receive groups through the AWDL path. Their BSD
+        // memberships must not replace the associated station's MAC filter.
+        return kIOReturnSuccess;
+    }
+#endif
     return fHalService->getDriverController()->setMulticastList(addr, len);
 }
 
