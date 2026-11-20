@@ -11493,14 +11493,17 @@ iwx_awdl_set_encryption(struct ieee80211com *ic, uint32_t type)
 int ItlIwx::
 iwx_awdl_update_low_latency(struct iwx_softc *sc)
 {
-    if (!sc->sc_use_mld_api || !sc->sc_listener_up)
+    if (!sc->sc_use_mld_api || (!sc->sc_listener_up && !sc->sc_listener_setting_up))
         return 0;
+    const int generation = sc->sc_generation;
     struct iwx_mac_low_latency_cmd lowLatencyCmd = {};
     lowLatencyCmd.mac_id = htole32(IWX_LISTENER_MAC_ID);
     lowLatencyCmd.low_latency_rx = sc->sc_awdl_low_latency;
     lowLatencyCmd.low_latency_tx = sc->sc_awdl_low_latency;
     int err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_LOW_LATENCY_CMD),
         0, sizeof(lowLatencyCmd), &lowLatencyCmd);
+    if (generation != sc->sc_generation)
+        return ENXIO;
     if (err)
         return err;
     if (!iwx_awdl_client_enabled())
@@ -11519,10 +11522,17 @@ iwx_awdl_set_low_latency(struct ieee80211com *ic, int active)
     struct iwx_softc *sc = (struct iwx_softc *)IC2IFP(ic)->if_softc;
     ItlIwx *that = container_of(sc, ItlIwx, com);
     const uint8_t previous = sc->sc_awdl_low_latency;
+    if (previous == (active != 0))
+        return 0;
+    if (sc->sc_listener_setting_up)
+        return EBUSY;
+    const int generation = sc->sc_generation;
     sc->sc_awdl_low_latency = active != 0;
     int err = that->iwx_awdl_update_low_latency(sc);
     if (err) {
         sc->sc_awdl_low_latency = previous;
+        if (generation != sc->sc_generation)
+            return ENXIO;
         int rollbackErr = that->iwx_awdl_update_low_latency(sc);
         if (rollbackErr)
             DPRINTFN(1, ("Failed to restore AWDL low-latency state: %d\n", rollbackErr));
@@ -13239,6 +13249,13 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         }
         mcast_queue_added = true;
     }
+    /* Apply the traffic registration before publishing the link and queues. */
+    setupStage(10);
+    err = iwx_awdl_update_low_latency(sc);
+    if (generation != sc->sc_generation)
+        return ENXIO;
+    if (err)
+        goto fail;
     sc->sc_p2p_queue = 1;
     sc->sc_aux_roc_qid = queue;
     sc->sc_awdl_listener_data_qid = dataQueue;
@@ -13247,22 +13264,6 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
     sc->sc_listener_up = 1;
-    /* Reapply the traffic registration when rebuilding the firmware link. */
-    setupStage(10);
-    err = iwx_awdl_update_low_latency(sc);
-    if (generation != sc->sc_generation)
-        return ENXIO;
-    if (err) {
-        sc->sc_listener_up = 0;
-        sc->sc_p2p_queue = 0;
-        sc->sc_aux_roc_qid = -1;
-        sc->sc_awdl_listener_data_qid = -1;
-        sc->sc_awdl_mcast_qid = -1;
-        sc->sc_listener_chan = 0;
-        ic->ic_awdl_roc_qid = -1;
-        ic->ic_awdl_listener_chan = 0;
-        goto fail;
-    }
     // Only unicast on the standing link needs the peer's TID 6 queue.
     ic->ic_awdl_llw_qos = itlAWDLLlwFlag();
     setupStage(0);
