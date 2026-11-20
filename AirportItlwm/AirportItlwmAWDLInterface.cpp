@@ -1807,7 +1807,8 @@ scheduleOwnListen(uint64_t afterUs)
     }
     int64_t slot = (int64_t)slotUs();
     uint16_t pm = presenceMode();
-    int64_t k = floorDiv((int64_t)from + kListenLeadUs - fRefUs, slot) + 1;
+    int64_t k = protectOwnSlots ? floorDiv((int64_t)from - fRefUs, slot) :
+        floorDiv((int64_t)from + kListenLeadUs - fRefUs, slot) + 1;
     // The peer we track (the phone during AirDrop) must be heard at least every
     // few seconds or IO80211Family drops it from NDP (lastAF ~6 s). When our own
     // slot keeps us home (or off AWDL) but the peer's slot at that time is on a
@@ -1823,7 +1824,7 @@ scheduleOwnListen(uint64_t afterUs)
             // A peer slot can begin anywhere in our slot. Use the overlap with
             // its actual channel rather than listening on the midpoint's channel early.
             chan = 0;
-            for (int64_t t = slotStart; t < slotStart + slot;) {
+            for (int64_t t = MAX(slotStart, (int64_t)from); t < slotStart + slot;) {
                 const int64_t peerSlot = floorDiv(t - peer.refUs, peer.slotUs);
                 const int64_t end = MIN(slotStart + slot, peer.refUs + (peerSlot + 1) * peer.slotUs);
                 const unsigned pc = peerChannelAt(peer, (uint64_t)t);
@@ -1848,8 +1849,13 @@ scheduleOwnListen(uint64_t afterUs)
                 run++;
             listenEnd = slotStart + run * slot;
         }
-        const uint64_t start = (uint64_t)(listenStart - kListenLeadUs);
-        if (huntChan && huntStart < start) {
+        // A late wakeup can still use the remainder of an advertised slot.
+        const int64_t start = protectOwnSlots ? MAX((int64_t)from, listenStart - kListenLeadUs) :
+            listenStart - kListenLeadUs;
+        const uint32_t dwell = (uint32_t)((listenEnd - start) / 1024);
+        if (protectOwnSlots && dwell < kListenDwellMinTU)
+            continue;
+        if (huntChan && huntStart < (uint64_t)start) {
             // MLD can defer ROC start by up to 32 TU. Leave that time before
             // the advertised slot as well as the full supplemental dwell.
             const uint64_t gapTU = (start - huntStart) / 1024;
@@ -1858,8 +1864,7 @@ scheduleOwnListen(uint64_t afterUs)
                 return armListen(huntChan, huntDwell, huntStart, huntGap);
             }
         }
-        const uint32_t dwell = (uint32_t)((listenEnd - listenStart + kListenLeadUs) / 1024);
-        return armListen(chan, MIN(dwell, fListenDwellTU), start, 0);
+        return armListen(chan, MIN(dwell, fListenDwellTU), (uint64_t)start, 0);
     }
     if (huntChan)
         return armListen(huntChan, kHuntDwellTU, huntStart, huntGap);
