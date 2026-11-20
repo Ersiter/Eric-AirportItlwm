@@ -898,6 +898,8 @@ struct iwx_softc {
 	/* Aux ROC (HOT_SPOT_CMD) state for the AWDL listen. */
 	int sc_aux_roc_pending;		/* sent, response not seen yet */
 	int sc_aux_roc_running;		/* between TE START and END */
+	int sc_mld_roc_canceling;	/* waiting for the ROC REMOVE response */
+	int sc_mld_roc_start_rejected;	/* await END or REMOVE without admitting TX */
 	int sc_aux_roc_sta;		/* aux station added for the ROC (ADD_STA v12+) */
 	uint32_t sc_aux_roc_sta_err;
 	uint32_t sc_aux_roc_sta_stage;	/* 1 ADD_STA send, 2 ADD_STA status, 3 txq */

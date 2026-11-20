@@ -10821,7 +10821,10 @@ iwx_scan(struct iwx_softc *sc)
         sc->sc_scan_lar_deferred = 1;
         return EBUSY;
     }
+    const int generation = sc->sc_generation;
     iwx_awdl_listen_abort(sc);
+    if (generation != sc->sc_generation)
+        return ENXIO;
     if (sc->sc_flags & IWX_FLAG_BGSCAN) {
         err = iwx_scan_abort(sc);
         if (err) {
@@ -10884,7 +10887,10 @@ iwx_bgscan(struct ieee80211com *ic)
     if (sc->sc_flags & IWX_FLAG_SCANNING)
         return 0;
     
+    const int generation = sc->sc_generation;
     that->iwx_awdl_listen_abort(sc);
+    if (generation != sc->sc_generation)
+        return ENXIO;
     err = that->iwx_umac_scan(sc, 1);
     if (err) {
         XYLog("%s: could not initiate scan\n", DEVNAME(sc));
@@ -13751,9 +13757,27 @@ iwx_mld_roc_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu)
         req.max_delay = htole32(max_delay);
         req.duration = htole32(duration_tu);
     }
-    return iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_ROC_CMD),
-        IWX_CMD_ASYNC, size, &req);
+    const uint32_t id = IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_ROC_CMD);
+    if (action == IWX_FW_CTXT_ACTION_ADD)
+        return iwx_send_cmd_pdu(sc, id, IWX_CMD_ASYNC, size, &req);
+
+    // A successful REMOVE response fences notifications for this activity.
+    struct iwx_host_cmd cmd = {};
+    cmd.id = id;
+    cmd.len[0] = size;
+    cmd.data[0] = &req;
+    cmd.flags = IWX_CMD_WANT_RESP;
+    cmd.resp_pkt_len = IWX_CMD_RESP_MAX;
+    int err = iwx_send_cmd(sc, &cmd);
+    if (err)
+        return err;
+    if (!cmd.resp_pkt)
+        err = EIO;
+    iwx_free_resp(sc, &cmd);
+    return err;
 }
+
+static constexpr unsigned kP2pRocWaitLimit = 64;
 
 /* iwl_mld_handle_roc_notif() */
 void ItlIwx::
@@ -13764,12 +13788,34 @@ iwx_mld_roc_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt)
     if (iwx_rx_packet_payload_len(pkt) < sizeof(*notif))
         return;
     notif = (const struct iwx_mld_roc_notif *)pkt->data;
-    if (le32toh(notif->activity) != IWX_MLD_ROC_ACTIVITY_P2P_DISC)
+    if (le32toh(notif->activity) != IWX_MLD_ROC_ACTIVITY_P2P_DISC ||
+        (!sc->sc_aux_roc_pending && !sc->sc_aux_roc_running))
         return;
-    if (le32toh(notif->success))
-        iwx_p2p_roc_event(sc, 1, le32toh(notif->started));
-    else
-        iwx_p2p_roc_event(sc, 0, 1);
+    const uint32_t start = le32toh(notif->started);
+    const uint32_t status = le32toh(notif->success);
+    if (sc->sc_mld_roc_canceling) {
+        if (!start)
+            sc->sc_aux_roc_pending = 0;
+        return;
+    }
+    if (!start && !sc->sc_aux_roc_running) {
+        if (!sc->sc_mld_roc_start_rejected) {
+            ++sc->sc_aux_roc_not_sched;
+            ++sc->sc_p2p_start_fail;
+        }
+        sc->sc_aux_roc_pending = 0;
+        iwx_aux_roc_sync_counters(sc);
+        return;
+    }
+    if (start && (!sc->sc_aux_roc_pending || sc->sc_mld_roc_start_rejected))
+        return;
+    iwx_p2p_roc_event(sc, status, start);
+    // Retire a rejected START at END or by removing the firmware activity.
+    if (start && !status) {
+        sc->sc_mld_roc_start_rejected = 1;
+        sc->sc_aux_roc_pending = 1;
+        sc->sc_p2p_wait = kP2pRocWaitLimit;
+    }
 }
 
 int ItlIwx::
@@ -13792,14 +13838,19 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
 {
     int err;
     
+    if (sc->sc_mld_roc_canceling)
+        return EBUSY;
     if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running) {
-        /* A lost notification must not stop the listen for good. */
-        if (++sc->sc_p2p_wait > 64) {
-            sc->sc_aux_roc_pending = 0;
-            sc->sc_aux_roc_running = 0;
-            sc->sc_awdl_listen_active = 0;
-            sc->sc_aux_roc_resp_err++;
-            iwx_aux_roc_sync_counters(sc);
+        if (++sc->sc_p2p_wait > kP2pRocWaitLimit) {
+            if (sc->sc_use_mld_api) {
+                iwx_awdl_listen_abort(sc);
+            } else {
+                sc->sc_aux_roc_pending = 0;
+                sc->sc_aux_roc_running = 0;
+                sc->sc_awdl_listen_active = 0;
+                sc->sc_aux_roc_resp_err++;
+                iwx_aux_roc_sync_counters(sc);
+            }
         }
         return EBUSY;
     }
@@ -13825,6 +13876,7 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
         return err;
     sc->sc_p2p_roc_chan = chan;
     sc->sc_p2p_wait = 0;
+    sc->sc_mld_roc_start_rejected = 0;
     sc->sc_p2p_dwell_tu = duration_tu;
     sc->sc_p2p_req_us = iwx_uptime_us();
     sc->sc_aux_roc_pending = 1;
@@ -14001,8 +14053,30 @@ iwx_awdl_listen_abort(struct iwx_softc *sc)
     if (sc->sc_listener_up)
         return;     /* the listener stays for the whole AWDL session */
     if (iwx_p2p_listen_enabled()) {
-        if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running)
+        if (sc->sc_mld_roc_canceling)
+            return;
+        if (sc->sc_use_mld_api && (sc->sc_aux_roc_pending || sc->sc_aux_roc_running)) {
+            const int generation = sc->sc_generation;
+            sc->sc_mld_roc_canceling = 1;
+            sc->sc_mld_roc_start_rejected = 1;
+            sc->sc_aux_roc_running = 0;
+            sc->sc_awdl_listen_active = 0;
+            sc->sc_aux_roc_pending = 1;
+            sc->sc_p2p_wait = 0;
+            int err = iwx_mld_roc_cmd(sc, IWX_FW_CTXT_ACTION_REMOVE, 0);
+            if (generation != sc->sc_generation)
+                return;
+            sc->sc_mld_roc_canceling = 0;
+            if (err && sc->sc_aux_roc_pending) {
+                sc->sc_aux_roc_resp_err++;
+                iwx_aux_roc_sync_counters(sc);
+                return;
+            }
+            // Reuse the channel-change drain before admitting TX in the next ROC.
+            sc->sc_p2p_roc_chan = 0;
+        } else if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running) {
             iwx_p2p_session_cmd(sc, IWX_FW_CTXT_ACTION_REMOVE, 0);
+        }
         sc->sc_aux_roc_pending = 0;
         sc->sc_aux_roc_running = 0;
         sc->sc_awdl_listen_active = 0;
@@ -17294,6 +17368,8 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_awdl_listen_active = 0;
     sc->sc_aux_roc_pending = 0;
     sc->sc_aux_roc_running = 0;
+    sc->sc_mld_roc_canceling = 0;
+    sc->sc_mld_roc_start_rejected = 0;
     sc->sc_aux_roc_sta = 0;
     sc->sc_p2p_mac = 0;
     sc->sc_p2p_promisc = 0;
