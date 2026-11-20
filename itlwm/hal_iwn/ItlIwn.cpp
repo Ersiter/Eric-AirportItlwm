@@ -2950,8 +2950,16 @@ iwn5000_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
         int txfail = (status != IWN_TX_STATUS_SUCCESS &&
                       status != IWN_TX_STATUS_DIRECT_DONE);
 #ifdef AIRPORT_WCL
-        if (txfail && sc->cmdqid == IWN_PAN_CMD_QUEUE && desc->qid == IWN_PAN_DATA_QUEUE)
+        if (sc->cmdqid == IWN_PAN_CMD_QUEUE && desc->qid == IWN_PAN_DATA_QUEUE) {
             sc->sc_ic.ic_awdl_tx_last_status = status;
+            if (status == IWN_TX_STATUS_SUCCESS) {
+                const auto *tx = reinterpret_cast<const struct iwn_cmd_data *>(ring->cmd[desc->idx].data);
+                if (letoh32(tx->flags) & IWN_TX_NEED_ACK) {
+                    const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(tx + 1);
+                    ieee80211_awdl_report_umi_ack(&sc->sc_ic, wh, ring->data[desc->idx].m);
+                }
+            }
+        }
 #endif
         /* Reset TX scheduler slot. */
         iwn5000_reset_sched(sc, desc->qid, desc->idx);
