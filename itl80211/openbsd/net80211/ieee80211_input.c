@@ -2667,7 +2667,10 @@ ieee80211_recv_probe_resp_bss(struct ieee80211com *ic, mbuf_t m,
         return;
     }
 
-    if (!chanFromHe6 &&
+    /* The 3168 can hear a BSS on a different channel during a firmware scan. */
+    int useAdvertisedChannel = (rxi->rxi_flags & IEEE80211_RXI_SCAN_BSS_CHANNEL) &&
+        ic->ic_state == IEEE80211_S_SCAN && isset(ic->ic_chan_active, chanidx);
+    if (!chanFromHe6 && !useAdvertisedChannel &&
         ((rxi->rxi_chan != 0 && chan != rxi->rxi_chan) ||
         ((ic->ic_state != IEEE80211_S_SCAN ||
          !(ic->ic_caps & IEEE80211_C_SCANALL)) &&

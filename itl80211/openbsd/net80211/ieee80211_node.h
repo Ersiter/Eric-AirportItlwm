@@ -286,6 +286,7 @@ struct ieee80211_rxinfo {
 #define IEEE80211_RXI_AMPDU_DONE	0x00000002
 #define IEEE80211_RXI_HWDEC_SAME_PN    0x00000004
 #define IEEE80211_RXI_SAME_SEQ         0x00000008
+#define IEEE80211_RXI_SCAN_BSS_CHANNEL 0x00000010
 
 /* Block Acknowledgement Record */
 struct ieee80211_tx_ba {

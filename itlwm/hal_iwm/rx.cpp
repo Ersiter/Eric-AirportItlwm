@@ -413,7 +413,7 @@ iwm_rx_mpdu(struct iwm_softc *sc, mbuf_t m, void *pktdata,
         return;
     }
     
-    chanidx = letoh32(phy_info->channel);
+    chanidx = le16toh(phy_info->channel);
     device_timestamp = le32toh(phy_info->system_timestamp);
     phy_flags = letoh16(phy_info->phy_flags);
     rate_n_flags = le32toh(phy_info->rate_n_flags);
@@ -427,7 +427,11 @@ iwm_rx_mpdu(struct iwm_softc *sc, mbuf_t m, void *pktdata,
     rxi.rxi_rssi = rssi;
     rxi.rxi_tstamp = device_timestamp;
     rxi.rxi_chan = chanidx;
-    
+    rxi.rxi_band = (phy_flags & IWM_RX_RES_PHY_FLAGS_BAND_24) ?
+        IEEE80211_CHAN_2GHZ : IEEE80211_CHAN_5GHZ;
+    if (sc->nvm_type == IWM_NVM_SDP && (sc->sc_flags & IWM_FLAG_SCANNING))
+        rxi.rxi_flags |= IEEE80211_RXI_SCAN_BSS_CHANNEL;
+
     iwm_rx_frame(sc, m, chanidx, rx_pkt_status,
                  (phy_flags & IWM_PHY_INFO_FLAG_SHPREAMBLE),
                  rate_n_flags, device_timestamp, &rxi, ml);
