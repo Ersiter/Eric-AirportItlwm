@@ -5076,7 +5076,7 @@ iwx_sta_rx_agg(struct iwx_softc *sc, struct ieee80211_node *ni, uint8_t tid,
             if (rxba->baid ==
                 IWX_RX_REORDER_DATA_INVALID_BAID)
                 continue;
-            if (rxba->tid != tid)
+            if (rxba->tid != tid || rxba->sta_mask != sta_mask)
                 continue;
             iwx_clear_reorder_buffer(sc, rxba);
             break;

@@ -219,7 +219,8 @@ iwx_mld_update_queue_sta_mask(ItlIwx *that, struct iwx_softc *sc,
 }
 
 static int
-iwx_mld_modify_rx_baid_sta_mask(struct iwx_softc *sc, uint32_t new_mask)
+iwx_mld_modify_rx_baid_sta_mask(struct iwx_softc *sc, uint32_t old_mask,
+    uint32_t new_mask)
 {
     uint32_t modified = 0;
     uint32_t old_masks[IWX_MAX_BAID] = {};
@@ -230,7 +231,7 @@ iwx_mld_modify_rx_baid_sta_mask(struct iwx_softc *sc, uint32_t new_mask)
         struct iwx_mld_rx_baid_cfg_cmd cmd = {};
 
         if (rxba->baid == IWX_RX_REORDER_DATA_INVALID_BAID ||
-            rxba->sta_mask == new_mask)
+            !(rxba->sta_mask & old_mask) || rxba->sta_mask == new_mask)
             continue;
         cmd.action = htole32(IWX_MLD_RX_BAID_MODIFY);
         cmd.modify.old_sta_id_mask = htole32(rxba->sta_mask);
@@ -346,7 +347,7 @@ iwx_mld_update_active_links(struct iwx_softc *sc, uint8_t link_mask,
             goto rollback_added;
         added_done |= 1U << i;
     }
-    err = iwx_mld_modify_rx_baid_sta_mask(sc, new_sta_mask);
+    err = iwx_mld_modify_rx_baid_sta_mask(sc, old_sta_mask, new_sta_mask);
     if (err) {
         iwx_mld_log_failure(sc, "mld-link-update", "rx-baid-mask",
             err, IWX_WIDE_ID(IWX_DATA_PATH_GROUP,
@@ -395,7 +396,7 @@ rollback_added:
     if (queue_updated)
         iwx_mld_update_queue_sta_mask(this, sc, new_sta_mask, old_sta_mask);
     if (baid_updated)
-        iwx_mld_modify_rx_baid_sta_mask(sc, old_sta_mask);
+        iwx_mld_modify_rx_baid_sta_mask(sc, new_sta_mask, old_sta_mask);
     for (int undo = 0; undo < IWX_MLD_MAX_LINKS; undo++)
         if (added_done & (1U << undo))
             iwx_mld_set_fw_link_active(this, sc, undo, 0);
@@ -2505,7 +2506,8 @@ iwx_mld_run_stop(struct iwx_softc *sc)
     }
     for (int i = 0; i < nitems(sc->sc_rxba_data); i++) {
         struct iwx_rxba_data *rxba = &sc->sc_rxba_data[i];
-        if (rxba->baid == IWX_RX_REORDER_DATA_INVALID_BAID)
+        if (rxba->baid == IWX_RX_REORDER_DATA_INVALID_BAID ||
+            !(rxba->sta_mask & sc->sc_mld_active_sta_mask))
             continue;
         err = iwx_sta_rx_agg(sc, &in->in_ni, rxba->tid, 0, 0, 0, 0);
         if (err) {
