@@ -1734,19 +1734,19 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
                 fPeerPredMiss++;
         }
     }
-    const bool hadReference = peerScheduleFresh(fPeers[fListenPeer], rxUs);
+    const uint64_t now = hostUs();
+    const bool hadPreferred = preferredPeerSchedule(now) != nullptr;
+    const bool hadReference = peerScheduleFresh(fPeers[fListenPeer], now);
     IEEE80211_ADDR_COPY(&peer.mac, src);
     peer.seenUs = rxUs;
     fPeers[index] = peer;
-    const bool acquiredReference = !hadReference && peerScheduleFresh(peer, rxUs);
-    if (acquiredReference)
+    if (!hadReference && peerScheduleFresh(peer, now))
         fListenPeer = index;
     fPeerUpdates++;
     // Finish the current TX window, then replace any pending channel hunt.
-    if (!fListenAlignedActive || (acquiredReference && fListenNextHuntGapUs)) {
-        const uint64_t now = hostUs();
+    if (!fListenAlignedActive ||
+        (fListenNextHuntGapUs && !hadPreferred && preferredPeerSchedule(now)))
         scheduleAlignedListen(MAX(now, fTxEndUs));
-    }
 }
 
 unsigned AirportItlwmAWDLInterface::
@@ -2001,6 +2001,9 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *timer)
             home == ic->ic_awdl_home_chan && chan == home :
             home != chan || awCanListenOnHome(ic, home);
         if (matches && !(++that->fListenSlot % that->fListenEveryNth)) {
+            // RX can run while the firmware command is waiting for its reply.
+            // Only a hunt still waiting on its timer may be replaced by RX.
+            that->fListenNextHuntGapUs = 0;
             const int err = that->startListen(chan, dwell, home, true);
             if (!that->fAWRunning || !that->fListenAlignedActive ||
                 that->fListenNextEndUs != end || that->fListenNextChan != chan ||
