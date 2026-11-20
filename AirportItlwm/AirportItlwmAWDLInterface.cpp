@@ -1036,7 +1036,7 @@ startAWTimeline()
     fLastValid = false;
     fInAW = false;
     fAWRunning = true;
-    fHuntStartUs = 0;               // every AWDL session gets its own hunt window
+    fHuntStartUs = fHuntNextUs = fListenNextHuntGapUs = 0;
     publishAWDLAddress();
     AWDL_LOG("seq %u slot %llu us", fRefSeq, slotUs());
     scheduleNextAW(now);
@@ -1733,22 +1733,43 @@ scheduleOwnListen(uint64_t afterUs)
     unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
     const bool homeOnly = ic->ic_awdl_home_chan != 0;
     const bool allowHome = homeOnly || ic->ic_awdl_listen_home;
+    const uint8_t listener = ic->ic_awdl_listener_chan;
+    const bool protectOwnSlots = ic->ic_awdl_listen_home && !listener && !homeOnly &&
+        !itlAWDLStandingFlag();
     if (homeOnly && home != ic->ic_awdl_home_chan)
         return false;
     uint64_t now = hostUs();
     // Data frames are only accepted while a peer is around (see ic_awdl_want_data);
     // the P2P MAC picks the change up before the next dwell.
     const auto &peer = fPeers[fListenPeer];
-    ic->ic_awdl_want_data = peerScheduleFresh(peer, now);
+    const bool havePeerTiming = peerScheduleFresh(peer, now);
+    ic->ic_awdl_want_data = havePeerTiming;
     updatePeerChannels(ic, now);
-    uint64_t from = afterUs > now ? afterUs : now;
-    if (awHuntAllowed() && !fHuntStartUs)
+    const uint64_t from = MAX(afterUs, now);
+    const auto armListen = [&](uint8_t chan, uint32_t dwell, uint64_t start, uint64_t huntGapUs) {
+        fListenNextChan = chan;
+        fListenNextDwellTU = dwell;
+        fListenNextHuntGapUs = huntGapUs;
+        uint64_t abs;
+        nanoseconds_to_absolutetime(start * 1000, &abs);
+        fListenTimer->cancelTimeout();
+        fListenTimer->wakeAtTime(abs);
+        fListenAlignedActive = true;
+        if (huntGapUs)
+            fListenHunt++;
+        return true;
+    };
+    uint8_t huntChan = 0;
+    uint64_t huntStart = 0;
+    uint64_t huntGap = 0;
+    if (awHuntAllowed() && !fHuntStartUs) {
         fHuntStartUs = now;
-    if (awHuntAllowed() && !ic->ic_awdl_want_data) {
+        fHuntNextUs = now + kHuntGapUs;
+    }
+    if (awHuntAllowed() && !havePeerTiming) {
         const bool receiving = fDataRxUnicastUs && now - fDataRxUnicastUs < kPeerStaleUs;
         const bool late = !receiving && now - fHuntStartUs >= kHuntWindowUs;
-        // Channel 6 is the rendezvous every AWDL node visits (slot 9 of its sequence) and the one
-        // channel Intel firmware transmits on reliably, so it gets half of the time.
+        // Give the 2.4 GHz social channel half of the extra search time.
         uint8_t alternate = 44;
         if (ic->ic_awdl_listen_home && home != 149 && IEEE80211_IS_CHAN_5GHZ(ic->ic_bss->ni_chan) &&
             !(ic->ic_bss->ni_chan->ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC))) {
@@ -1763,7 +1784,6 @@ scheduleOwnListen(uint64_t afterUs)
                 alternate = (uint8_t)home;
         }
         const uint8_t huntChannels[] = { 6, 149, 6, alternate };
-        const uint8_t listener = ic->ic_awdl_listener_chan;
         uint8_t list[nitems(huntChannels)];
         unsigned n = 0;
         for (uint8_t ch : huntChannels) {
@@ -1772,26 +1792,18 @@ scheduleOwnListen(uint64_t afterUs)
                 list[n++] = ch;
         }
         if (homeOnly || listener) {
-            fListenNextChan = homeOnly ? home : listener;
+            huntChan = homeOnly ? home : listener;
         } else if (receiving && isset(ic->ic_chan_active, fDataRxUnicastChannel)) {
-            // Keep the channel where data gets through until a sync frame
-            // gives us the peer's actual schedule.
-            fListenNextChan = fDataRxUnicastChannel;
+            huntChan = fDataRxUnicastChannel;
         } else if (n) {
-            fListenNextChan = list[(now / kHuntStepUs) % n];
-        } else {
-            return false;
+            huntChan = list[(now / kHuntStepUs) % n];
         }
-        fListenNextDwellTU = kHuntDwellTU;
+        huntGap = late ? kHuntLateGapUs : kHuntGapUs;
+        huntStart = protectOwnSlots ? MAX(from, fHuntNextUs) : from + huntGap;
         // Keep the P2P receive filter open while looking for the first sync frame.
         ic->ic_awdl_want_data = 1;
-        uint64_t abs;
-        nanoseconds_to_absolutetime((from + (late ? kHuntLateGapUs : kHuntGapUs)) * 1000, &abs);
-        fListenTimer->cancelTimeout();
-        fListenTimer->wakeAtTime(abs);
-        fListenAlignedActive = true;
-        fListenHunt++;
-        return true;
+        if (huntChan && !protectOwnSlots)
+            return armListen(huntChan, kHuntDwellTU, huntStart, huntGap);
     }
     int64_t slot = (int64_t)slotUs();
     uint16_t pm = presenceMode();
@@ -1800,13 +1812,12 @@ scheduleOwnListen(uint64_t afterUs)
     // few seconds or IO80211Family drops it from NDP (lastAF ~6 s). When our own
     // slot keeps us home (or off AWDL) but the peer's slot at that time is on a
     // non-home channel, listen there instead (on unless -itlawdlnopeerlisten).
-    const bool usePeer = awPeerListenAllowed() && peerScheduleFresh(peer, now);
+    const bool usePeer = awPeerListenAllowed() && havePeerTiming;
     for (int i = 0; i < 32; i++, k++) {
         uint16_t seq = (uint16_t)(fRefSeq + k * pm);
         uint8_t chan = ownChannelAt(seq);
         const int64_t slotStart = fRefUs + k * slot;
         int64_t listenStart = slotStart, listenEnd = slotStart + slot;
-        const uint8_t listener = ic->ic_awdl_listener_chan;
         const bool peerWindow = usePeer && (homeOnly || !chan || (chan == home && !allowHome));
         if (peerWindow) {
             // A peer slot can begin anywhere in our slot. Use the overlap with
@@ -1826,7 +1837,8 @@ scheduleOwnListen(uint64_t afterUs)
                 t = end;
             }
         }
-        if (!chan || (!allowHome && chan == home) || (listener && chan != listener))
+        if (!chan || (!allowHome && chan == home) || (listener && chan != listener) ||
+            (protectOwnSlots && !isset(ic->ic_chan_active, chan)))
             continue;
         if (peerWindow) {
             fListenPeerSlots++;
@@ -1836,16 +1848,21 @@ scheduleOwnListen(uint64_t afterUs)
                 run++;
             listenEnd = slotStart + run * slot;
         }
+        const uint64_t start = (uint64_t)(listenStart - kListenLeadUs);
+        if (huntChan && huntStart < start) {
+            // MLD can defer ROC start by up to 32 TU. Leave that time before
+            // the advertised slot as well as the full supplemental dwell.
+            const uint64_t gapTU = (start - huntStart) / 1024;
+            if (gapTU >= 32 + kListenDwellMinTU) {
+                const uint32_t huntDwell = (uint32_t)MIN(kHuntDwellTU, gapTU - 32);
+                return armListen(huntChan, huntDwell, huntStart, huntGap);
+            }
+        }
         const uint32_t dwell = (uint32_t)((listenEnd - listenStart + kListenLeadUs) / 1024);
-        fListenNextChan = chan;
-        fListenNextDwellTU = MIN(dwell, fListenDwellTU);
-        uint64_t abs;
-        nanoseconds_to_absolutetime((uint64_t)(listenStart - kListenLeadUs) * 1000, &abs);
-        fListenTimer->cancelTimeout();
-        fListenTimer->wakeAtTime(abs);
-        fListenAlignedActive = true;
-        return true;
+        return armListen(chan, MIN(dwell, fListenDwellTU), start, 0);
     }
+    if (huntChan)
+        return armListen(huntChan, kHuntDwellTU, huntStart, huntGap);
     fListenNoSlot++;
     return false;
 }
@@ -1854,6 +1871,7 @@ void AirportItlwmAWDLInterface::
 scheduleAlignedListen(uint64_t afterUs)
 {
     fListenAlignedActive = false;
+    fListenNextHuntGapUs = 0;
     if (awDataAllowed()) {
         scheduleOwnListen(afterUs);
         return;
@@ -1903,20 +1921,24 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *)
     if (!that || !that->fListenAlignedActive || !that->fAWRunning || !that->fController)
         return;
     uint64_t now = hostUs();
-    uint32_t dwell = that->fListenNextDwellTU;
+    const uint8_t chan = that->fListenNextChan;
+    const uint32_t dwell = that->fListenNextDwellTU;
+    const uint64_t huntGap = that->fListenNextHuntGapUs;
     ieee80211com *ic = that->fController->fHalService->get80211Controller();
     if (ic && ic->ic_awdl_listen && ic->ic_state == IEEE80211_S_RUN && ic->ic_bss) {
         unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
         const bool matches = ic->ic_awdl_home_chan ?
-            home == ic->ic_awdl_home_chan && that->fListenNextChan == home :
-            ic->ic_awdl_listen_home || home != that->fListenNextChan;
+            home == ic->ic_awdl_home_chan && chan == home :
+            ic->ic_awdl_listen_home || home != chan;
         if (matches && !(++that->fListenSlot % that->fListenEveryNth)) {
             uint64_t before = that->fListenStarted;
-            that->startListen(that->fListenNextChan, dwell, home, true);
+            that->startListen(chan, dwell, home, true);
+            if (huntGap)
+                that->fHuntNextUs = now + (uint64_t)dwell * 1024 + huntGap;
             if (that->fListenStarted != before) {
                 if (awDataAllowed())
                     that->fListenOwn++;
-                that->scheduleTx(that->fListenNextChan, now + kListenLeadUs,
+                that->scheduleTx(chan, now + kListenLeadUs,
                     now + (uint64_t)dwell * 1024);
             }
         }
@@ -3049,7 +3071,7 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fListenAligned = 0;
     fListenNoSlot = 0;
     fListenHunt = 0;
-    fHuntStartUs = 0;
+    fHuntStartUs = fHuntNextUs = fListenNextHuntGapUs = 0;
     memset(fPeers, 0, sizeof(fPeers));
     fListenPeer = 0;
     fTxPeerUs = 0;

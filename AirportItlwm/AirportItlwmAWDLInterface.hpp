@@ -283,6 +283,8 @@ private:
     uint64_t fListenNoSlot;
     uint64_t fListenHunt;
     uint64_t fHuntStartUs;
+    uint64_t fHuntNextUs;
+    uint64_t fListenNextHuntGapUs;
     struct PeerSchedule {
         ether_addr mac;
         uint64_t seenUs;
