@@ -34,10 +34,11 @@ fi
 work="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/EricWirelessDiagnostics.XXXXXX")" || exit 1
 stream_pid=
 timeline_pid=
+mdns_pid=
 
 stop_recording() {
     local pid
-    for pid in "$stream_pid" "$timeline_pid"; do
+    for pid in "$stream_pid" "$timeline_pid" "$mdns_pid"; do
         if [ -n "$pid" ]; then
             /bin/kill "$pid" 2>/dev/null
             wait "$pid" 2>/dev/null
@@ -45,6 +46,7 @@ stop_recording() {
     done
     stream_pid=
     timeline_pid=
+    mdns_pid=
 }
 trap 'stop_recording; /bin/rm -r -- "$work"' EXIT
 trap 'exit 130' INT TERM
@@ -60,7 +62,7 @@ boot_build="$(/usr/bin/sw_vers -buildVersion)"
 os_version="$(/usr/bin/sw_vers -productVersion)"
 (
     ulimit -f 256
-    echo "Collector revision: 2"
+    echo "Collector revision: 3"
     echo "Report: $focus"
     stamp
     /usr/bin/sw_vers
@@ -164,6 +166,12 @@ stream_pid=$!
     done
 ) > "$work/timeline.txt" 2>&1 &
 timeline_pid=$!
+
+if [ "$focus" = continuity ] && /sbin/ifconfig awdl0 >/dev/null 2>&1; then
+    # Correlate IPv6 mDNS at the BSD interface with the driver and daemon logs.
+    (ulimit -f 128; exec /usr/sbin/tcpdump -p -ni awdl0 -e -ql -s 96 -c 256 'ip6 and udp port 5353') > "$work/awdl-mdns.txt" 2>&1 &
+    mdns_pid=$!
+fi
 
 case "$focus" in
     bluetooth) echo "Open System Settings > Bluetooth. Put a nearby device in pairing mode and wait about 30 seconds." ;;
