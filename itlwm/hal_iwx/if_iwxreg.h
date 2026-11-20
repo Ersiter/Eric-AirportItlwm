@@ -4031,7 +4031,7 @@ struct iwx_card_state_notif {
 /**
  * struct iwx_missed_beacons_notif - information on missed beacons
  * ( IWX_MISSED_BEACONS_NOTIFICATION = 0xa2 )
- * @mac_id: interface ID
+ * @id: MAC ID in version 3, firmware link ID in version 4
  * @consec_missed_beacons_since_last_rx: number of consecutive missed
  *    beacons since last RX.
  * @consec_missed_beacons: number of consecutive missed beacons
@@ -4039,12 +4039,12 @@ struct iwx_card_state_notif {
  * @num_recvd_beacons:
  */
 struct iwx_missed_beacons_notif {
-    uint32_t mac_id;
+    uint32_t id;
     uint32_t consec_missed_beacons_since_last_rx;
     uint32_t consec_missed_beacons;
     uint32_t num_expected_beacons;
     uint32_t num_recvd_beacons;
-} __packed; /* IWX_MISSED_BEACON_NTFY_API_S_VER_3 */
+} __packed; /* IWX_MISSED_BEACON_NTFY_API_S_VER_3/4 */
 
 /**
  * struct iwx_mfuart_load_notif - mfuart image version & status

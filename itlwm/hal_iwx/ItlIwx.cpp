@@ -7468,9 +7468,14 @@ iwx_rx_bmiss(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
         (ic->ic_state != IEEE80211_S_RUN))
         return;
     
-    //    bus_dmamap_sync(sc->sc_dmat, data->map, sizeof(*pkt),
-    //        sizeof(*mbn), BUS_DMASYNC_POSTREAD);
-    
+    if (sc->sc_use_mld_api && iwx_lookup_notif_ver(sc, IWX_LEGACY_GROUP,
+            IWX_MISSED_BEACONS_NOTIFICATION) == 4) {
+        const uint32_t linkId = le32toh(mbn->id);
+        // The standing AWDL link has its own firmware ID outside the STA slots.
+        if (linkId >= IWX_NUM_PHY_CTX || !(sc->sc_mld_active_links & (1U << linkId)))
+            return;
+    }
+
     missed = le32toh(mbn->consec_missed_beacons_since_last_rx);
     if (missed > ic->ic_bmissthres && ic->ic_mgt_timer == 0) {
         if (ic->ic_if.if_flags & IFF_DEBUG) {
