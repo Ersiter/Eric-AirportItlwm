@@ -958,6 +958,7 @@ struct iwx_softc {
 	int sc_awdl_peer_mgmt_qid;  /* management/action frames, TID 15 */
 	int sc_awdl_listener_data_qid; /* group data, listener STA TID 0 */
 	int sc_awdl_listener_llw_qid; /* LLW multicast, listener STA TID 6 */
+	int sc_awdl_mcast_qid; /* group data, multicast STA TID 0 */
 	int sc_awdl_peer_error;
 	uint8_t sc_awdl_peer_added;
 	uint8_t sc_awdl_peer_busy;
@@ -1048,6 +1049,7 @@ struct iwx_node {
 #define IWX_LISTENER_STA_ID   9
 #define IWX_AWDL_PEER_STA_ID 10
 #define IWX_AWDL_BCAST_STA_ID 11
+#define IWX_AWDL_MCAST_STA_ID 12
 #define IWX_MONITOR_STA_ID 2
 
 #define IWX_ICT_SIZE		4096

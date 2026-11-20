@@ -11962,7 +11962,7 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     const int unicast = !IEEE80211_IS_MULTICAST(wh->i_addr1);
     if (llwFrame && (!sc->sc_use_mld_api || !sc->sc_listener_up ||
         !sc->sc_awdl_low_latency)) {
-        if (unicast)
+        if (unicast || isData)
             iwx_awdl_record_uc(ic, chan, -1, frame, len, 2);
         return EAGAIN;
     }
@@ -11974,7 +11974,7 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         ic->ic_bss == NULL ||
         (sc->sc_flags & (IWX_FLAG_SHUTDOWN | IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL))) {
         ic->ic_awdl_tx_busy++;
-        if (unicast)
+        if (unicast || isData)
             iwx_awdl_record_uc(ic, chan, -1, frame, len, 1);
         return EAGAIN;
     }
@@ -11983,7 +11983,7 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         const int unicastData = isData && unicast;
         if (isData && !unicast) {
             qid = llwData ? sc->sc_awdl_listener_llw_qid :
-                sc->sc_awdl_listener_data_qid;
+                (sc->sc_awdl_mcast_qid >= 0 ? sc->sc_awdl_mcast_qid : sc->sc_awdl_listener_data_qid);
             if (qid < 0) {
                 iwx_awdl_record_uc(ic, chan, -1, frame, len, 4);
                 return ENXIO;
@@ -12021,18 +12021,18 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     int err = that->iwx_awdl_tx_frame(sc, frame, len, qid);
     if (err == ENOBUFS) {
         ic->ic_awdl_tx_busy++;
-        if (unicast)
+        if (unicast || isData)
             iwx_awdl_record_uc(ic, chan, qid, frame, len, 5);
         return EAGAIN;
     }
     if (err) {
         ic->ic_awdl_tx_err++;
-        if (unicast)
+        if (unicast || isData)
             iwx_awdl_record_uc(ic, chan, qid, frame, len, 6);
     } else {
         ic->ic_awdl_tx_sent++;
         iwx_awdl_record_tx(ic, chan, qid, frame, len);
-        if (unicast)
+        if (unicast || isData)
             iwx_awdl_record_uc(ic, chan, qid, frame, len, 0);
     }
     return err;
@@ -12796,10 +12796,11 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     uint32_t stage = 0;
-    int err = 0, queue, dataQueue = -1, llwQueue = -1;
+    int err = 0, queue, dataQueue = -1, llwQueue = -1, mcastQueue = -1;
     bool mac_added = false, link_added = false, phy_added = false, phy_incomplete = false;
     bool link_active = false, sta_added = false, mac_associated = false, bcast_added = false;
     bool queue_added = false, data_queue_added = false, llw_queue_added = false;
+    bool mcast_added = false, mcast_queue_added = false;
     const bool client = iwx_awdl_client_enabled();
     const int mgmtSta = client ? IWX_AWDL_BCAST_STA_ID : IWX_LISTENER_STA_ID;
     const int mgmtTid = client ? IWX_MGMT_TID : IWX_MAX_TID_COUNT;
@@ -12818,8 +12819,12 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         sc->sc_pcitag->setProperty("AirportItlwm-AWDLSetupStage", value, 32);
     };
 
-    if (ic->ic_mld_link_count > 2 || sc->sc_capa_num_stations <= mgmtSta || !chan)
-        return ENOTSUP;
+    /* The client link needs one more station than the management one: the multicast station. */
+    {
+        const int topSta = client ? IWX_AWDL_MCAST_STA_ID : mgmtSta;
+        if (ic->ic_mld_link_count > 2 || sc->sc_capa_num_stations <= topSta || !chan)
+            return ENOTSUP;
+    }
 
     sc->sc_listener_bi = ic->ic_awdl_sync_period_tu;
     setupStage(1);
@@ -12983,6 +12988,33 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
             goto fail;
         bcast_added = true;
     }
+    if (client) {
+        setupStage(12);
+        if (generation != sc->sc_generation) {
+            err = ENXIO;
+            goto fail;
+        }
+        /*
+         * Group-addressed data has its own station on the link, as Linux's mcast station: the firmware sends a
+         * group frame from a station, and ours is the AP of this client link, where it does not. The address is
+         * the one Linux uses (iwl_mld_add_mcast_sta).
+         */
+        static const uint8_t kMcastAddr[IEEE80211_ADDR_LEN] = { 0x03, 0x00, 0x00, 0x00, 0x00, 0x00 };
+        struct iwx_mld_sta_cfg_cmd_v2 cmd = {};
+        cmd.sta_id = htole32(IWX_AWDL_MCAST_STA_ID);
+        cmd.link_id = htole32(IWX_LISTENER_LINK_ID);
+        cmd.station_type = htole32(IWX_STA_MULTICAST);
+        IEEE80211_ADDR_COPY(cmd.peer_mld_address, kMcastAddr);
+        IEEE80211_ADDR_COPY(cmd.peer_link_address, kMcastAddr);
+        err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD),
+            0, staCmdSize, &cmd);
+        if (err) {
+            /* The listener is worth more than this station: group data then goes the old way. */
+            XYLogE("%s: multicast station not added (%d)\n", DEVNAME(sc), err);
+            err = 0;
+        } else
+            mcast_added = true;
+    }
     setupStage(7);
     if (generation != sc->sc_generation) {
         err = ENXIO;
@@ -13019,6 +13051,24 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         goto fail;
     }
     data_queue_added = true;
+    if (client) {
+        if (!iwx_nic_lock(sc)) {
+            err = EBUSY;
+            goto fail;
+        }
+        mcastQueue = iwx_tvqm_enable_txq(sc, 0, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_AWDL_MCAST_STA_ID);
+        iwx_nic_unlock(sc);
+        if (generation != sc->sc_generation) {
+            err = ENXIO;
+            goto fail;
+        }
+        if (mcastQueue < 0) {
+            XYLogE("%s: multicast queue not created (%d)\n", DEVNAME(sc), mcastQueue);
+        } else {
+            mcast_queue_added = true;
+            sc->sc_awdl_mcast_qid = mcastQueue;
+        }
+    }
     setupStage(10);
     if (!iwx_nic_lock(sc)) {
         err = EBUSY;
@@ -13053,6 +13103,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
         sc->sc_aux_roc_qid = -1;
         sc->sc_awdl_listener_data_qid = -1;
         sc->sc_awdl_listener_llw_qid = -1;
+        sc->sc_awdl_mcast_qid = -1;
         sc->sc_listener_chan = 0;
         ic->ic_awdl_roc_qid = -1;
         ic->ic_awdl_listener_chan = 0;
@@ -13097,6 +13148,20 @@ fail:
                 return err;
             if (!cleanup)
                 iwx_free_tx_ring(sc, &sc->txq[dataQueue]);
+        }
+        if (!cleanup && mcast_queue_added && generation == sc->sc_generation) {
+            cleanup = iwx_mld_queue_cmd(sc, 1U << IWX_AWDL_MCAST_STA_ID,
+                0, 1, 0, 0, 0, NULL, NULL);
+            if (generation != sc->sc_generation)
+                return err;
+            if (!cleanup)
+                iwx_free_tx_ring(sc, &sc->txq[mcastQueue]);
+        }
+        if (!cleanup && generation == sc->sc_generation && mcast_added) {
+            struct iwx_mld_mvm_remove_sta_cmd cmd = {};
+            cmd.sta_id = htole32(IWX_AWDL_MCAST_STA_ID);
+            cleanup = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
+                IWX_MLD_STA_REMOVE_CMD), 0, sizeof(cmd), &cmd);
         }
         if (!cleanup && generation == sc->sc_generation && bcast_added) {
             struct iwx_mld_mvm_remove_sta_cmd cmd = {};
@@ -17101,6 +17166,7 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_awdl_peer_mgmt_qid = -1;
     sc->sc_awdl_listener_data_qid = -1;
     sc->sc_awdl_listener_llw_qid = -1;
+    sc->sc_awdl_mcast_qid = -1;
     sc->sc_awdl_encryption_type = 0;
     sc->sc_awdl_peer_error = 0;
     sc->sc_awdl_ba_pending = 0;
@@ -20411,6 +20477,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     sc->sc_awdl_peer_mgmt_qid = -1;
     sc->sc_awdl_listener_data_qid = -1;
     sc->sc_awdl_listener_llw_qid = -1;
+    sc->sc_awdl_mcast_qid = -1;
     sc->sc_awdl_peer_tx_seq = 0;
     sc->sc_awdl_peer_llw_tx_seq = 0;
     task_set(&sc->mcc_task, iwx_mcc_task, sc, "iwx_mcc_task");
