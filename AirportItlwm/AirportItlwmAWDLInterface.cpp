@@ -2426,6 +2426,9 @@ publishTxState()
         snprintf(ls, sizeof(ls), "chan=%u tries=%u failStage=%u failCode=%d", ic->ic_awdl_listener_chan,
             ic->ic_awdl_listener_tries, ic->ic_awdl_listener_stage, ic->ic_awdl_listener_code);
         setProperty("AWDLListener", ls);
+        snprintf(ls, sizeof(ls), "station=%u 149:0x%02x 44:0x%02x 6:0x%02x", ic->ic_awdl_listener_station,
+            ic->ic_awdl_listener_why[0], ic->ic_awdl_listener_why[1], ic->ic_awdl_listener_why[2]);
+        setProperty("AWDLListenerPick", ls);
     }
     setProperty("AWDLBaReq", ic->ic_awdl_ba_req, 32);
     setProperty("AWDLBaRespSent", ic->ic_awdl_ba_resp_sent, 32);

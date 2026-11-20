@@ -686,6 +686,10 @@ struct ieee80211com {
     uint8_t         ic_awdl_listener_chan;  /* standing listener's channel, 0 = none */
     uint8_t         ic_awdl_home_chan;      /* required infrastructure channel, 0 = unrestricted */
     void            (*ic_awdl_stop)(struct ieee80211com *);
+    /* Why each of the listener's candidates (149, 44, 6) was left out, as bits: 1 no channel entry, 2 not in the
+     * active set, 4 DFS, 8 passive and no beacon heard there, 16 band of a station link, 32 inside the station's 160 MHz group; 0x80 chosen. */
+    uint8_t         ic_awdl_listener_why[3];
+    uint8_t         ic_awdl_listener_station;   /* the station's channel the pick saw, 0 none */
     uint8_t         ic_awdl_listener_stage; /* last failed bring-up stage */
     uint8_t         ic_awdl_listener_tries;
     int             ic_awdl_listener_code;  /* error of that stage */

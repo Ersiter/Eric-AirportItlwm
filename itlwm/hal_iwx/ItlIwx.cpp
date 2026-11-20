@@ -4527,6 +4527,33 @@ uint32_t *channel_profile_v4, int nchan_profile, const char *source)
               (!IEEE80211_IS_CHAN_2GHZ(channel)) ? "5.2" : "2.4"));
     }
 
+    /*
+     * What the firmware's profile said, per channel, for the diagnostic collector: raw NVM flags (1 valid, 2 active,
+     * 4 radar, 8 IBSS-only/wide ... as iwx_nvm_channel_flags) of the channels AWDL may use, with the source of the
+     * profile. Written once per profile.
+     */
+    {
+        static const uint8_t kShown[] = { 1, 6, 11, 36, 40, 44, 48, 52, 64, 100, 116, 132, 144, 149, 153, 157, 161, 165 };
+        char text[400];
+        size_t used = snprintf(text, sizeof(text), "%s mcc=%s", source ? source : "?", sc->sc_fw_mcc);
+        for (unsigned i = 0; i < nitems(kShown) && used < sizeof(text) - 24; i++) {
+            const uint8_t want = kShown[i];
+            unsigned found = 0;
+            for (ch_idx = 0; ch_idx < nchan && ch_idx < nchan_profile; ch_idx++) {
+                if (nvm_channels[ch_idx] != want || ch_idx >= IWX_NUM_2GHZ_CHANNELS + 37)
+                    continue;
+                const uint32_t raw = channel_profile_v4 ? le32_to_cpup(channel_profile_v4 + ch_idx) :
+                    le16_to_cpup(channel_profile_v3 + ch_idx);
+                used += snprintf(text + used, sizeof(text) - used, " %u:raw=0x%x,ic=0x%x", want, raw,
+                    ic->ic_channels[want].ic_flags);
+                found = 1;
+                break;
+            }
+            if (!found)
+                used += snprintf(text + used, sizeof(text) - used, " %u:none", want);
+        }
+        sc->sc_pcitag->setProperty("AirportItlwm-ChanProfile", text);
+    }
 }
 
 int ItlIwx::
@@ -12727,28 +12754,48 @@ iwx_awdl_listener_pick(struct iwx_softc *sc, uint8_t only)
             groupB = group160(ieee80211_mhz2ieee(station->ic_center_freq2, 0));
     }
     uint8_t selected = 0, bestSlots = 0;
+    uint8_t why[nitems(kOrder)] = {};
     for (unsigned i = 0; i < nitems(kOrder); i++) {
         const unsigned c = kOrder[i];
         if (only && c != only)
             continue;
         const struct ieee80211_channel &ch = ic->ic_channels[c];
-        if (!ch.ic_flags || !isset(ic->ic_chan_active, c) ||
-            (ch.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)) ||
-            ((ch.ic_flags & IEEE80211_CHAN_PASSIVE) && !isset(ic->ic_beacon_hint, c)))
+        if (!ch.ic_flags)
+            why[i] |= 1;
+        if (!isset(ic->ic_chan_active, c))
+            why[i] |= 2;
+        if (ch.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC))
+            why[i] |= 4;
+        if ((ch.ic_flags & IEEE80211_CHAN_PASSIVE) && !isset(ic->ic_beacon_hint, c))
+            why[i] |= 8;
+        if (sc->sc_use_mld_api && ch.ic_flags && (bands & (1U << band(&ch))))
+            why[i] |= 16;
+        if (why[i])
             continue;
-        if (sc->sc_use_mld_api) {
-            if (bands & (1U << band(&ch)))
-                continue;
-        } else if (c != stationNum && group160(c) && (group160(c) == groupA || group160(c) == groupB)) {
+        if (!sc->sc_use_mld_api && c != stationNum && group160(c) && (group160(c) == groupA || group160(c) == groupB)) {
+            why[i] |= 32;
             continue;
         }
-        if (!sc->sc_use_mld_api)
+        if (!sc->sc_use_mld_api) {
+            if (!only) {
+                why[i] = 0x80;
+                memcpy(ic->ic_awdl_listener_why, why, sizeof(why));
+                ic->ic_awdl_listener_station = station ? ieee80211_chan2ieee(ic, station) : 0;
+            }
             return c;
+        }
         const uint8_t slots = ic->ic_awdl_peer_channel_slots[i];
         if (!selected || slots > bestSlots || (slots == bestSlots && c == sc->sc_listener_chan)) {
             selected = c;
             bestSlots = slots;
         }
+    }
+    if (!only) {
+        for (unsigned i = 0; i < nitems(kOrder); i++)
+            if (selected == kOrder[i])
+                why[i] |= 0x80;
+        memcpy(ic->ic_awdl_listener_why, why, sizeof(why));
+        ic->ic_awdl_listener_station = station ? ieee80211_chan2ieee(ic, station) : 0;
     }
     return selected;
 }
