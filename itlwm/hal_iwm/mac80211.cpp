@@ -4321,12 +4321,9 @@ iwm_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
     }
     
 #ifdef AIRPORT_WCL
-    if (nstate == IEEE80211_S_SCAN && ic->ic_state == IEEE80211_S_SCAN &&
-        (sc->sc_flags & IWM_FLAG_SCANNING) && ic->ic_wcl_scan_requested) {
-        // Let the firmware finish before starting the new request.
-        ic->ic_wcl_scan_restart = true;
+    if (nstate == IEEE80211_S_SCAN && (sc->sc_flags & IWM_FLAG_SCANNING) &&
+        ieee80211_wcl_queue_foreground_scan(ic))
         return 0;
-    }
 #endif
     sc->ns_nstate = nstate;
     sc->ns_arg = arg;
@@ -4355,8 +4352,7 @@ iwm_endscan(struct iwm_softc *sc)
         ic->ic_bss ? (uint32_t)ic->ic_bss->ni_rssi : 0, ic->ic_bgscan_fail);
     sc->sc_flags &= ~(IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN);
 #ifdef AIRPORT_WCL
-    if (ic->ic_wcl_scan_restart) {
-        ic->ic_wcl_scan_restart = false;
+    if (ieee80211_wcl_take_scan_restart(ic)) {
         iwm_newstate(ic, IEEE80211_S_SCAN, -1);
         return;
     }

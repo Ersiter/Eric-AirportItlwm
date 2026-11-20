@@ -1984,8 +1984,7 @@ iwn_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
         if (nstate == IEEE80211_S_SCAN) {
             if (sc->sc_flags & IWN_FLAG_SCANNING) {
 #ifdef AIRPORT_WCL
-                if (ic->ic_wcl_scan_requested)
-                    ic->ic_wcl_scan_restart = true;
+                ieee80211_wcl_queue_foreground_scan(ic);
 #endif
                 return 0;
             }
@@ -3300,9 +3299,8 @@ iwn_notif_intr(struct iwn_softc *sc)
                 scan->nchan, scan->status, scan->chan));
 
 #ifdef AIRPORT_WCL
-            if (ic->ic_wcl_scan_requested && ic->ic_wcl_scan_restart) {
+            if (ieee80211_wcl_take_scan_restart(ic)) {
                 // Restart at 2.4 GHz so both bands use the new request.
-                ic->ic_wcl_scan_restart = false;
                 sc->sc_flags &= ~IWN_FLAG_SCANNING;
                 int error = iwn_scan(sc, IEEE80211_CHAN_2GHZ, 0);
                 if (error)

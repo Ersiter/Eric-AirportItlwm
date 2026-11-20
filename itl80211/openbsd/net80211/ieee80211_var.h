@@ -912,6 +912,24 @@ ieee80211_awdl_report_umi_ack(struct ieee80211com *ic,
 }
 
 #ifdef AIRPORT_WCL
+static inline bool
+ieee80211_wcl_queue_foreground_scan(struct ieee80211com *ic)
+{
+    if (ic->ic_state != IEEE80211_S_SCAN || !ic->ic_wcl_scan_requested)
+        return false;
+    ic->ic_wcl_scan_restart = true;
+    return true;
+}
+
+static inline bool
+ieee80211_wcl_take_scan_restart(struct ieee80211com *ic)
+{
+    if (!ic->ic_wcl_scan_requested || !ic->ic_wcl_scan_restart)
+        return false;
+    ic->ic_wcl_scan_restart = false;
+    return true;
+}
+
 static inline unsigned ieee80211_wcl_ac(unsigned tid)
 {
     static const unsigned categories[8] = {
