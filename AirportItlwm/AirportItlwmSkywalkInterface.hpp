@@ -464,10 +464,13 @@ private:
     void resumeWCLJoin();
     IOReturn abortWCLJoin();
     IOReturn leaveWCLNetwork();
+    void resetWCLScan();
     void finishWCLScan(IOReturn);
     void finishWCLJoin(uint16_t, uint16_t, IOReturn);
     void publishWCLBeacon(const ieee80211_node *, const uint8_t *, size_t);
     IOReturn startWCLScan(const AirportWCL::ScanRequest &);
+    IOReturn programWCLScan();
+    void resumeWCLScan();
     void postWCLScanResult(const ieee80211_node *, const uint8_t *, const uint8_t *,
                            size_t, uint16_t, unsigned, bool, const uint8_t *, size_t,
                            uint16_t);
@@ -489,6 +492,8 @@ private:
     static constexpr unsigned kWCLScanResultCopies = 96;
     WCLScanResultCopy wclScanCopies[kWCLScanResultCopies] = {};
     unsigned wclScanResultCount = 0;
+    unsigned wclScanLivePosts = 0;
+    unsigned wclScanLiveFailures = 0;
     // Last WCL scan, for ioreg: what was asked, how it ended, which channels produced a beacon.
     uint64_t wclScanStartNs = 0;
     uint32_t wclScanCount = 0;

@@ -347,6 +347,7 @@ IOReturn AirportItlwmSkywalkInterface::stopWCLGated(
     self->portAuthorized = false;
     self->updateWCLLinkQuality(true);
     self->wclStopping = true;
+    self->finishWCLScan(kIOReturnAborted);
     if (self->fHalService) {
         auto ic = self->fHalService->get80211Controller();
         ic->ic_wcl_defer_user_eapol = nullptr;
@@ -526,45 +527,43 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
 
 IOReturn AirportItlwmSkywalkInterface::startWCLScan(const AirportWCL::ScanRequest &scan)
 {
-    ieee80211com *ic = fHalService->get80211Controller();
-    if (!(ic->ic_if.if_flags & IFF_RUNNING)) {
-        /*
-         * After wake the driver runs its own initialisation, and the
-         * framework's first scan lands inside it. Refusing lost that request
-         * outright, so the network was only joined once the user toggled
-         * Wi-Fi. Hold it and issue it when the driver reports ready.
-         */
-        if (ic->ic_if.if_flags & IFF_UP) {
-            if (scanPending)
-                finishWCLScan(kIOReturnAborted);
-            deferredScan = scan;
-            scanDeferred = scanPending = true;
-            scanCompleted = false;
-            clearWCLScanResults();
-            scanSource->setTimeoutMS(WCL_SCAN_TIMEOUT_MS);
-            return kIOReturnSuccess;
-        }
+    auto ic = fHalService->get80211Controller();
+    if (scanPending || joinPending)
+        return kIOReturnBusy;
+    if (!(ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING)))
         return kIOReturnNotReady;
+
+    deferredScan = scan;
+    scanPending = true;
+    scanDeferred = !(ic->ic_if.if_flags & IFF_RUNNING);
+    scanCompleted = false;
+    wclScanCount++;
+    wclScanLivePosts = wclScanLiveFailures = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &wclScanStartNs);
+    bzero(wclScanBeaconByChan, sizeof(wclScanBeaconByChan));
+    scanSource->setTimeoutMS(WCL_SCAN_TIMEOUT_MS);
+    if (scanDeferred)
+        return kIOReturnSuccess;
+
+    IOReturn status = programWCLScan();
+    if (status != kIOReturnSuccess) {
+        resetWCLScan();
+        clearWCLScanResults();
     }
-    if (scanPending) {
-        /*
-         * A newer request supersedes the scan in flight. Refusing it leaves
-         * the caller waiting for the previous scan to finish or for the batch
-         * timer to fire - from outside that is a Wi-Fi menu that never
-         * refreshes. Retire the old one the same way a join does.
-         */
-        finishWCLScan(kIOReturnAborted);
-    }
-    if (joinPending) {
+    return status;
+}
+
+IOReturn AirportItlwmSkywalkInterface::programWCLScan()
+{
+    auto ic = fHalService->get80211Controller();
+    if (!(ic->ic_if.if_flags & IFF_RUNNING))
+        return kIOReturnNotReady;
+    if (joinPending || ic->ic_state == IEEE80211_S_AUTH ||
+        ic->ic_state == IEEE80211_S_ASSOC ||
+        ((ic->ic_flags & IEEE80211_F_BGSCAN) && !ic->ic_wcl_scan_restart_supported))
         return kIOReturnBusy;
-    }
-    /*
-     * A background scan is not a reason to refuse either: iwx_scan() aborts it
-     * before starting the new one, so refusing here only delays the request.
-     */
-    if (ic->ic_state == IEEE80211_S_AUTH || ic->ic_state == IEEE80211_S_ASSOC) {
-        return kIOReturnBusy;
-    }
+
+    const auto &scan = deferredScan;
     uint8_t mappedChannels[sizeof(ic->ic_wcl_scan_channels)] = {};
     uint8_t mappedChannels6GHz[sizeof(ic->ic_wcl_scan_channels6GHz)] = {};
     unsigned mappedCount = 0;
@@ -584,9 +583,6 @@ IOReturn AirportItlwmSkywalkInterface::startWCLScan(const AirportWCL::ScanReques
     if (!mappedCount) {
         return kIOReturnUnsupported;
     }
-    scanPending = true;
-    scanCompleted = false;
-    deferredScan = scan;
     if (scan.ssidLength && scan.channelCount == 1 &&
         AirportWCL::scanChannelSelected(scan.channels, true, 149) &&
         !getProperty("WCLHotspotTraceEnabled")) {
@@ -597,10 +593,6 @@ IOReturn AirportItlwmSkywalkInterface::startWCLScan(const AirportWCL::ScanReques
         }
         setProperty("WCLHotspotTraceEnabled", true);
     }
-    clearWCLScanResults();
-    wclScanCount++;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &wclScanStartNs);
-    bzero(wclScanBeaconByChan, sizeof(wclScanBeaconByChan));
     // The HAL consumes the old completion before programming this request.
     ic->ic_wcl_scan_restart = ic->ic_wcl_scan_restart_supported &&
         (ic->ic_state == IEEE80211_S_SCAN || (ic->ic_flags & IEEE80211_F_BGSCAN));
@@ -612,38 +604,58 @@ IOReturn AirportItlwmSkywalkInterface::startWCLScan(const AirportWCL::ScanReques
     memcpy(ic->ic_wcl_scan_channels, mappedChannels, sizeof(mappedChannels));
     memcpy(ic->ic_wcl_scan_channels6GHz, mappedChannels6GHz, sizeof(mappedChannels6GHz));
     ieee80211_seed_scan_rnr(ic);
-    scanSource->setTimeoutMS(WCL_SCAN_TIMEOUT_MS);
     if (ic->ic_state == IEEE80211_S_RUN) {
         ieee80211_begin_cache_bgscan(&ic->ic_if);
-        if (!(ic->ic_flags & IEEE80211_F_BGSCAN)) {
-            scanPending = false;
-            ic->ic_wcl_scan_requested = false;
-            scanSource->cancelTimeout();
-            return kIOReturnBusy;
-        }
-    } else {
-        int error = ic->ic_newstate(ic, IEEE80211_S_SCAN, -1);
-        if (error) {
-            scanPending = false;
-            ic->ic_wcl_scan_requested = false;
-            scanSource->cancelTimeout();
-            return kIOReturnError;
-        }
+        return (ic->ic_flags & IEEE80211_F_BGSCAN) ? kIOReturnSuccess : kIOReturnBusy;
     }
-    return kIOReturnSuccess;
+    return ic->ic_newstate(ic, IEEE80211_S_SCAN, -1) ? kIOReturnError : kIOReturnSuccess;
+}
+
+void AirportItlwmSkywalkInterface::resumeWCLScan()
+{
+    if (!scanDeferred)
+        return;
+    scanDeferred = false;
+    IOReturn status = programWCLScan();
+    if (status != kIOReturnSuccess)
+        finishWCLScan(status);
+}
+
+void AirportItlwmSkywalkInterface::resetWCLScan()
+{
+    scanPending = scanDeferred = scanCompleted = false;
+    scanSource->cancelTimeout();
+    auto ic = fHalService->get80211Controller();
+    ic->ic_wcl_scan_requested = ic->ic_wcl_scan_restart = false;
 }
 
 void AirportItlwmSkywalkInterface::finishWCLScan(IOReturn status)
 {
     if (!scanPending)
         return;
+    const bool firmwareDone = scanCompleted;
+    resetWCLScan();
+    unsigned finalBSS = 0, finalFailures = 0;
+    // WCL applies result-age limits when it consumes ScanDone.
+    if (status == kIOReturnSuccess) {
+        for (unsigned i = 0; i < wclScanResultCount; ++i) {
+            IOReturn result = instance->postMessage(this, AirportWCL::ScanResult,
+                wclScanCopies[i].data, wclScanCopies[i].size, true);
+            if (result == kIOReturnSuccess)
+                ++finalBSS;
+            else
+                ++finalFailures;
+        }
+    }
     {
         uint64_t nowNs;
         absolutetime_to_nanoseconds(mach_absolute_time(), &nowNs);
-        char summary[320];
-        int o = snprintf(summary, sizeof(summary), "n=%u type=%u ssidLen=%u channels=%u results=%u status=0x%x ms=%llu beacons:",
+        char summary[384];
+        int o = snprintf(summary, sizeof(summary),
+            "n=%u type=%u ssidLen=%u channels=%u buffered=%u livePosts=%u liveFailures=%u finalBSS=%u finalFailures=%u firmwareDone=%u status=0x%x ms=%llu beacons:",
             wclScanCount, (unsigned)deferredScan.type, (unsigned)deferredScan.ssidLength,
-            (unsigned)deferredScan.channelCount, wclScanResultCount, (unsigned)status,
+            (unsigned)deferredScan.channelCount, wclScanResultCount, wclScanLivePosts,
+            wclScanLiveFailures, finalBSS, finalFailures, unsigned(firmwareDone), (unsigned)status,
             (nowNs - wclScanStartNs) / 1000000);
         for (unsigned c = 0; c < 256 && o < (int)sizeof(summary) - 12; ++c)
             if (wclScanBeaconByChan[c])
@@ -654,16 +666,6 @@ void AirportItlwmSkywalkInterface::finishWCLScan(IOReturn status)
         if (deferredScan.channelCount && deferredScan.channelCount <= 4)
             setProperty("WCLScanLastRestricted", summary);
     }
-    scanPending = scanDeferred = false;
-    scanCompleted = false;
-    scanSource->cancelTimeout();
-    auto ic = fHalService->get80211Controller();
-    ic->ic_wcl_scan_requested = ic->ic_wcl_scan_restart = false;
-    // WCL applies result-age limits when it consumes ScanDone.
-    if (status == kIOReturnSuccess)
-        for (unsigned i = 0; i < wclScanResultCount; ++i)
-            instance->postMessage(this, AirportWCL::ScanResult,
-                wclScanCopies[i].data, wclScanCopies[i].size, true);
     clearWCLScanResults();
     instance->postMessage(this, AirportWCL::ScanDone, &status, sizeof(status), true);
     // The legacy scan-complete notification still drives airportd's result
@@ -901,8 +903,8 @@ void AirportItlwmSkywalkInterface::postWCLScanResult(const ieee80211_node *node,
         (ssidBytes ? AirportWCL::SSIDPresent : 0U);
     memcpy(metadata + 1, ies, length);
     size_t messageSize = sizeof(*metadata) + metadata->ieLength;
+    auto ic = fHalService->get80211Controller();
     if (assocNotified && IEEE80211_ADDR_EQ(bssid, joinBSSID)) {
-        auto ic = fHalService->get80211Controller();
         if (uint16_t currentSpec = wclCurrentChannelSpec(ic)) {
             metadata->channelSpec = currentSpec;
             metadata->channel = ieee80211_chan2number(ic,
@@ -914,9 +916,10 @@ void AirportItlwmSkywalkInterface::postWCLScanResult(const ieee80211_node *node,
             memcpy(wclBssInfo, metadata, messageSize);
         }
     }
-    if (scanPending && !scanDeferred &&
+    const bool currentScan = scanPending && !scanDeferred && !ic->ic_wcl_scan_restart &&
         AirportWCL::scanChannelSelected(sixGHz ? deferredScan.channels6GHz :
-            deferredScan.channels, deferredScan.channelCount != 0, channel))
+            deferredScan.channels, deferredScan.channelCount != 0, channel);
+    if (currentScan)
         keepWCLScanResult(metadata, messageSize);
     if (scanPending && deferredScan.ssidLength == ssidBytes && ssidBytes &&
         memcmp(deferredScan.ssid, ssid, ssidBytes) == 0) {
@@ -927,6 +930,12 @@ void AirportItlwmSkywalkInterface::postWCLScanResult(const ieee80211_node *node,
         setProperty("WCLScanTargetIE", metadata + 1, (unsigned)length);
     }
     IOReturn result = instance->postMessage(this, AirportWCL::ScanResult, metadata, messageSize, true);
+    if (currentScan) {
+        if (result == kIOReturnSuccess)
+            ++wclScanLivePosts;
+        else
+            ++wclScanLiveFailures;
+    }
     wclTraceHotspot149(this, node, ies, length, "posted-to-wcl", wclScanCount, scanPending, result);
     IOFree(metadata, size);
 }
@@ -1440,8 +1449,10 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             // scan MAC again and recursively restarts the card.
             bool consumedMacReconfig = AirportWCL::consumeMacReconfiguration(ic->ic_wcl_mac_reconfig, ready);
             if (consumedMacReconfig) {
-                if (ready)
+                if (ready) {
+                    resumeWCLScan();
                     resumeWCLJoin();
+                }
                 break;
             }
             if (ready) {
@@ -1463,17 +1474,10 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
              * reads it when it asks the driver for the country code.
              */
             instance->postMessage(this, AirportWCL::DriverAvailable, &event, sizeof(event), false);
-            if (ready && scanDeferred) {
-                /*
-                 * The scan the framework asked for while the driver was coming
-                 * up. Issued before a deferred join so the join has a fresh
-                 * result list to pick from.
-                 */
-                scanDeferred = scanPending = false;
-                startWCLScan(deferredScan);
-            }
-            if (ready)
+            if (ready) {
+                resumeWCLScan();
                 resumeWCLJoin();
+            }
             break;
         }
         case IEEE80211_EVT_BEACON: {
