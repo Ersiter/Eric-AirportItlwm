@@ -35,10 +35,11 @@ work="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/EricWirelessDiagnostics.XXXXXX")" ||
 stream_pid=
 timeline_pid=
 mdns_pid=
+mdns_drop_pid=
 
 stop_recording() {
     local pid
-    for pid in "$stream_pid" "$timeline_pid" "$mdns_pid"; do
+    for pid in "$stream_pid" "$timeline_pid" "$mdns_pid" "$mdns_drop_pid"; do
         if [ -n "$pid" ]; then
             /bin/kill "$pid" 2>/dev/null
             wait "$pid" 2>/dev/null
@@ -47,6 +48,7 @@ stop_recording() {
     stream_pid=
     timeline_pid=
     mdns_pid=
+    mdns_drop_pid=
 }
 trap 'stop_recording; /bin/rm -r -- "$work"' EXIT
 trap 'exit 130' INT TERM
@@ -62,7 +64,7 @@ boot_build="$(/usr/bin/sw_vers -buildVersion)"
 os_version="$(/usr/bin/sw_vers -productVersion)"
 (
     ulimit -f 256
-    echo "Collector revision: 7"
+    echo "Collector revision: 8"
     echo "Report: $focus"
     stamp
     /usr/bin/sw_vers
@@ -180,6 +182,12 @@ if [ "$focus" = continuity ]; then
         exec /usr/sbin/tcpdump -p -ni awdl0 -evl -s 0 -c 256 'udp port 5353'
     ) > "$work/awdl-mdns.txt" 2>&1 &
     mdns_pid=$!
+    (
+        ulimit -f 128
+        exec /usr/sbin/tcpdump -ni droptap -l -k ID -c 128 \
+            -Q 'if=awdl0 and dir=in' 'udp dst port 5353'
+    ) > "$work/awdl-mdns-drops.txt" 2>&1 &
+    mdns_drop_pid=$!
 fi
 
 case "$focus" in
