@@ -79,6 +79,15 @@ public:
     void setAWDLOwner(class AirportItlwmAWDLInterface *owner) { fOwner = owner; }
 
 private:
+    // The kernel gets no neighbour entry for an AWDL peer unless one is handed to it, see seedNeighbor().
+    struct NdPeer {
+        uint8_t mac[6];
+        uint64_t us;
+    };
+    enum { kNdPeers = 8 };
+    NdPeer fNdPeers[kNdPeers];
+    void seedNeighbor(mbuf_t m, class AirportItlwmAWDLInterface *awdl);
+    void recordRxIp(mbuf_t m, class AirportItlwmAWDLInterface *awdl);
     class AirportItlwmAWDLInterface *fOwner;
     uint64_t fDropped;
     ether_addr fMac;
@@ -332,6 +341,21 @@ public:
     uint64_t fDataRxNoBuf;
     uint32_t fDataRxLastLen;
     uint16_t fDataRxLastType;
+    // Neighbour solicitations handed to the stack for a peer's first IPv6 frame (seeded), left out because the
+    // peer was seeded recently (skipped), or that could not be built (failed).
+    uint32_t fNdSeeded, fNdSeedSkipped, fNdSeedFailed;
+    // The last IPv6 frames delivered to awdl0 (what the peer actually sends), newest overwrites oldest.
+    enum { kRxIpRecords = 16 };
+    struct RxIpRecord {
+        uint64_t us;
+        uint8_t dst[6], src[6];
+        uint16_t ethType, len;
+        uint8_t nextHeader, type, flags, seeded;
+        uint16_t srcPort, dstPort;
+        volatile uint32_t sequence;
+    };
+    RxIpRecord fRxIp[kRxIpRecords];
+    volatile uint32_t fRxIpCount;
     void publishDataState();
     // Ethernet frames from awdl0, sent as AWDL data frames during a dwell.
     void enqueueData(mbuf_t m);

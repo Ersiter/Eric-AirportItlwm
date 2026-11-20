@@ -9,6 +9,7 @@
 #include "AirportItlwmAWDLInterface.hpp"
 #include "AirportItlwmSkywalkInterface.hpp"
 #include <HAL/ItlAWDLBootArg.hpp>
+#include <netinet/in.h>
 
 #ifdef AIRPORT_WCL
 
@@ -268,6 +269,159 @@ performCommand(IONetworkController *controller, unsigned long cmd, void *arg0, v
 static bool awDataAllowed();
 static uint64_t hostUs();
 
+// A peer is taught to the kernel again after this long; entries of an ND6ALT interface never expire, so it only
+// covers a table that was flushed (interface down and up).
+static const uint64_t kNdSeedIntervalUs = 30 * 1000000ULL;
+
+/*
+ * XNU's IFEF_AWDL forces IFEF_IPV6_ND6ALT, and ifnet_set_eflags refuses to clear it. awdl0 therefore has no
+ * fe80::/64 route and does no neighbour discovery of its own: its entries are meant to come from wifip2pd. On this
+ * driver none was ever installed, so an iPhone's SYN to port 8770 arrived and the SYN-ACK died in ip6_output
+ * (ping6 to the peer: "No route to host"; adding the route and the entry by hand made the frames flow).
+ * A neighbour solicitation from the peer creates such an entry inside the kernel (nd6_ns_input ->
+ * nd6_cache_lladdr: REACHABLE with no expiry on an ND6ALT interface), host route included. So when the first IPv6
+ * frame of a peer arrives, one is built from it and handed to the stack ahead of the frame. m starts with the
+ * Ethernet header.
+ */
+void AirportItlwmAWDLEthernetInterface::
+seedNeighbor(mbuf_t m, AirportItlwmAWDLInterface *awdl)
+{
+    ifnet_t ifp = getIfnet();
+    uint8_t head[14 + 40 + 1];
+    if (!ifp || mbuf_pkthdr_len(m) < sizeof(head) || mbuf_copydata(m, 0, sizeof(head), head))
+        return;
+    if (head[12] != 0x86 || head[13] != 0xdd)
+        return;
+    const uint8_t *peerMac = head + 6, *ip6 = head + 14;
+    const uint8_t *peerLL = ip6 + 8;
+    // Neighbour discovery of the peer itself, or a source that is not link-local, teaches nothing.
+    if (IEEE80211_IS_MULTICAST(peerMac) || peerLL[0] != 0xfe || (peerLL[1] & 0xc0) != 0x80 ||
+        (ip6[6] == 58 && head[14 + 40] >= 133 && head[14 + 40] <= 137))
+        return;
+
+    const uint64_t now = hostUs();
+    NdPeer *slot = nullptr, *oldest = &fNdPeers[0];
+    for (unsigned i = 0; i < kNdPeers; i++) {
+        if (fNdPeers[i].us && !memcmp(fNdPeers[i].mac, peerMac, 6)) {
+            slot = &fNdPeers[i];
+            break;
+        }
+        if (fNdPeers[i].us < oldest->us)
+            oldest = &fNdPeers[i];
+    }
+    if (slot && now - slot->us < kNdSeedIntervalUs) {
+        awdl->fNdSeedSkipped++;
+        return;
+    }
+    if (!slot)
+        slot = oldest;
+    memcpy(slot->mac, peerMac, 6);
+    slot->us = now;
+
+    // Our own link-local address, as the kernel holds it (it keeps the interface index inside the address).
+    uint8_t ownLL[16] = {};
+    bool haveOwn = false;
+    ifaddr_t *addresses = nullptr;
+    if (ifnet_get_address_list_family(ifp, &addresses, AF_INET6) == 0 && addresses) {
+        for (ifaddr_t *a = addresses; *a && !haveOwn; a++) {
+            struct sockaddr_in6 sin6 = {};
+            if (ifaddr_address(*a, (struct sockaddr *)&sin6, sizeof(sin6)) == 0 && sin6.sin6_family == AF_INET6 &&
+                sin6.sin6_addr.s6_addr[0] == 0xfe && (sin6.sin6_addr.s6_addr[1] & 0xc0) == 0x80) {
+                memcpy(ownLL, &sin6.sin6_addr, sizeof(ownLL));
+                ownLL[2] = ownLL[3] = 0;
+                haveOwn = true;
+            }
+        }
+        ifnet_free_address_list(addresses);
+    }
+    if (!haveOwn) {
+        awdl->fNdSeedFailed++;
+        slot->us = 0;
+        return;
+    }
+
+    uint8_t ns[14 + 40 + 32] = {};
+    memcpy(ns, &fMac, 6);
+    memcpy(ns + 6, peerMac, 6);
+    ns[12] = 0x86;
+    ns[13] = 0xdd;
+    uint8_t *ip = ns + 14, *icmp = ip + 40;
+    ip[0] = 0x60;
+    ip[5] = 32;                         // payload length
+    ip[6] = 58;                         // ICMPv6
+    ip[7] = 255;                        // hop limit, as neighbour discovery requires
+    memcpy(ip + 8, peerLL, 16);
+    memcpy(ip + 24, ownLL, 16);
+    icmp[0] = 135;                      // neighbour solicitation
+    memcpy(icmp + 8, ownLL, 16);        // for our address
+    icmp[24] = 1;                       // option: source link-layer address
+    icmp[25] = 1;
+    memcpy(icmp + 26, peerMac, 6);
+    uint32_t sum = 32 + 58;             // upper-layer length and next header of the pseudo header
+    for (unsigned i = 0; i < 32; i += 2)
+        sum += (ip[8 + i] << 8) | ip[9 + i];
+    for (unsigned i = 0; i < 32; i += 2)
+        sum += (icmp[i] << 8) | icmp[i + 1];
+    while (sum >> 16)
+        sum = (sum & 0xffff) + (sum >> 16);
+    icmp[2] = (uint8_t)(~sum >> 8);
+    icmp[3] = (uint8_t)(~sum);
+
+    mbuf_t pkt = nullptr;
+    if (mbuf_gethdr(MBUF_DONTWAIT, MBUF_TYPE_DATA, &pkt) || !pkt) {
+        awdl->fNdSeedFailed++;
+        slot->us = 0;
+        return;
+    }
+    if (mbuf_copyback(pkt, 0, sizeof(ns), ns, MBUF_DONTWAIT)) {
+        mbuf_freem(pkt);
+        awdl->fNdSeedFailed++;
+        slot->us = 0;
+        return;
+    }
+    mbuf_pkthdr_setlen(pkt, sizeof(ns));
+    mbuf_pkthdr_setrcvif(pkt, ifp);
+    awdl->fNdSeeded++;
+    ifnet_stat_increment_in(ifp, 1, sizeof(ns), 0);
+    inputPacket(pkt, sizeof(ns), 0, pkt);
+    awdl->publishDataState();
+}
+
+// What arrives on awdl0, as the stack sees it: the last frames, with the IPv6 header and the TCP flags or the ICMPv6
+// type decoded. A peer that never sends neighbour discovery, or whose SYN is retried, shows here.
+void AirportItlwmAWDLEthernetInterface::
+recordRxIp(mbuf_t m, AirportItlwmAWDLInterface *awdl)
+{
+    uint8_t h[14 + 40 + 16] = {};
+    size_t length = mbuf_pkthdr_len(m), n = length < sizeof(h) ? length : sizeof(h);
+    if (n < 14 || mbuf_copydata(m, 0, n, h))
+        return;
+    uint32_t sequence = __sync_add_and_fetch(&awdl->fRxIpCount, 1);
+    auto *r = &awdl->fRxIp[(sequence - 1) % AirportItlwmAWDLInterface::kRxIpRecords];
+    __atomic_store_n(&r->sequence, 0, __ATOMIC_RELEASE);
+    r->us = hostUs();
+    memcpy(r->dst, h, 6);
+    memcpy(r->src, h + 6, 6);
+    r->ethType = (uint16_t)((h[12] << 8) | h[13]);
+    r->len = (uint16_t)(length > 0xffff ? 0xffff : length);
+    r->nextHeader = r->type = r->flags = r->seeded = 0;
+    r->srcPort = r->dstPort = 0;
+    if (r->ethType == 0x86dd && n >= 14 + 40) {
+        r->nextHeader = h[14 + 6];
+        if (r->nextHeader == 6 && n >= 14 + 40 + 14) {
+            r->srcPort = (uint16_t)((h[54] << 8) | h[55]);
+            r->dstPort = (uint16_t)((h[56] << 8) | h[57]);
+            r->flags = h[14 + 40 + 13];
+        } else if (r->nextHeader == 17 && n >= 14 + 40 + 4) {
+            r->srcPort = (uint16_t)((h[54] << 8) | h[55]);
+            r->dstPort = (uint16_t)((h[56] << 8) | h[57]);
+        } else if (r->nextHeader == 58) {
+            r->type = h[14 + 40];
+        }
+    }
+    __atomic_store_n(&r->sequence, sequence, __ATOMIC_RELEASE);
+}
+
 int AirportItlwmAWDLEthernetInterface::
 inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
 {
@@ -362,6 +516,8 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
                     awdl->fDataRx++;
                     awdl->fDataRxLastLen = (uint32_t)mbuf_pkthdr_len(sub);
                     awdl->fDataRxLastType = (uint16_t)((eh[12] << 8) | eh[13]);
+                    seedNeighbor(sub, awdl);
+                    recordRxIp(sub, awdl);
                 }
                 ifnet_stat_increment_in(inputIf, 1, (u_int32_t)mbuf_pkthdr_len(sub), 0);
                 if (lowLatency)
@@ -424,6 +580,8 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
     awdl->fDataRx++;
     awdl->fDataRxLastLen = (uint32_t)mbuf_pkthdr_len(m);
     awdl->fDataRxLastType = (uint16_t)((ethType[0] << 8) | ethType[1]);
+    seedNeighbor(m, awdl);
+    recordRxIp(m, awdl);
     if (awdl->fDataRx <= 4 || (awdl->fDataRx & 0x1f) == 0)
         awdl->publishDataState();
     // IONetworkInterface does not account these on awdl0 (netstat showed 0 in,
@@ -2135,6 +2293,24 @@ publishDataState()
     setProperty("AWDLDataRxBad", fDataRxBad, 64);
     setProperty("AWDLDataRxAmsdu", fDataRxAmsdu, 64);
     setProperty("AWDLDataRxNoBuf", fDataRxNoBuf, 64);
+    setProperty("AWDLNdSeeded", fNdSeeded, 32);
+    setProperty("AWDLNdSeedSkipped", fNdSeedSkipped, 32);
+    setProperty("AWDLNdSeedFailed", fNdSeedFailed, 32);
+    for (unsigned int i = 0; i < kRxIpRecords; i++) {
+        const RxIpRecord *r = &fRxIp[i];
+        uint32_t sequence = __atomic_load_n(&r->sequence, __ATOMIC_ACQUIRE);
+        if (!sequence)
+            continue;
+        char key[24], value[200];
+        snprintf(key, sizeof(key), "AWDLRxIp%02u", i);
+        snprintf(value, sizeof(value),
+                 "seq=%u uptime_us=%llu dst=%02x:%02x:%02x:%02x:%02x:%02x src=%02x:%02x:%02x:%02x:%02x:%02x eth=%04x len=%u nh=%u icmp=%u tcpflags=0x%02x sport=%u dport=%u",
+                 sequence, (unsigned long long)r->us, r->dst[0], r->dst[1], r->dst[2], r->dst[3], r->dst[4], r->dst[5],
+                 r->src[0], r->src[1], r->src[2], r->src[3], r->src[4], r->src[5], r->ethType, r->len, r->nextHeader,
+                 r->type, r->flags, r->srcPort, r->dstPort);
+        setProperty(key, value);
+    }
+    setProperty("AWDLRxIpFrames", __atomic_load_n(&fRxIpCount, __ATOMIC_ACQUIRE), 32);
     setProperty("AWDLDataRxLastLen", fDataRxLastLen, 32);
     setProperty("AWDLDataRxLastType", fDataRxLastType, 32);
     setProperty("AWDLDataTx", fDataTx, 64);
@@ -2806,6 +2982,9 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fDataRxNoBuf = 0;
     fDataRxLastLen = 0;
     fDataRxLastType = 0;
+    fNdSeeded = fNdSeedSkipped = fNdSeedFailed = 0;
+    memset(fRxIp, 0, sizeof(fRxIp));
+    fRxIpCount = 0;
     memset(fDataQ, 0, sizeof(fDataQ));
     fDataQHead = 0;
     fDataQCount = 0;

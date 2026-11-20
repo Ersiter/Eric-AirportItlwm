@@ -474,7 +474,7 @@ struct ieee80211_awdl_listen_record {
  * A TCP handshake that stalls shows here whether its SYN-ACK was handed over at all and to which address.
  */
 #define IEEE80211_AWDL_UC_RECORDS 16
-#define IEEE80211_AWDL_UC_RECORD_BYTES 48
+#define IEEE80211_AWDL_UC_RECORD_BYTES 96
 struct ieee80211_awdl_uc_record {
     uint64_t        rx_uptime;
     uint16_t        len;
