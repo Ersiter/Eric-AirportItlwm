@@ -8046,6 +8046,7 @@ iwx_send_cmd_impl(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
     //        sizeof (*desc), BUS_DMASYNC_PREWRITE);
     /* Kick command ring. */
     DPRINTF(("%s: Sending command (%.2x.%.2x), %d bytes at [%d]:%d ver: %d\n", __func__, group_id, cmd->hdr.cmd, cmd->hdr_wide.length, cmd->hdr.idx, cmd->hdr.qid, cmd->hdr_wide.version));
+    txdata->flags &= ~IWX_TXDATA_FLAG_CMD_FAILED;
     txdata->flags |= IWX_TXDATA_FLAG_CMD_PENDING;
     if (!async)
         txdata->flags |= IWX_TXDATA_FLAG_CMD_WAITING;
@@ -8077,6 +8078,8 @@ iwx_send_cmd_impl(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
             return ENXIO;
         }
         txdata->flags &= ~IWX_TXDATA_FLAG_CMD_WAITING;
+        if (!err && (txdata->flags & IWX_TXDATA_FLAG_CMD_FAILED))
+            err = EIO;
         if (!err) {
             hcmd->resp_pkt = (struct iwx_rx_packet *)sc->sc_cmd_resp_pkt[idx];
             sc->sc_cmd_resp_pkt[idx] = NULL;
@@ -18128,7 +18131,21 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
         len = sizeof(pkt->len_n_flags) + iwx_rx_packet_len(pkt);
         if (len < minsz || len > (IWX_RBUF_SIZE - offset))
             break;
-        
+
+        // A rejection sets a flag in the group byte of the command reply.
+        if ((pkt->hdr.group_id & IWX_CMD_FAILED_MSK) && qid == IWX_DQA_CMD_QUEUE &&
+            idx < sc->txq[qid].ring_count) {
+            auto &txdata = sc->txq[qid].data[idx];
+            if (txdata.flags & IWX_TXDATA_FLAG_CMD_PENDING) {
+                txdata.flags |= IWX_TXDATA_FLAG_CMD_FAILED;
+                iwx_cmd_done(sc, qid, idx, code);
+            }
+            offset += roundup(len, IWX_FH_RSCSR_FRAME_ALIGN);
+            if (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210)
+                break;
+            continue;
+        }
+
         // Account for firmware-delivered frames even if the RX ring cannot
         // allocate a replacement buffer or split this packet from the batch.
         const unsigned awdl_flags = code == IWX_REPLY_RX_MPDU_CMD ?

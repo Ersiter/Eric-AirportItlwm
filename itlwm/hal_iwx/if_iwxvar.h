@@ -355,6 +355,7 @@ struct iwx_tx_data {
 #define IWX_TXDATA_FLAG_CMD_IS_NARROW  0x01
 #define IWX_TXDATA_FLAG_CMD_PENDING    0x02
 #define IWX_TXDATA_FLAG_CMD_WAITING    0x04
+#define IWX_TXDATA_FLAG_CMD_FAILED     0x08
     uint8_t type;
 };
 
