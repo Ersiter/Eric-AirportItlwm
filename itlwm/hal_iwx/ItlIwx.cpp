@@ -12113,7 +12113,7 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         const int unicastData = isData && unicast;
         if (isData && !unicast) {
             qid = llwData ? sc->sc_awdl_listener_llw_qid :
-                (sc->sc_awdl_mcast_qid >= 0 ? sc->sc_awdl_mcast_qid : sc->sc_awdl_listener_data_qid);
+                (iwx_awdl_client_enabled() ? sc->sc_awdl_mcast_qid : sc->sc_awdl_listener_data_qid);
             if (qid < 0) {
                 iwx_awdl_record_uc(ic, chan, -1, frame, len, 4);
                 return ENXIO;
@@ -13168,12 +13168,11 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         IEEE80211_ADDR_COPY(cmd.peer_link_address, kMcastAddr);
         err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD),
             0, staCmdSize, &cmd);
-        if (err) {
-            /* The listener is worth more than this station: group data then goes the old way. */
-            XYLogE("%s: multicast station not added (%d)\n", DEVNAME(sc), err);
-            err = 0;
-        } else
-            mcast_added = true;
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            goto fail;
+        mcast_added = true;
     }
     setupStage(7);
     if (generation != sc->sc_generation) {
@@ -13211,7 +13210,8 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         goto fail;
     }
     data_queue_added = true;
-    if (client) {
+    if (mcast_added) {
+        setupStage(13);
         if (!iwx_nic_lock(sc)) {
             err = EBUSY;
             goto fail;
@@ -13223,11 +13223,10 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
             goto fail;
         }
         if (mcastQueue < 0) {
-            XYLogE("%s: multicast queue not created (%d)\n", DEVNAME(sc), mcastQueue);
-        } else {
-            mcast_queue_added = true;
-            sc->sc_awdl_mcast_qid = mcastQueue;
+            err = -mcastQueue;
+            goto fail;
         }
+        mcast_queue_added = true;
     }
     if (itlAWDLLlwFlag()) {
         setupStage(10);
@@ -13251,6 +13250,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     sc->sc_aux_roc_qid = queue;
     sc->sc_awdl_listener_data_qid = dataQueue;
     sc->sc_awdl_listener_llw_qid = llwQueue;
+    sc->sc_awdl_mcast_qid = mcastQueue;
     ic->ic_awdl_roc_qid = queue;
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
