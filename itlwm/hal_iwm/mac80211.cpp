@@ -2882,7 +2882,6 @@ iwm_awdl_listener_reset(struct iwm_softc *sc)
     bool queues_safe = true;
 
     sc->sc_awdl_listener_active = 0;
-    sc->sc_awdl_low_latency = 0;
     sc->sc_awdl_listener_up = 0;
     sc->sc_awdl_ba_pending = 0;
     sc->sc_awdl_ba_stop_tids = 0;
@@ -5711,6 +5710,7 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
     int err;
     sc->sc_awdl_mgmt_qid = -1;
     sc->sc_awdl_data_qid = -1;
+    sc->sc_awdl_low_latency = 0;
     int txq_i, i, j;
     
     sc->sc_pct = pa->pa_pc;
