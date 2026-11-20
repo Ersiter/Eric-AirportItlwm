@@ -1600,14 +1600,24 @@ findPeerSchedule(const uint8_t *address, uint64_t us) const
 }
 
 bool AirportItlwmAWDLInterface::
-peerCanSend(const uint8_t *address, uint8_t chan, uint64_t now) const
+canSendData(const uint8_t *address, uint8_t chan, uint64_t now) const
 {
-    if (IEEE80211_IS_MULTICAST(address))
-        return true;
+    const uint64_t guardUs = 2 * 1024;
+    if (IEEE80211_IS_MULTICAST(address)) {
+        if (!fChanSeqValid)
+            return false;
+        const int64_t slot = (int64_t)slotUs();
+        const uint16_t pm = presenceMode();
+        const int64_t k = floorDiv((int64_t)now - fRefUs, slot);
+        const int64_t next = floorDiv((int64_t)(now + guardUs) - fRefUs, slot);
+        // Keep multicast data in the windows advertised to peers.
+        return ownChannelAt((uint16_t)(fRefSeq + k * pm)) == chan &&
+            ownChannelAt((uint16_t)(fRefSeq + next * pm)) == chan;
+    }
     const auto *peer = findPeerSchedule(address, now);
     // A peer can be discovered through Bonjour before its first sync frame arrives.
     return !peer || (peerChannelAt(*peer, now) == chan &&
-        peerChannelAt(*peer, now + 2 * 1024) == chan);
+        peerChannelAt(*peer, now + guardUs) == chan);
 }
 
 void AirportItlwmAWDLInterface::
@@ -2334,7 +2344,7 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
             if (txUs >= fTxEndUs) {
                 backpressure = true;
                 err = EAGAIN;
-            } else if (!peerCanSend(eh, fTxChan, txUs)) {
+            } else if (!canSendData(eh, fTxChan, txUs)) {
                 fDataTxNotCommon++;
                 err = EAGAIN;
             } else {
