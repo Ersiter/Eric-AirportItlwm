@@ -12469,7 +12469,7 @@ iwx_p2p_setup(struct iwx_softc *sc, uint8_t chan)
         return EBUSY;
     
     if (sc->sc_use_mld_api)
-        return iwx_mld_p2p_setup(sc, chan);
+        return iwx_mld_p2p_setup(sc);
     int wantPromisc = iwx_awdl_promisc_enabled() && ic->ic_awdl_want_data;
     if (!sc->sc_p2p_mac ||
         (sc->sc_p2p_addr_gen != ic->ic_awdl_addr_gen && ic->ic_awdl_addr_gen) ||
@@ -13714,7 +13714,7 @@ fail:
  * with ROC_CMD.
  */
 int ItlIwx::
-iwx_mld_p2p_setup(struct iwx_softc *sc, uint8_t chan)
+iwx_mld_p2p_setup(struct iwx_softc *sc)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     const int generation = sc->sc_generation;
@@ -13750,7 +13750,6 @@ iwx_mld_p2p_setup(struct iwx_softc *sc, uint8_t chan)
         if (err)
             goto fail;
     }
-    sc->sc_p2p_roc_chan = chan;
     return 0;
 fail:
     sc->sc_aux_roc_sta_err++;
@@ -13762,7 +13761,8 @@ fail:
 
 /* iwl_mld_start_roc() and iwl_mld_cancel_roc(), for the P2P discovery activity. */
 int ItlIwx::
-iwx_mld_roc_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu)
+iwx_mld_roc_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu,
+    uint32_t max_delay_tu)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     const uint8_t chan = sc->sc_p2p_roc_chan;
@@ -13770,8 +13770,6 @@ iwx_mld_roc_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu)
     int version = iwx_lookup_cmd_ver(sc, IWX_MAC_CONF_GROUP, IWX_MLD_ROC_CMD);
     /* iwl_mvm_roc_add_cmd(): firmware older than ROC_CMD v6 takes the v5 layout (this one reports v4). */
     size_t size = version < 6 ? sizeof(struct iwx_mld_roc_req_v5) : sizeof(req);
-    /* The listen is only useful while the AW slot lasts. */
-    const uint32_t max_delay = MIN(duration_tu, 32);
 
     memset(&req, 0, sizeof(req));
     req.action = htole32(action);
@@ -13790,7 +13788,7 @@ iwx_mld_roc_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu)
             IEEE80211_ADDR_COPY(req.node_addr, ic->ic_myaddr);
             req.node_addr[0] ^= 0x02;
         }
-        req.max_delay = htole32(max_delay);
+        req.max_delay = htole32(max_delay_tu);
         req.duration = htole32(duration_tu);
     }
     const uint32_t id = IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_ROC_CMD);
@@ -13857,8 +13855,6 @@ iwx_mld_roc_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt)
 int ItlIwx::
 iwx_p2p_session_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu)
 {
-    if (sc->sc_use_mld_api)
-        return iwx_mld_roc_cmd(sc, action, duration_tu);
     struct iwx_session_prot_cmd cmd = {
         .id_and_color = htole32(IWX_FW_CMD_ID_AND_COLOR(IWX_P2P_MAC_ID, 0)),
         .action = htole32(action),
@@ -13872,6 +13868,7 @@ iwx_p2p_session_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu)
 int ItlIwx::
 iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
 {
+    const uint64_t deadline_us = iwx_uptime_us() + uint64_t(duration_tu) * IEEE80211_DUR_TU;
     int err;
     
     if (sc->sc_mld_roc_canceling)
@@ -13910,13 +13907,30 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
     }
     if ((err = iwx_p2p_setup(sc, chan)) != 0)
         return err;
+    const uint64_t now_us = iwx_uptime_us();
+    uint32_t dwell_tu = duration_tu;
+    uint32_t max_delay_tu = 0;
+    if (sc->sc_use_mld_api) {
+        constexpr uint32_t min_dwell_tu = 8;
+        constexpr uint32_t min_start_tu = 5;
+        constexpr uint32_t max_start_tu = 12;
+        const uint32_t remaining_tu = deadline_us > now_us ?
+            (deadline_us - now_us) / IEEE80211_DUR_TU : 0;
+        if (remaining_tu < min_dwell_tu + min_start_tu)
+            return EAGAIN;
+        // Firmware 92 took up to 12.147 ms to report START in the ROC capture.
+        max_delay_tu = MIN(max_start_tu, remaining_tu - min_dwell_tu);
+        dwell_tu = remaining_tu - max_delay_tu;
+    }
     sc->sc_p2p_roc_chan = chan;
     sc->sc_p2p_wait = 0;
     sc->sc_mld_roc_start_rejected = 0;
-    sc->sc_p2p_dwell_tu = duration_tu;
-    sc->sc_p2p_req_us = iwx_uptime_us();
+    sc->sc_p2p_dwell_tu = dwell_tu;
+    sc->sc_p2p_req_us = now_us;
     sc->sc_aux_roc_pending = 1;
-    err = iwx_p2p_session_cmd(sc, IWX_FW_CTXT_ACTION_ADD, duration_tu);
+    err = sc->sc_use_mld_api ?
+        iwx_mld_roc_cmd(sc, IWX_FW_CTXT_ACTION_ADD, dwell_tu, max_delay_tu) :
+        iwx_p2p_session_cmd(sc, IWX_FW_CTXT_ACTION_ADD, dwell_tu);
     if (err) {
         sc->sc_aux_roc_pending = 0;
         sc->sc_aux_roc_resp_err++;
@@ -14116,7 +14130,7 @@ iwx_awdl_listen_abort(struct iwx_softc *sc)
             sc->sc_awdl_listen_active = 0;
             sc->sc_aux_roc_pending = 1;
             sc->sc_p2p_wait = 0;
-            int err = iwx_mld_roc_cmd(sc, IWX_FW_CTXT_ACTION_REMOVE, 0);
+            int err = iwx_mld_roc_cmd(sc, IWX_FW_CTXT_ACTION_REMOVE, 0, 0);
             if (generation != sc->sc_generation)
                 return;
             sc->sc_mld_roc_canceling = 0;

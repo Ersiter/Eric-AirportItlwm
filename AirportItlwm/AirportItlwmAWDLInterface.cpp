@@ -1889,11 +1889,10 @@ scheduleOwnListen(uint64_t afterUs)
         if (protectOwnSlots && dwell < kListenDwellMinTU)
             continue;
         if (huntChan && huntStart < (uint64_t)start) {
-            // MLD can defer ROC start by up to 32 TU. Leave that time before
-            // the advertised slot as well as the full supplemental dwell.
+            // The MLD backend budgets firmware start latency inside this gap.
             const uint64_t gapTU = (start - huntStart) / 1024;
-            if (gapTU >= 32 + kListenDwellMinTU) {
-                const uint32_t huntDwell = (uint32_t)MIN(kHuntDwellTU, gapTU - 32);
+            if (gapTU >= kListenDwellMinTU) {
+                const uint32_t huntDwell = (uint32_t)MIN(kHuntDwellTU, gapTU);
                 return armListen(huntChan, huntDwell, huntStart, 0, huntGap);
             }
         }
