@@ -314,6 +314,11 @@ iwx_mld_update_active_links(struct iwx_softc *sc, uint8_t link_mask,
             configured_links |= 1U << i;
     if (!link_mask || (link_mask & ~configured_links))
         return EINVAL;
+    /* Reserve a link for standing AWDL throughout its setup and lifetime. */
+    if (sc->sc_listener_setting_up || sc->sc_listener_up) {
+        link_mask = 1U << primary_link;
+        emlsr_active = false;
+    }
     for (int i = 0; i < IWX_MLD_MAX_LINKS; i++) {
         uint8_t sta_id = sc->sc_mld_sta_ids[i];
         if ((link_mask & (1U << i)) && sta_id != 0xff &&
@@ -331,6 +336,8 @@ iwx_mld_update_active_links(struct iwx_softc *sc, uint8_t link_mask,
 
     added = link_mask & ~old_links;
     removed = old_links & ~link_mask;
+    const int generation = sc->sc_generation;
+    sc->sc_mld_link_updates++;
     for (int i = 0; i < IWX_MLD_MAX_LINKS; i++) {
         if (!(added & (1U << i)))
             continue;
@@ -380,6 +387,8 @@ iwx_mld_update_active_links(struct iwx_softc *sc, uint8_t link_mask,
     sc->sc_mld_primary_link = primary_link;
     sc->sc_mld_emlsr_active = emlsr_active;
     ic->ic_wcl_active_mld_link = primary_link;
+    if (generation == sc->sc_generation)
+        sc->sc_mld_link_updates--;
     return 0;
 
 rollback_added:
@@ -390,6 +399,8 @@ rollback_added:
     for (int undo = 0; undo < IWX_MLD_MAX_LINKS; undo++)
         if (added_done & (1U << undo))
             iwx_mld_set_fw_link_active(this, sc, undo, 0);
+    if (generation == sc->sc_generation)
+        sc->sc_mld_link_updates--;
     return err;
 }
 
@@ -735,7 +746,7 @@ iwx_mld_select_links(struct iwx_softc *sc, uint8_t *primary, bool *emlsr)
     }
     *primary = best;
     links = 1U << best;
-    if (sc->sc_mld_emlsr_blocked)
+    if (sc->sc_mld_emlsr_blocked || sc->sc_listener_setting_up || sc->sc_listener_up)
         return links;
 
     for (int a = 0; a < count; a++) {

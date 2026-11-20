@@ -748,6 +748,7 @@ struct iwx_softc {
 	uint8_t sc_mld_pending_emlsr;
 	uint8_t sc_mld_pending_soft;
 	uint8_t sc_mld_link_update_pending;
+	uint8_t sc_mld_link_updates;
 	uint8_t sc_mld_disconnect_pending;
 	int sc_mld_pending_generation;
     uint16_t sc_mld_txq_tidmask;
@@ -934,6 +935,7 @@ struct iwx_softc {
 	uint32_t sc_aux_roc_resp_err;
 	uint32_t sc_aux_roc_started;
 	uint8_t sc_listener_up;  /* listener resources are allocated */
+	uint8_t sc_listener_setting_up;
 	uint8_t sc_listener_refitting;
 	uint8_t sc_listener_candidate;
 	uint64_t sc_listener_candidate_us;

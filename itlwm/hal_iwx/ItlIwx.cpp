@@ -11070,6 +11070,8 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             ieee80211_chan2number(ic, ic->ic_bss->ni_chan) : 0;
     }
     if (standing) {
+        if (sc->sc_listener_setting_up)
+            return EBUSY;
         /* Allow one initial setup and one restore of an established MLD listener per boot. */
         if (!sc->sc_listener_up && (!sc->sc_listener_tries || sc->sc_listener_restore_pending) &&
             ic->ic_state == IEEE80211_S_RUN &&
@@ -11077,7 +11079,8 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             uint8_t target = 0;
             if (sc->sc_use_mld_api) {
                 if (!(sc->sc_flags & IWX_FLAG_STA_ACTIVE) || !ic->ic_bss->ni_port_valid ||
-                    sc->sc_mld_emlsr_active ||
+                    sc->sc_mld_link_updates ||
+                    __builtin_popcount((unsigned)sc->sc_mld_active_links) > 1 ||
                     (iwx_awdl_client_enabled() && ic->ic_awdl_sync_period_tu < 17))
                     return EAGAIN;
                 target = iwx_awdl_listener_pick(sc);
@@ -11088,9 +11091,16 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             sc->sc_listener_restore_pending = false;
             sc->sc_listener_tries++;
             ic->ic_awdl_listener_tries = sc->sc_listener_tries;
-            err = sc->sc_use_mld_api ?
-                that->iwx_mld_listener_setup(sc, target) :
-                that->iwx_legacy_listener_setup(sc);
+            if (sc->sc_use_mld_api) {
+                const int generation = sc->sc_generation;
+                sc->sc_listener_setting_up = 1;
+                err = that->iwx_mld_listener_setup(sc, target);
+                if (generation != sc->sc_generation)
+                    return ENXIO;
+                sc->sc_listener_setting_up = 0;
+            } else {
+                err = that->iwx_legacy_listener_setup(sc);
+            }
             if (err) {
                 sc->sc_awdl_listen_fail++;
                 // Setup can sleep across a firmware restart; do not start ROC from that failed call.
@@ -17449,6 +17459,8 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_legacy_ba_peer_added = 0;
     sc->sc_legacy_ba_tids = 0;
     sc->sc_listener_up = 0;
+    sc->sc_listener_setting_up = 0;
+    sc->sc_mld_link_updates = 0;
     sc->sc_ic.ic_awdl_llw_qos = 0;
     sc->sc_listener_refitting = sc->sc_listener_candidate = 0;
     sc->sc_listener_retry_us = sc->sc_listener_last_data_us = 0;
