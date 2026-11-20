@@ -1982,10 +1982,19 @@ iwn_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 
     if (ic->ic_state == IEEE80211_S_SCAN) {
         if (nstate == IEEE80211_S_SCAN) {
-            if (sc->sc_flags & IWN_FLAG_SCANNING)
+            if (sc->sc_flags & IWN_FLAG_SCANNING) {
+#ifdef AIRPORT_WCL
+                if (ic->ic_wcl_scan_requested)
+                    ic->ic_wcl_scan_restart = true;
+#endif
                 return 0;
-        } else
+            }
+        } else {
             sc->sc_flags &= ~IWN_FLAG_SCANNING;
+#ifdef AIRPORT_WCL
+            ic->ic_wcl_scan_restart = false;
+#endif
+        }
         /* Turn LED off when leaving scan state. */
         that->iwn_set_led(sc, IWN_LED_LINK, 1, 0);
     }
@@ -3290,6 +3299,18 @@ iwn_notif_intr(struct iwn_softc *sc)
             DPRINTFN(2, ("scan stop: nchan=%d status=%d chan=%d\n",
                 scan->nchan, scan->status, scan->chan));
 
+#ifdef AIRPORT_WCL
+            if (ic->ic_wcl_scan_requested && ic->ic_wcl_scan_restart) {
+                // Restart at 2.4 GHz so both bands use the new request.
+                ic->ic_wcl_scan_restart = false;
+                sc->sc_flags &= ~IWN_FLAG_SCANNING;
+                int error = iwn_scan(sc, IEEE80211_CHAN_2GHZ, 0);
+                if (error)
+                    XYLogE("%s: could not restart foreground scan (error %d)\n",
+                        sc->sc_dev.dv_xname, error);
+                break;
+            }
+#endif
             if (scan->status == 1 && scan->chan <= 14 &&
                 (sc->sc_flags & IWN_FLAG_HAS_5GHZ)) {
                     int error;
@@ -8099,7 +8120,7 @@ iwn_stop(struct _ifnet *ifp)
     // A stopped firmware scan cannot deliver its completion event.
     ic->ic_flags &= ~(IEEE80211_F_BGSCAN | IEEE80211_F_ASCAN);
     ic->ic_wcl_scan_requested = false;
-    ic->ic_wcl_scan_active = false;
+    ic->ic_wcl_scan_active = ic->ic_wcl_scan_restart = false;
     ic->ic_wcl_scan_ssid_length = 0;
     if (ic->ic_event_handler)
         ic->ic_event_handler(ic, IEEE80211_EVT_DRIVER_STOPPED, NULL);
