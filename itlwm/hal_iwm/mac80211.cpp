@@ -1401,6 +1401,12 @@ iwm_rx_tx_cmd_single(struct iwm_softc *sc, struct iwm_tx_resp *tx_resp,
 
             /* An AWDL frame says nothing about the station's antennas or rates. */
             const bool awdlFrame = txd->in && txd->in->in_sta_id == IWM_AWDL_STA_ID;
+            if (awdlFrame && (status & IWM_TX_STATUS_MSK) == IWM_TX_STATUS_SUCCESS &&
+                skb_freed == 1 && (ring->tail + 1) % IWM_TX_RING_COUNT == idx) {
+                const auto *tx = reinterpret_cast<const struct iwm_tx_cmd *>(ring->cmd[ring->tail].data);
+                const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(tx + 1);
+                ieee80211_awdl_report_umi_ack(&sc->sc_ic, wh, txd->m);
+            }
             if (!awdlFrame && (status & IWM_TX_STATUS_MSK) != IWM_TX_STATUS_SUCCESS &&
                 ieee80211_is_mgmt(txd->fc))
                 iwm_toggle_tx_ant(sc, &sc->sc_mgmt_last_antenna_idx);

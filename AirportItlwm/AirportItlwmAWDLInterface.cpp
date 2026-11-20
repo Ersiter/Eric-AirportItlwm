@@ -273,6 +273,12 @@ static uint64_t hostUs();
 // covers a table that was flushed (interface down and up).
 static const uint64_t kNdSeedIntervalUs = 30 * 1000000ULL;
 
+void AirportItlwmAWDLEthernetInterface::
+clearNeighborSeeds()
+{
+    memset(fNdPeers, 0, sizeof(fNdPeers));
+}
+
 /*
  * XNU's IFEF_AWDL forces IFEF_IPV6_ND6ALT, and ifnet_set_eflags refuses to clear it. awdl0 therefore has no
  * fe80::/64 route and does no neighbour discovery of its own: its entries are meant to come from wifip2pd. On this
@@ -302,7 +308,8 @@ seedNeighbor(mbuf_t m, AirportItlwmAWDLInterface *awdl)
     const uint64_t now = hostUs();
     NdPeer *slot = nullptr, *oldest = &fNdPeers[0];
     for (unsigned i = 0; i < kNdPeers; i++) {
-        if (fNdPeers[i].us && !memcmp(fNdPeers[i].mac, peerMac, 6)) {
+        if (fNdPeers[i].us && IEEE80211_ADDR_EQ(fNdPeers[i].mac, peerMac) &&
+            !memcmp(fNdPeers[i].linkLocal, peerLL, sizeof(fNdPeers[i].linkLocal))) {
             slot = &fNdPeers[i];
             break;
         }
@@ -316,6 +323,7 @@ seedNeighbor(mbuf_t m, AirportItlwmAWDLInterface *awdl)
     if (!slot)
         slot = oldest;
     memcpy(slot->mac, peerMac, 6);
+    memcpy(slot->linkLocal, peerLL, sizeof(slot->linkLocal));
     slot->us = now;
 
     // Our own link-local address, as the kernel holds it (it keeps the interface index inside the address).
@@ -837,8 +845,15 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     if (af[0] != 127 || af[1] != 0x00 || af[2] != 0x17 || af[3] != 0xf2 || af[4] != 0x08)
         return 0;
 
+    const struct ieee80211_frame *wh = (const struct ieee80211_frame *)frame;
+    const size_t payload = len - hdr;
+    const bool timeline = awTimelineAllowed();
+    const uint64_t rxUs = timeline ? hostRxUs(rxi) : 0;
+    trackPeer(af, payload, wh->i_addr2, rxUs, rxi->rxi_chan);
+    syncFromFrame(af, payload, wh->i_addr2, rxUs);
+
     fRxAF++;
-    noteRxGap(((const struct ieee80211_frame *)frame)->i_addr2, hostUs());
+    noteRxGap(wh->i_addr2, hostUs());
     uint64_t *chanCount = rxi->rxi_chan == 6 ? &fRxAFChan6 :
         rxi->rxi_chan == 44 ? &fRxAFChan44 :
         rxi->rxi_chan == 149 ? &fRxAFChan149 : &fRxAFChanOther;
@@ -861,7 +876,6 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
         fRxAFDropped++;
         return 1;
     }
-    size_t payload = len - hdr;
     if (payload > awdlBufCapacity(buf)) {
         awdlBufReturn(buf);
         fRxAFDropped++;
@@ -872,7 +886,6 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     memcpy(awdlBufBytes(buf), af, payload);
     awdlBufSetLength(buf, payload);
 
-    const struct ieee80211_frame *wh = (const struct ieee80211_frame *)frame;
     AWDLRxMeta meta = {};
     memcpy(meta.addr, wh->i_addr2, sizeof(meta.addr));
     meta.chan.version = APPLE80211_VERSION;
@@ -884,8 +897,7 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     meta.rssi = rxi->rxi_rssi - 100;
     // Same clock as the AW start times we report: the peer manager subtracts
     // one from the other (IO80211AWDLPeer::calculatePeerTimeDiff).
-    uint64_t rxUs = awTimelineAllowed() ? hostRxUs(rxi) : 0;
-    meta.tsf = awTimelineAllowed() ? (uint32_t)rxUs : rxi->rxi_tstamp;
+    meta.tsf = timeline ? (uint32_t)rxUs : rxi->rxi_tstamp;
 
     if (fRxAF <= 8 || (fRxAF & 0xff) == 0) {
         // Fixed header bytes 5..7 (version, subtype, reserved) of real frames.
@@ -893,9 +905,6 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
         snprintf(hv, sizeof(hv), "%02x%02x%02x", af[5], af[6], af[7]);
         setProperty("AWDLRxHdrVer", hv);
     }
-    trackPeer(af, payload, wh->i_addr2, rxUs, rxi->rxi_chan);
-    syncFromFrame(af, payload, wh->i_addr2, rxUs);
-
     // Consumes buf (peer manager input + bpf, then returnBuffer).
     awdlBufSubmit(this, buf, &meta, sizeof(meta));
     return 1;
@@ -1040,6 +1049,9 @@ stopAWTimeline()
     fListenPeer = 0;
     fTxPeerUs = 0;
     fDataRxUnicastUs = 0;
+    fUmiAckCount = 0;
+    if (fUmiAckTimer)
+        fUmiAckTimer->cancelTimeout();
     if (fController) {
         if (ieee80211com *ic = fController->fHalService->get80211Controller()) {
             ic->ic_awdl_want_data = 0;
@@ -2636,8 +2648,11 @@ setAWDLLinkGated(OSObject *owner, void *arg0, void *, void *, void *)
     that->fAWDLIf->setLinkState(arg0 ? kIO80211NetworkLinkUp : kIO80211NetworkLinkDown, 1);
     // The IOKit path that normally sets IFF_RUNNING is bypassed in performCommand.
     // Without it every send on awdl0 fails with ENETDOWN before reaching the driver.
-    if (awDataAllowed() && that->fAWDLBsdIf && that->fAWDLBsdIf->getIfnet())
+    if (awDataAllowed() && that->fAWDLBsdIf && that->fAWDLBsdIf->getIfnet()) {
+        if (!arg0)
+            that->fAWDLBsdIf->clearNeighborSeeds();
         ifnet_set_flags(that->fAWDLBsdIf->getIfnet(), arg0 ? IFF_RUNNING : 0, IFF_RUNNING);
+    }
     return kIOReturnSuccess;
 }
 
@@ -3310,6 +3325,19 @@ umiAckTimerFired(OSObject *owner, IOTimerEventSource *)
 }
 
 void AirportItlwmAWDLInterface::
+confirmUnicastMI(const uint8_t *peer)
+{
+    if (!fAWRunning || !fUmiAckTimer || fUmiAckCount >= kUmiAckDepth)
+        return;
+    for (unsigned i = 0; i < fUmiAckCount; i++)
+        if (IEEE80211_ADDR_EQ(fUmiAckPeers[i], peer))
+            return;
+    IEEE80211_ADDR_COPY(fUmiAckPeers[fUmiAckCount++], peer);
+    if (fUmiAckCount == 1)
+        fUmiAckTimer->setTimeoutMS(1);
+}
+
+void AirportItlwmAWDLInterface::
 postUmiAcks()
 {
 #ifndef APPLE80211_M_AWDL_UNICAST_AF_STATUS
@@ -3495,16 +3523,6 @@ setAWDL_OOB_REQUEST(apple80211_awdl_oob_request *d)
             raw + 4, payload, len);
         if (err == EAGAIN || err == ENOBUFS)
             return kIOReturnBusy;
-        if (!err && that->fUmiAckTimer && !(raw[4] & 1)) {
-            // A unicast frame went out: owe macOS its status (the destination is the first address of the request).
-            bool listed = false;
-            for (unsigned i = 0; i < that->fUmiAckCount; i++)
-                if (!memcmp(that->fUmiAckPeers[i], raw + 4, 6))
-                    listed = true;
-            if (!listed && that->fUmiAckCount < kUmiAckDepth)
-                memcpy(that->fUmiAckPeers[that->fUmiAckCount++], raw + 4, 6);
-            that->fUmiAckTimer->setTimeoutMS(150);
-        }
         return err ? kIOReturnError : kIOReturnSuccess;
     };
     IOWorkLoop *workLoop = _fCommandGate->getWorkLoop();

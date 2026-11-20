@@ -263,6 +263,7 @@ public:
     bool magicPacketEnabled;
     static int awdlActionFrameHandler(struct ieee80211com *ic, mbuf_t m, struct ieee80211_rxinfo *rxi);
     static int awdlDataFrameHandler(struct ieee80211com *ic, mbuf_t m, struct ieee80211_rxinfo *rxi);
+    static void awdlUnicastMIAck(struct ieee80211com *ic, const uint8_t *peer);
     // Experimental awdl0 support, enabled with the -itlawdl boot argument.
     bool fAWDLEnabled;
 #ifdef AIRPORT_WCL

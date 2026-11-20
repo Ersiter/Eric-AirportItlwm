@@ -742,7 +742,8 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
     }
     if (ic->ic_vendor_action_handler && ic->ic_opmode == IEEE80211_M_STA) {
         if (type == IEEE80211_FC0_TYPE_MGT &&
-            subtype == IEEE80211_FC0_SUBTYPE_ACTION &&
+            (subtype == IEEE80211_FC0_SUBTYPE_ACTION ||
+             subtype == IEEE80211_FC0_SUBTYPE_ACTION_NOACK) &&
             mbuf_len(m) > sizeof(struct ieee80211_frame) &&
             mtod(m, const uint8_t *)[sizeof(struct ieee80211_frame)] == IEEE80211_CATEG_VENDOR &&
             (*ic->ic_vendor_action_handler)(ic, m, rxi))

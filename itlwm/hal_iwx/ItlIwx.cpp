@@ -5801,7 +5801,6 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
 
     sc->sc_use_mld_api = sc->sc_device_family >= IWX_DEVICE_FAMILY_BZ &&
         isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_MLD_API_SUPPORT);
-    sc->sc_ic.ic_awdl_llw_qos = sc->sc_use_mld_api;
     sc->sc_ic.ic_awdl_listen_home = sc->sc_use_mld_api;
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
     sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_peer_cache : NULL;
@@ -7378,6 +7377,13 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
             int st = txStatus & IWX_TX_STATUS_MSK;
             if (iwx_tx_status_is_acked(txStatus)) {
                 sc->sc_ic.ic_awdl_tx_ok++;
+                if (st == IWX_TX_STATUS_SUCCESS && txd->type == IEEE80211_FC0_TYPE_MGT) {
+                    const auto &cmd = ring->cmd[(idx + ring->ring_count - 1) % ring->ring_count];
+                    const size_t txSize = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+                        sizeof(struct iwx_tx_cmd_gen3) : sizeof(struct iwx_tx_cmd_gen2);
+                    const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(cmd.data + txSize);
+                    ieee80211_awdl_report_umi_ack(&sc->sc_ic, wh, txd->m);
+                }
                 if (st == IWX_TX_STATUS_SUCCESS &&
                     (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid))
                     sc->sc_listener_last_data_us = iwx_uptime_us();
@@ -13209,6 +13215,9 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         ic->ic_awdl_listener_chan = 0;
         goto fail;
     }
+    // The dedicated TID 6 queue belongs to this standing link. ROC uses the
+    // shared AUX data path while LLW keeps its own BSD queue and EtherType.
+    ic->ic_awdl_llw_qos = 1;
     setupStage(0);
     sc->sc_listener_restore_pending = sc->sc_listener_tries == 1;
     static const uint8_t noPeer[IEEE80211_ADDR_LEN] = {};
@@ -17281,6 +17290,7 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_legacy_ba_peer_added = 0;
     sc->sc_legacy_ba_tids = 0;
     sc->sc_listener_up = 0;
+    sc->sc_ic.ic_awdl_llw_qos = 0;
     sc->sc_listener_refitting = sc->sc_listener_candidate = 0;
     sc->sc_listener_retry_us = sc->sc_listener_last_data_us = 0;
     sc->sc_awdl_peer_added = sc->sc_awdl_peer_busy = 0;

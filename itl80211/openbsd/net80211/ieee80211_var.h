@@ -738,6 +738,7 @@ struct ieee80211com {
      */
     int             (*ic_awdl_data_handler)(struct ieee80211com *, mbuf_t,
                         struct ieee80211_rxinfo *);
+    void            (*ic_awdl_umi_ack)(struct ieee80211com *, const uint8_t *);
 	CTimeout*		ic_bgscan_timeout;
 	uint32_t		ic_bgscan_fail;
 	u_int8_t		ic_myaddr[IEEE80211_ADDR_LEN];
@@ -889,6 +890,23 @@ struct ieee80211com {
 };
 #define	ic_if		ic_ac.ac_if
 #define	ic_softc	ic_if.if_softc
+
+static inline void
+ieee80211_awdl_report_umi_ack(struct ieee80211com *ic,
+    const struct ieee80211_frame *wh, mbuf_t body)
+{
+    if (!ic->ic_awdl_umi_ack || !body ||
+        wh->i_fc[0] != (IEEE80211_FC0_TYPE_MGT | IEEE80211_FC0_SUBTYPE_ACTION) ||
+        IEEE80211_IS_MULTICAST(wh->i_addr1) ||
+        memcmp(wh->i_addr2, ic->ic_awdl_addr, IEEE80211_ADDR_LEN))
+        return;
+
+    const uint8_t umi[] = { IEEE80211_CATEG_VENDOR, 0x00, 0x17, 0xf2, 0x08, 0x10, 3 };
+    uint8_t header[sizeof(umi)];
+    if (mbuf_pkthdr_len(body) >= sizeof(header) &&
+        !mbuf_copydata(body, 0, sizeof(header), header) && !memcmp(header, umi, sizeof(umi)))
+        ic->ic_awdl_umi_ack(ic, wh->i_addr1);
+}
 
 #ifdef AIRPORT_WCL
 static inline unsigned ieee80211_wcl_ac(unsigned tid)

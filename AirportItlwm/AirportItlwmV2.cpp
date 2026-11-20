@@ -397,6 +397,7 @@ bool AirportItlwm::start(IOService *provider)
         XYLogE("experimental AWDL enabled\n");
         fHalService->get80211Controller()->ic_vendor_action_handler = awdlActionFrameHandler;
         fHalService->get80211Controller()->ic_awdl_data_handler = awdlDataFrameHandler;
+        fHalService->get80211Controller()->ic_awdl_umi_ack = awdlUnicastMIAck;
         fHalService->get80211Controller()->ic_awdl_ba_accept =
             itlAWDLBootFlag("-itlawdlbaaccept") ? 1 : 0;
     }
@@ -417,6 +418,7 @@ bool AirportItlwm::start(IOService *provider)
         fAWDLEnabled = false;
         fHalService->get80211Controller()->ic_vendor_action_handler = NULL;
         fHalService->get80211Controller()->ic_awdl_data_handler = NULL;
+        fHalService->get80211Controller()->ic_awdl_umi_ack = NULL;
         fHalService->get80211Controller()->ic_awdl_ba_accept = 0;
     }
 #endif
@@ -558,6 +560,15 @@ int AirportItlwm::awdlActionFrameHandler(struct ieee80211com *ic, mbuf_t m, stru
     return 0;
 #endif
 }
+
+#ifdef AIRPORT_WCL
+void AirportItlwm::awdlUnicastMIAck(struct ieee80211com *ic, const uint8_t *peer)
+{
+    auto *that = OSDynamicCast(AirportItlwm, ic->ic_ac.ac_if.controller);
+    if (that && that->fAWDLIf)
+        that->fAWDLIf->confirmUnicastMI(peer);
+}
+#endif
 
 // AWDL data frame for awdl0 (stage 4): 802.11 data header, LLC/SNAP with
 // Apple OUI 00:17:f2 protocol 0x0800, then the 8-byte AWDL data header

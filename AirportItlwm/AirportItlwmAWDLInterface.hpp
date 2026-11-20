@@ -78,11 +78,13 @@ public:
     UInt32 outputAWDL(mbuf_t m, void *param);
     UInt32 outputLowLatency(mbuf_t m, AirportItlwmLowLatencyEthernetInterface *source);
     void setAWDLOwner(class AirportItlwmAWDLInterface *owner) { fOwner = owner; }
+    void clearNeighborSeeds();
 
 private:
     // The kernel gets no neighbour entry for an AWDL peer unless one is handed to it, see seedNeighbor().
     struct NdPeer {
         uint8_t mac[6];
+        uint8_t linkLocal[16];
         uint64_t us;
     };
     enum { kNdPeers = 8 };
@@ -181,6 +183,7 @@ public:
     // AWDL peer manager, packaged like AppleBCMWLANProximityInterface does.
     // Returns 1 when the frame was AWDL and has been consumed.
     int inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi);
+    void confirmUnicastMI(const uint8_t *peer);
     uint64_t rxActionFrames() const { return fRxAF; }
     // awdl0's own address, as this class stored it. Not IO80211SkywalkInterface::getSelfMacAddr(): see
     // AirportItlwm::createLowLatencyInterface.
