@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>Eric-AirportItlwm: нативный Wi-Fi macOS для карт Intel, от 802.11n до Wi-Fi 7</title>
-<meta name="description" content="macOS Tahoe 26 и Sequoia 15 · WPA3 · 6 ГГц · 802.11be · BE200 / BE201 и все карты, которые поддерживает itlwm">
+<meta name="description" content="macOS 14 Sonoma — 27 Golden Gate · WPA3 · 6 ГГц · 802.11be · BE200 / BE201 и все карты, которые поддерживает itlwm">
 <link rel="canonical" href="https://ersiter.github.io/Eric-AirportItlwm/ru/">
 <link rel="alternate" hreflang="en" href="https://ersiter.github.io/Eric-AirportItlwm/">
 <link rel="alternate" hreflang="zh-Hans" href="https://ersiter.github.io/Eric-AirportItlwm/zh-hans/">
@@ -51,7 +51,7 @@
 <div class="hero-text">
 <p class="eyebrow">Открытый код · <span class="nw">GPL-2</span>.0 · x86_64</p>
 <h1>Нативный <span class="nw">Wi-Fi</span> macOS для карт Intel, от <span class="nw">802.11n</span> до <span class="nw">Wi-Fi 7</span></h1>
-<p class="sub">macOS Tahoe 26 и Sequoia 15 · WPA3 · 6 ГГц · <span class="nw">802.11be</span> · <span class="nw">BE200 / BE201</span> и все карты, которые поддерживает itlwm</p>
+<p class="sub">macOS 14 Sonoma — 27 Golden Gate · WPA3 · 6 ГГц · <span class="nw">802.11be</span> · <span class="nw">BE200 / BE201</span> и все карты, которые поддерживает itlwm</p>
 <p class="lead">AirportItlwm, доведённый от <span class="nw">Wi-Fi 6</span> до <span class="nw">Wi-Fi 7</span> (BE200, BE201); AirDrop и Instant Hotspot в разработке. Все ранее поддерживаемые карты продолжают работать на штатном <span class="nw">Wi-Fi</span> macOS, без HeliPort и без <span class="nw">Wi-Fi-патчей</span> OpenCore Legacy Patcher.</p>
 <p class="cta"><a target="_blank" rel="noopener noreferrer" class="btn primary" href="https://github.com/Ersiter/Eric-AirportItlwm/releases/latest">Скачать в Releases</a><a target="_blank" rel="noopener noreferrer" class="btn" href="https://github.com/Ersiter/Eric-AirportItlwm">Открыть на GitHub</a><a target="_blank" rel="noopener noreferrer" class="btn" href="https://github.com/Ersiter/Eric-AirportItlwm/issues">Issues</a></p>
 <p class="credit-line">Основано на <a target="_blank" rel="noopener noreferrer" href="https://github.com/OpenIntelWireless/itlwm">itlwm</a> и <a target="_blank" rel="noopener noreferrer" href="https://github.com/laobamac/itlwm">laobamac/itlwm</a>. См. <a href="#lineage">происхождение и благодарности</a>.</p>
@@ -65,7 +65,7 @@
 <div><dt>приём</dt><dd><span class="num">1.84</span> <span class="unit">Gbit/s</span></dd></div>
 <div><dt>на реальном железе</dt><dd><span class="num">320</span> <span class="unit">ГГц</span></dd></div>
 </dl><p class="note">Измерено на BE200: macOS 26, 6 ГГц, 320 МГц, два потока. Указаны скорость соединения и скорость на интерфейсе. 5 ГГц HE, 160 МГц. Сон: после сна любой длительности соединение восстанавливается сразу (отчёты тестеров).</p>
-<ul class="chips"><li>macOS 26 Tahoe</li><li>macOS 15.2+ Sequoia</li><li>x86_64</li><li>GPL-2.0</li></ul></div>
+<ul class="chips"><li>macOS 14+ Sonoma</li><li>macOS 15.2+ Sequoia</li><li>macOS 26 Tahoe</li><li>macOS 27 Golden Gate</li><li>x86_64</li><li>GPL-2.0</li></ul></div>
 </section>
 <section class="lineage" id="lineage"><div class="wrap">
 <h2>Происхождение и благодарности</h2>
@@ -116,21 +116,23 @@
 <tr><td><span class="nw">Wi-Fi 4</span></td><td>6xxx, 5xxx, 4965, 2200, 2230, 1000, 1030, 100, 105, 130, 135</td><td>см. <a target="_blank" rel="noopener noreferrer" href="https://github.com/Ersiter/Eric-AirportItlwm/blob/be200-tahoe/AirportItlwm/WCL/Info.plist">Info.plist</a></td><td>iwn</td></tr>
 </tbody></table></div><p>Прошивка каждой карты встроена в кекст. Для семейства BE прошивку выбирает ревизия оборудования, и сначала пробуется самая высокая из адаптированных версий API. Пока не поддерживается: поколение «SC» <span class="nw">Wi-Fi 7</span> (BE211/BE213, <code>6E70</code> <code>D240</code> <code>D340</code> <code>E340</code> <code>E440</code> <code>9327</code>), которому нужна прошивка, не входящая в этот проект.</p></div></section>
 <section id="install"><div class="wrap"><h2>Установка</h2><ol class="steps">
-<li>Скачайте в <a target="_blank" rel="noopener noreferrer" href="https://github.com/Ersiter/Eric-AirportItlwm/releases">Releases</a> пакет для вашей macOS: <code>macOS26-Tahoe</code> для macOS 26, <code>macOS15-Sequoia</code> для macOS 15.2 и новее. <strong>Release</strong> — для повседневной работы; <strong>Debug</strong> сохраняет диагностические журналы, нужные для отчёта.</li>
-<li>Положите кекст в <code>EFI/OC/Kexts/</code> и добавьте его в <code>Kernel → Add</code>. Оставьте только один кекст <span class="nw">Wi-Fi</span> от Intel. Если одна конфигурация загружает обе системы, ограничьте кекст для Tahoe версиями Darwin <code>25.0.0</code>–<code>25.99.99</code>, а для Sequoia — <code>24.2.0</code>–<code>24.99.99</code>.</li>
+<li>Скачайте в <a target="_blank" rel="noopener noreferrer" href="https://github.com/Ersiter/Eric-AirportItlwm/releases">Releases</a> пакет для вашей macOS: <code>macOS26-Tahoe</code> для macOS 26, <code>macOS15-Sequoia</code> для macOS 15.2 и новее, <code>macOS14-Sonoma</code> для macOS 14, <code>macOS27-GoldenGate</code> для macOS 27; в релизе есть все четыре. <strong>Release</strong> — для повседневной работы; <strong>Debug</strong> сохраняет диагностические журналы, нужные для отчёта.</li>
+<li>Положите кекст в <code>EFI/OC/Kexts/</code> и добавьте его в <code>Kernel → Add</code>. Оставьте только один кекст <span class="nw">Wi-Fi</span> от Intel. Если одна конфигурация загружает обе системы, ограничьте каждый кекст своей системой: Tahoe <code>25.0.0</code>–<code>25.99.99</code>, Sequoia <code>24.2.0</code>–<code>24.99.99</code>, Sonoma <code>23.0.0</code>–<code>23.99.99</code>, Golden Gate <code>27.0.0</code>–<code>27.99.99</code>.</li>
 <li>Не сочетайте его с <span class="nw">root-патчами</span> «Modern Wireless» из OpenCore Legacy Patcher и любой заменой IO80211 / Skywalk: этот драйвер использует собственный стек <span class="nw">Wi-Fi</span> системы.</li>
 <li>Сохраните загрузочную копию своего EFI и сначала проверьте всё с <span class="nw">USB-накопителя</span>.</li>
-</ol><p>Страна и разрешённые в ней каналы определяются по окружающим сетям с помощью собственной логики регулирования карты, как в Linux. Ничего настраивать не нужно.</p>
+</ol>
 <h3>Аргументы загрузки</h3><div class="table-wrap"><table><thead><tr><th>Аргумент</th><th>Действие</th></tr></thead><tbody>
 <tr><td><code>-itlawdl</code></td><td>Экспериментальный AirDrop, см. ниже. Не добавляйте без необходимости тестирования</td></tr>
+<tr><td><code>-itlawdlllw</code></td><td>Сопутствующий интерфейс (<code>llw0</code>) для Sidecar и камеры Continuity на путях AWDL BE, AX и iwm. Требует <code>-itlawdl</code>. По умолчанию выключен</td></tr>
 <tr><td><code>itlwm_he=0</code></td><td>Отключить HE/EHT (<span class="nw">802.11ax</span>/be). По умолчанию включено</td></tr>
+<tr><td><code>itlwm_log=1</code></td><td>Подробный журнал драйвера в <code>dmesg</code>. Release пишет только ошибки и состояние устройства, Debug — всё</td></tr>
 </tbody></table></div></div></section>
 <section id="continuity"><div class="wrap"><h2>Continuity</h2>
 <p><span class="pill dev"><span aria-hidden="true">🧪</span> В разработке</span></p>
 <h3>Instant Hotspot</h3><p>Пробуждение точки доступа iPhone по Bluetooth, направленное сканирование и ассоциация WPA3 работают; сейчас iPhone разрывает связь сразу после четырёхстороннего рукопожатия. Это открытая ошибка, и исправление будет действовать для всех карт.</p>
 <h3>AirDrop (AWDL)</h3><p><code>awdl0</code> создаётся, и им управляет собственный стек AWDL macOS. Для AirDrop карта должна слушать канал AWDL, оставаясь в вашей сети. У всех карт Intel, кроме AX411, один радиомодуль (eMLSR в <span class="nw">Wi-Fi 7</span> — тоже один радиомодуль), поэтому прошивка делит время между ними:</p><ul>
 <li><strong>Карты AX</strong> (прошивка без MLD): постоянный слушатель с собственным контекстом канала — та же конструкция, которую <a target="_blank" rel="noopener noreferrer" href="https://github.com/retropineaple/ForbiddenItlwm">ForbiddenItlwm</a> запускает на AX211, с AirDrop в обе стороны.</li>
-<li><strong>Карты BE</strong> (прошивка MLD): та же идея на наборе команд MLD — линк <span class="nw">P2P-клиента</span> рядом с линком станции (сочетание, которое Linux допускает на двух каналах). Правила активации прошивки выясняются по её собственному коду; пока не работает.</li>
+<li><strong>Карты BE</strong> (прошивка MLD): та же идея на наборе команд MLD — линк <span class="nw">P2P-клиента</span> рядом с линком станции (сочетание, которое Linux допускает на двух каналах). На тестовой машине (BE200, iPhone, macOS 15, 2,4 ГГц) файлы с iPhone доходят до Mac; направление Mac → iPhone, обнаружение и скорость пока в работе.</li>
 <li><strong>Карты iwm</strong> (серии 7000, 8000 и 9000): постоянный приём запускается после подключения к <span class="nw">Wi-Fi</span>. Новые модели ещё предстоит проверить на реальном оборудовании.</li>
 <li><strong>Карты iwn с PAN и P2P</strong> (сначала 6205 и 6235): подключитесь к <span class="nw">Wi-Fi</span> на канале 6 и загрузитесь с <code>-itlawdl</code>. Работу AirDrop на этом канале ещё предстоит проверить на реальном оборудовании.</li>
 </ul><p>Для обнаружения AirDrop нужны реклама и сканирование Bluetooth LE. Патчи Intel BLE загружаются отдельно из <a target="_blank" rel="noopener noreferrer" href="https://github.com/Ersiter/Eric-BlueToolFixup/releases"><span class="nw">Eric-BlueToolFixup</span> Releases</a>. Тестовые пакеты содержат оба kext. С <code>-itlawdl</code> драйвер сначала проверяет, что таблица интерфейса AWDL от Apple имеет ту раскладку, под которую он собран (<code>AWDLBuildCheck</code> в I/O Registry), и иначе работает как обычный <span class="nw">Wi-Fi</span>, так что обновление macOS не приведёт к kernel panic. Канал прослушивания — 149, затем 44, затем 6, причём только тот, на котором страна разрешает передачу (44 там, где нет 149; пассивный канал — после того как рядом услышан роутер, передающий на нём маяки). Быстрее всего 149: роутеры на 149 и iPhone на 149 или без <span class="nw">Wi-Fi</span> дают лучшую скорость AirDrop.</p></div></section>

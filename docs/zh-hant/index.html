@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>Eric-AirportItlwm：Intel 無線網卡的 macOS 原生驅動程式，從 802.11n 到 Wi-Fi 7</title>
-<meta name="description" content="macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及 itlwm 支援的所有網卡">
+<meta name="description" content="macOS 14 Sonoma 至 27 Golden Gate · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及 itlwm 支援的所有網卡">
 <link rel="canonical" href="https://ersiter.github.io/Eric-AirportItlwm/zh-hant/">
 <link rel="alternate" hreflang="en" href="https://ersiter.github.io/Eric-AirportItlwm/">
 <link rel="alternate" hreflang="zh-Hans" href="https://ersiter.github.io/Eric-AirportItlwm/zh-hans/">
@@ -51,7 +51,7 @@
 <div class="hero-text">
 <p class="eyebrow">開<wbr>放<wbr>原始<wbr>碼 <wbr>· <wbr><span class="nw">GPL-2</span>.0 · <wbr>x86_<wbr>64</p>
 <h1>Intel <wbr>無線<wbr>網卡<wbr>的 <wbr>macOS <wbr>原生<wbr>驅動<wbr>程式，<wbr>從 <wbr><span class="nw">802.11n</span> <wbr>到 <wbr><span class="nw">Wi-Fi 7</span></h1>
-<p class="sub">macOS <wbr>Tahoe 26、<wbr>Sequoia 15 · <wbr>WPA3 · <wbr>6 GHz · <wbr><span class="nw">802.11be</span> · <wbr><span class="nw">BE200 / BE201</span> <wbr>以及 <wbr>itlwm <wbr>支援<wbr>的<wbr>所有<wbr>網卡</p>
+<p class="sub">macOS 14 <wbr>Sonoma <wbr>至 <wbr>27 <wbr>Golden <wbr>Gate · <wbr>WPA3 · <wbr>6 GHz · <wbr><span class="nw">802.11be</span> · <wbr><span class="nw">BE200 / BE201</span> <wbr>以及 <wbr>itlwm <wbr>支援<wbr>的<wbr>所有<wbr>網卡</p>
 <p class="lead">在 <wbr>AirportItlwm <wbr>的 <wbr><span class="nw">Wi-Fi 6</span> <wbr>基礎上<wbr>做到<wbr>了 <wbr><span class="nw">Wi-Fi 7</span><wbr>（BE200、<wbr>BE201），<wbr>並<wbr>持續開發 <wbr>AirDrop<wbr>（隔空投送）<wbr>與即時<wbr>熱點。<wbr>原有<wbr>網卡<wbr>全部<wbr>保留，<wbr>使用 <wbr>macOS <wbr>內建<wbr>的 <wbr><span class="nw">Wi-Fi</span>，<wbr>不需要 <wbr>HeliPort，<wbr>也不<wbr>需要 <wbr>OCLP <wbr>的<wbr>無線<wbr>修補。</p>
 <p class="cta"><a target="_blank" rel="noopener noreferrer" class="btn primary" href="https://github.com/Ersiter/Eric-AirportItlwm/releases/latest">前往 Releases 下載</a><a target="_blank" rel="noopener noreferrer" class="btn" href="https://github.com/Ersiter/Eric-AirportItlwm">GitHub 儲存庫</a><a target="_blank" rel="noopener noreferrer" class="btn" href="https://github.com/Ersiter/Eric-AirportItlwm/issues">Issues</a></p>
 <p class="credit-line">基於 <a target="_blank" rel="noopener noreferrer" href="https://github.com/OpenIntelWireless/itlwm">itlwm</a> <wbr>與 <a target="_blank" rel="noopener noreferrer" href="https://github.com/laobamac/itlwm">laobamac/itlwm</a>。<wbr>請見<a href="#lineage">源流<wbr>與<wbr>致謝</a>。</p>
@@ -65,7 +65,7 @@
 <div><dt>接收</dt><dd><span class="num">1.84</span> <span class="unit">Gbit/s</span></dd></div>
 <div><dt>實機</dt><dd><span class="num">320</span> <span class="unit">MHz</span></dd></div>
 </dl><p class="note">BE200 <wbr>實測：<wbr>macOS 26，<wbr>6 GHz，<wbr>320 MHz，<wbr>雙串流。<wbr>數值為<wbr>連線<wbr>速率<wbr>與<wbr>介面<wbr>實測。<wbr>5 GHz <wbr>HE <wbr>160 MHz。<wbr>睡眠：<wbr>任意<wbr>時間<wbr>長度<wbr>的<wbr>睡眠<wbr>後<wbr>立即<wbr>重新<wbr>連線<wbr>（測試者<wbr>回報）。</p>
-<ul class="chips"><li>macOS 26 Tahoe</li><li>macOS 15.2+ Sequoia</li><li>x86_64</li><li>GPL-2.0</li></ul></div>
+<ul class="chips"><li>macOS 14+ Sonoma</li><li>macOS 15.2+ Sequoia</li><li>macOS 26 Tahoe</li><li>macOS 27 Golden Gate</li><li>x86_64</li><li>GPL-2.0</li></ul></div>
 </section>
 <section class="lineage" id="lineage"><div class="wrap">
 <h2>源流<wbr>與<wbr>致謝</h2>
@@ -116,21 +116,23 @@
 <tr><td><span class="nw">Wi-Fi 4</span></td><td>6xxx, 5xxx, 4965, 2200, 2230, 1000, 1030, 100, 105, 130, 135</td><td>請見 <a target="_blank" rel="noopener noreferrer" href="https://github.com/Ersiter/Eric-AirportItlwm/blob/be200-tahoe/AirportItlwm/WCL/Info.plist">Info.plist</a></td><td>iwn</td></tr>
 </tbody></table></div><p>所有<wbr>網卡<wbr>的<wbr>韌體<wbr>都<wbr>已<wbr>內建。<wbr>BE <wbr>系列<wbr>依硬體<wbr>版本<wbr>選擇<wbr>韌體，<wbr>先嘗試<wbr>最高<wbr>的<wbr>已適配 <wbr>API。<wbr>暫不<wbr>支援：<wbr><span class="nw">Wi-Fi 7</span> <wbr>的<wbr>「SC」<wbr>世代<wbr>（BE211/BE213，<code>6E70</code> <code>D240</code> <code>D340</code> <code>E340</code> <code>E440</code> <code>9327</code>），<wbr>它<wbr>需要<wbr>本<wbr>專案尚未<wbr>提供<wbr>的<wbr>韌體。</p></div></section>
 <section id="install"><div class="wrap"><h2>安裝</h2><ol class="steps">
-<li>在 <a target="_blank" rel="noopener noreferrer" href="https://github.com/Ersiter/Eric-AirportItlwm/releases">Releases</a> <wbr>下載<wbr>對<wbr>應系統<wbr>的<wbr>套件：<wbr>macOS 26 <wbr>使用 <code>macOS26-Tahoe</code>，<wbr>macOS 15.2 <wbr>以上<wbr>使用 <code>macOS15-Sequoia</code>。<wbr>日常<wbr>使用 <strong>Release</strong>；<strong>Debug</strong> <wbr>保留<wbr>回報<wbr>問題<wbr>所需<wbr>的<wbr>診斷<wbr>日誌。</li>
-<li>放進 <code>EFI/OC/Kexts/</code>，<wbr>並<wbr>在 <code>Kernel → Add</code> <wbr>中<wbr>加入，<wbr>只<wbr>保留<wbr>一個 <wbr>Intel <wbr>無線<wbr>驅動。<wbr>同一份<wbr>設定同時<wbr>開機<wbr>兩個<wbr>系統<wbr>時，<wbr>Tahoe <wbr>版限定 <wbr>Darwin <code>25.0.0</code>–<code>25.99.99</code>，<wbr>Sequoia <wbr>版限定 <code>24.2.0</code>–<code>24.99.99</code>。</li>
+<li>在 <a target="_blank" rel="noopener noreferrer" href="https://github.com/Ersiter/Eric-AirportItlwm/releases">Releases</a> <wbr>下載<wbr>對<wbr>應系統<wbr>的<wbr>套件：<wbr>macOS 26 <wbr>使用 <code>macOS26-Tahoe</code>，<wbr>macOS 15.2 <wbr>以上<wbr>使用 <code>macOS15-Sequoia</code>，<wbr>macOS 14 <wbr>使用 <code>macOS14-Sonoma</code>，<wbr>macOS 27 <wbr>使用 <code>macOS27-GoldenGate</code>，<wbr>一次<wbr>發布<wbr>提供<wbr>四個<wbr>系統。<wbr>日常<wbr>使用 <strong>Release</strong>；<strong>Debug</strong> <wbr>保留<wbr>回報<wbr>問題<wbr>所需<wbr>的<wbr>診斷<wbr>日誌。</li>
+<li>放進 <code>EFI/OC/Kexts/</code>，<wbr>並<wbr>在 <code>Kernel → Add</code> <wbr>中<wbr>加入，<wbr>只<wbr>保留<wbr>一個 <wbr>Intel <wbr>無線<wbr>驅動。<wbr>同一份<wbr>設定同時<wbr>開機<wbr>兩個<wbr>系統<wbr>時，<wbr>各版本<wbr>各自<wbr>限定：<wbr>Tahoe <code>25.0.0</code>–<code>25.99.99</code>，<wbr>Sequoia <code>24.2.0</code>–<code>24.99.99</code>，<wbr>Sonoma <code>23.0.0</code>–<code>23.99.99</code>，<wbr>Golden <wbr>Gate <code>27.0.0</code>–<code>27.99.99</code>。</li>
 <li>不要<wbr>與 <wbr>OpenCore <wbr>Legacy <wbr>Patcher <wbr>的<wbr>「Modern <wbr>Wireless」<wbr>根<wbr>修補<wbr>或<wbr>任何 <wbr>IO80211 <wbr>/ <wbr>Skywalk <wbr>替換<wbr>混用：<wbr>本<wbr>驅動<wbr>使用<wbr>的<wbr>就是<wbr>系統<wbr>內建<wbr>的<wbr>無線<wbr>堆疊。</li>
 <li>保留<wbr>一份<wbr>可以<wbr>開機<wbr>的 <wbr>EFI，<wbr>先用<wbr>隨身碟<wbr>測試。</li>
-</ol><p>國家<wbr>碼<wbr>與<wbr>可用<wbr>頻道<wbr>由<wbr>周圍<wbr>的<wbr>路由<wbr>器<wbr>透過<wbr>網卡<wbr>自身<wbr>的<wbr>法規<wbr>邏輯<wbr>決定，<wbr>與 <wbr>Linux <wbr>相同，<wbr>不需要<wbr>設定。</p>
+</ol>
 <h3>開機<wbr>參數</h3><div class="table-wrap"><table><thead><tr><th>參數</th><th>作用</th></tr></thead><tbody>
 <tr><td><code>-itlawdl</code></td><td>實驗性<wbr>的 <wbr>AirDrop，<wbr>這<wbr>一個<wbr>開關<wbr>就<wbr>帶上<wbr>全部，<wbr>請見<wbr>下文，<wbr>不測試<wbr>請<wbr>勿加入</td></tr>
+<tr><td><code>-itlawdlllw</code></td><td>伴<wbr>隨介面<wbr>（<code>llw0</code>），<wbr>用於 <wbr>BE、<wbr>AX、<wbr>iwm <wbr>的<wbr>並行<wbr>作業<wbr>與<wbr>連續<wbr>互通<wbr>相機。<wbr>需加 <code>-itlawdl</code>。<wbr>預設關閉</td></tr>
 <tr><td><code>itlwm_he=0</code></td><td>關閉 <wbr>HE/EHT<wbr>（<span class="nw">802.11ax</span>/be），<wbr>預設開啟</td></tr>
+<tr><td><code>itlwm_log=1</code></td><td>在 <code>dmesg</code> <wbr>輸出詳細驅動<wbr>日誌。<wbr>Release <wbr>版只<wbr>記錄<wbr>錯誤<wbr>與<wbr>裝置<wbr>狀態，<wbr>Debug <wbr>版全部<wbr>記錄</td></tr>
 </tbody></table></div></div></section>
 <section id="continuity"><div class="wrap"><h2>連續<wbr>互通</h2>
 <p><span class="pill dev"><span aria-hidden="true">🧪</span> 開發中</span></p>
 <h3>即<wbr>時<wbr>熱點</h3><p>藍牙喚醒 <wbr>iPhone <wbr>熱點、<wbr>定向<wbr>掃描<wbr>與 <wbr>WPA3 <wbr>關聯<wbr>都<wbr>已能<wbr>完成；<wbr>目前 <wbr>iPhone <wbr>在<wbr>四向<wbr>交握之後<wbr>立刻<wbr>中斷<wbr>連線，<wbr>這<wbr>是<wbr>正在<wbr>追查<wbr>的<wbr>問題，<wbr>修正<wbr>對<wbr>所有<wbr>網卡<wbr>都有效。</p>
 <h3>AirDrop <wbr>隔空投送<wbr>（AWDL）</h3><p><code>awdl0</code> <wbr>已經<wbr>建立，<wbr>由 <wbr>macOS <wbr>自己<wbr>的 <wbr>AWDL <wbr>協定<wbr>堆疊<wbr>驅動。<wbr>AirDrop <wbr>要求<wbr>網卡<wbr>一邊<wbr>留<wbr>在<wbr>你<wbr>的<wbr>網路<wbr>上，<wbr>一邊<wbr>在 <wbr>AWDL <wbr>頻道<wbr>上<wbr>監聽。<wbr>除 <wbr>AX411 <wbr>之外，<wbr>所有 <wbr>Intel <wbr>網卡<wbr>都是<wbr>單射<wbr>頻<wbr>（<span class="nw">Wi-Fi 7</span> <wbr>的 <wbr>eMLSR <wbr>也是<wbr>單射<wbr>頻），<wbr>由韌<wbr>體<wbr>在<wbr>兩者<wbr>之間<wbr>分時：</p><ul>
 <li><strong>AX <wbr>系列</strong>（非 <wbr>MLD <wbr>韌體）：<wbr>常<wbr>駐監<wbr>聽器，<wbr>擁有<wbr>自己<wbr>的<wbr>頻道<wbr>上<wbr>下文，<wbr>與 <a target="_blank" rel="noopener noreferrer" href="https://github.com/retropineaple/ForbiddenItlwm">ForbiddenItlwm</a> <wbr>在 <wbr>AX211 <wbr>上<wbr>實現雙向 <wbr>AirDrop <wbr>的<wbr>做法<wbr>相同。</li>
-<li><strong>BE <wbr>系列</strong>（MLD <wbr>韌體）：<wbr>同樣<wbr>的<wbr>思路<wbr>改用 <wbr>MLD <wbr>指令集，<wbr>在<wbr>主連結<wbr>旁<wbr>加<wbr>一條 <wbr>P2P <wbr>用戶端<wbr>連結<wbr>（Linux <wbr>允許<wbr>兩個<wbr>不同<wbr>頻道<wbr>的<wbr>組合）。<wbr>正在<wbr>依韌<wbr>體<wbr>自身程式<wbr>碼梳理<wbr>它<wbr>的<wbr>啟用<wbr>條件，<wbr>尚未<wbr>走通。</li>
+<li><strong>BE <wbr>系列</strong>（MLD <wbr>韌體）：<wbr>同樣<wbr>的<wbr>思路<wbr>改用 <wbr>MLD <wbr>指令集，<wbr>在<wbr>主連結<wbr>旁<wbr>加<wbr>一條 <wbr>P2P <wbr>用戶端<wbr>連結<wbr>（Linux <wbr>允許<wbr>兩個<wbr>不同<wbr>頻道<wbr>的<wbr>組合）。<wbr>測試機<wbr>上<wbr>（BE200、<wbr>iPhone、<wbr>macOS <wbr>15、<wbr>2.4G）<wbr>已能<wbr>從 <wbr>iPhone <wbr>收到<wbr>檔案；<wbr>Mac <wbr>到 <wbr>iPhone <wbr>的<wbr>方向、<wbr>探索<wbr>穩定<wbr>性<wbr>與<wbr>速度<wbr>仍在<wbr>開發。</li>
 <li><strong>iwm <wbr>網卡</strong>（7000、<wbr>8000 <wbr>和 <wbr>9000 <wbr>系列）<wbr>在<wbr>連上 <wbr><span class="nw">Wi-Fi</span> <wbr>後啟<wbr>動常<wbr>駐監<wbr>聽器。<wbr>新增型<wbr>號<wbr>仍待實機驗證。</li>
 <li><strong>支援 <wbr>PAN <wbr>和 <wbr>P2P <wbr>的 <wbr>iwn <wbr>網卡</strong>（先驗證 <wbr>6205、<wbr>6235）：<wbr>連線<wbr>至頻道 <wbr>6 <wbr>的 <wbr><span class="nw">Wi-Fi</span>，<wbr>並加上 <code>-itlawdl</code> <wbr>啟動。<wbr>同頻道<wbr>的 <wbr>AirDrop <wbr>仍待實機驗證。</li>
 </ul><p>AirDrop <wbr>探索<wbr>依賴藍牙 <wbr>LE <wbr>廣播<wbr>與<wbr>掃描。<wbr>可從 <a target="_blank" rel="noopener noreferrer" href="https://github.com/Ersiter/Eric-BlueToolFixup/releases"><span class="nw">Eric-BlueToolFixup</span> Releases</a> <wbr>單獨下載 <wbr>Intel <wbr>BLE <wbr>修補。<wbr>藍牙獨立<wbr>發版，<wbr>配套<wbr>社群測試包內<wbr>提供<wbr>兩個 <wbr>kext。 <wbr>加入 <code>-itlawdl</code> <wbr>時，<wbr>驅動<wbr>會<wbr>先檢查 <wbr>Apple <wbr>的 <wbr>AWDL <wbr>介面<wbr>表<wbr>是否<wbr>與<wbr>編譯<wbr>時<wbr>一致<wbr>（I/O <wbr>Registry <wbr>中<wbr>的 <code>AWDLBuildCheck</code>），<wbr>不一致<wbr>就<wbr>只做一般 <wbr><span class="nw">Wi-Fi</span>，<wbr>系統<wbr>更新<wbr>不會<wbr>因此<wbr>造成核心<wbr>當機。<wbr>監聽頻道<wbr>依序選 <wbr>149、<wbr>44、<wbr>6，<wbr>只使用當<wbr>地<wbr>允許<wbr>發射<wbr>的<wbr>頻道<wbr>（沒有 <wbr>149 <wbr>的<wbr>國家<wbr>使用 <wbr>44；<wbr>被<wbr>動頻<wbr>道<wbr>在<wbr>聽到<wbr>附近<wbr>路<wbr>由器<wbr>的<wbr>信標<wbr>後才算<wbr>可用）。<wbr>149 <wbr>最快：<wbr>路由器<wbr>在 <wbr>149、<wbr>iPhone <wbr>也<wbr>在 <wbr>149 <wbr>或<wbr>未連接 <wbr><span class="nw">Wi-Fi</span> <wbr>時，<wbr>AirDrop <wbr>速度<wbr>最好。</p></div></section>

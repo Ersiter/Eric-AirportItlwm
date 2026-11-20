@@ -2,7 +2,7 @@
 
 <h1 align="center">Eric-AirportItlwm</h1>
 <p align="center"><b>Intel 无线网卡的 macOS 原生驱动，从 802.11n 到 Wi-Fi 7</b><br>
-macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及 itlwm 支持的全部网卡</p>
+macOS 14 Sonoma 至 27 Golden Gate · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及 itlwm 支持的全部网卡</p>
 
 <p align="center"><a href="README.md">English</a></p>
 
@@ -48,17 +48,16 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 ## 安装
 
 1. 在 [Releases](https://github.com/Ersiter/Eric-AirportItlwm/releases) 下载对应系统的包：macOS 26 用
-   `macOS26-Tahoe`，macOS 15.2 及以上用 `macOS15-Sequoia`。日常用 **Release**；**Debug** 保留反馈问题所需的诊断日志。
-2. 放进 `EFI/OC/Kexts/`，在 `Kernel → Add` 里添加，只保留一个 Intel 无线驱动。一份配置同时引导两个系统时，
-   Tahoe 版限定 Darwin `25.0.0`–`25.99.99`，Sequoia 版限定 `24.2.0`–`24.99.99`。
+   `macOS26-Tahoe`，macOS 15.2 及以上用 `macOS15-Sequoia`，macOS 14 用 `macOS14-Sonoma`，macOS 27 用 `macOS27-GoldenGate`，一次发布提供四个系统。日常用 **Release**；**Debug** 保留反馈问题所需的诊断日志。
+2. 放进 `EFI/OC/Kexts/`，在 `Kernel → Add` 里添加，只保留一个 Intel 无线驱动。一份配置同时引导多个系统时，
+   各版本各自限定：Tahoe Darwin `25.0.0`–`25.99.99`，Sequoia `24.2.0`–`24.99.99`，Sonoma `23.0.0`–`23.99.99`，
+   Golden Gate `27.0.0`–`27.99.99`。
 3. 不要与 OpenCore Legacy Patcher 的「Modern Wireless」根补丁或任何 IO80211 / Skywalk 替换混用：本驱动用的
    就是系统自带的无线栈。
 4. 保留一份能启动的 EFI，先用 U 盘测试。
 
 蓝牙配套可从 [Eric-BlueToolFixup Releases](https://github.com/Ersiter/Eric-BlueToolFixup/releases) 单独下载。
 它独立发版，更新 Wi-Fi 时可以继续沿用适合自己机器的蓝牙配置。
-
-国家码和可用信道由周围的路由器经网卡自身的法规逻辑确定，与 Linux 相同，不需要设置。
 
 ### 启动参数
 
@@ -81,7 +80,7 @@ macOS Tahoe 26、Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 以及
 - **AX 系列**（非 MLD 固件）：常驻监听器，有自己的信道上下文，与 [ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm)
   在 AX211 上实现双向隔空的做法相同。
 - **BE 系列**（MLD 固件）：同样的思路换成 MLD 命令集，在主链路旁加一条 P2P 客户端链路（Linux 允许两条
-  不同信道的组合）。正在按固件自身代码梳理它的激活条件，尚未走通。
+  不同信道的组合）。测试机上（BE200、iPhone、macOS 15、2.4G）已能从 iPhone 收到文件；Mac 到 iPhone 的方向、发现稳定性和速度仍在做。
 - **iwm 网卡**（7000、8000 和 9000 系列）在连上 Wi-Fi 后启动常驻监听器。随驱动提供的 iwm 固件均声明监听器所需的 P2P 和 DQA 能力。新增型号仍待实机验证。
 - **支持 PAN 和 P2P 的 iwn 网卡**（首批目标为 6205、6235）用 `-itlawdl` 启动并连接信道 6 的 Wi-Fi。驱动检查固件和 EEPROM 能力后，在同一信道使用 PAN 上下文。隔空投送待实机验证。
 

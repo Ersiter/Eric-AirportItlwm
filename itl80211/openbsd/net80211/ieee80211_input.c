@@ -2947,11 +2947,15 @@ ieee80211_recv_probe_resp_bss(struct ieee80211com *ic, mbuf_t m,
             ni->ni_supported_rsnakms |= wpa.rsn_akms;
         }
         
-        /*
-         * If the AP advertises both WPA and RSN IEs (WPA1+WPA2),
-         * we only use the highest protocol version we support.
-         */
-        if (rsnie != NULL &&
+        /* Prefer RSN, unless WCL requested WPA for this BSSID. */
+        bool wpa_join = false;
+#ifdef AIRPORT_WCL
+        wpa_join = ic->ic_wcl_join_requested && (ic->ic_flags & IEEE80211_F_RSNON) &&
+            ic->ic_rsnprotos == IEEE80211_PROTO_WPA &&
+            (ni->ni_supported_rsnprotos & IEEE80211_PROTO_WPA) &&
+            IEEE80211_ADDR_EQ(wh->i_addr3, ic->ic_des_bssid);
+#endif
+        if (!wpa_join && rsnie != NULL &&
             (ni->ni_supported_rsnprotos & IEEE80211_PROTO_RSN) &&
             (ic->ic_caps & IEEE80211_C_RSN)) {
             if (ieee80211_save_ie(rsnie, &ni->ni_rsnie) == 0
