@@ -357,9 +357,9 @@ public:
     enum { kRxIpRecords = 16 };
     struct RxIpRecord {
         uint64_t us;
-        uint8_t dst[6], src[6];
+        uint8_t dst[6], src[6], ip6Dst[16];
         uint16_t ethType, len;
-        uint8_t nextHeader, type, flags, seeded;
+        uint8_t nextHeader, type, flags, dnsQr;
         uint16_t srcPort, dstPort;
         volatile uint32_t sequence;
     };

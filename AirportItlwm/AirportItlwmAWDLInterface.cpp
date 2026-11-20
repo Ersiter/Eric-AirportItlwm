@@ -400,7 +400,9 @@ seedNeighbor(mbuf_t m, AirportItlwmAWDLInterface *awdl)
 void AirportItlwmAWDLEthernetInterface::
 recordRxIp(mbuf_t m, AirportItlwmAWDLInterface *awdl)
 {
-    uint8_t h[14 + 40 + 16] = {};
+    constexpr size_t udpPayload = 14 + 40 + 8;
+    constexpr size_t dnsHeaderLength = 12;
+    uint8_t h[udpPayload + dnsHeaderLength] = {};
     size_t length = mbuf_pkthdr_len(m), n = length < sizeof(h) ? length : sizeof(h);
     if (n < 14 || mbuf_copydata(m, 0, n, h))
         return;
@@ -415,7 +417,8 @@ recordRxIp(mbuf_t m, AirportItlwmAWDLInterface *awdl)
     memcpy(r->src, h + 6, 6);
     r->ethType = (uint16_t)((h[12] << 8) | h[13]);
     r->len = (uint16_t)(length > 0xffff ? 0xffff : length);
-    r->nextHeader = r->type = r->flags = r->seeded = 0;
+    r->nextHeader = r->type = r->flags = 0;
+    r->dnsQr = 0;
     r->srcPort = r->dstPort = 0;
     if (r->ethType == 0x86dd && n >= 14 + 40) {
         r->nextHeader = h[14 + 6];
@@ -426,9 +429,15 @@ recordRxIp(mbuf_t m, AirportItlwmAWDLInterface *awdl)
         } else if (r->nextHeader == 17 && n >= 14 + 40 + 4) {
             r->srcPort = (uint16_t)((h[54] << 8) | h[55]);
             r->dstPort = (uint16_t)((h[56] << 8) | h[57]);
-            if (group && r->dstPort == 5353)
+            if (group && r->dstPort == 5353) {
                 awdl->fRxGroupUdp5353++;
-        } else if (r->nextHeader == 58) {
+                if (n >= udpPayload + dnsHeaderLength &&
+                    ((h[58] << 8) | h[59]) >= 8 + dnsHeaderLength) {
+                    memcpy(r->ip6Dst, h + 14 + 24, sizeof(r->ip6Dst));
+                    r->dnsQr = (h[udpPayload + 2] & 0x80) ? 2 : 1;
+                }
+            }
+        } else if (r->nextHeader == 58 && n > 14 + 40) {
             r->type = h[14 + 40];
         }
     }
@@ -2467,13 +2476,21 @@ publishDataState()
         uint32_t sequence = __atomic_load_n(&r->sequence, __ATOMIC_ACQUIRE);
         if (!sequence)
             continue;
-        char key[24], value[200];
+        char key[24], value[256];
+        char dns[64] = {};
+        if (r->dnsQr) {
+            const uint8_t *dst = r->ip6Dst;
+            snprintf(dns, sizeof(dns), " ip6dst=%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x qr=%s",
+                dst[0], dst[1], dst[2], dst[3], dst[4], dst[5], dst[6], dst[7],
+                dst[8], dst[9], dst[10], dst[11], dst[12], dst[13], dst[14], dst[15],
+                r->dnsQr == 2 ? "response" : "query");
+        }
         snprintf(key, sizeof(key), "AWDLRxIp%02u", i);
         snprintf(value, sizeof(value),
-                 "seq=%u uptime_us=%llu dst=%02x:%02x:%02x:%02x:%02x:%02x src=%02x:%02x:%02x:%02x:%02x:%02x eth=%04x len=%u nh=%u icmp=%u tcpflags=0x%02x sport=%u dport=%u",
+                 "seq=%u uptime_us=%llu dst=%02x:%02x:%02x:%02x:%02x:%02x src=%02x:%02x:%02x:%02x:%02x:%02x eth=%04x len=%u nh=%u icmp=%u tcpflags=0x%02x sport=%u dport=%u%s",
                  sequence, (unsigned long long)r->us, r->dst[0], r->dst[1], r->dst[2], r->dst[3], r->dst[4], r->dst[5],
                  r->src[0], r->src[1], r->src[2], r->src[3], r->src[4], r->src[5], r->ethType, r->len, r->nextHeader,
-                 r->type, r->flags, r->srcPort, r->dstPort);
+                 r->type, r->flags, r->srcPort, r->dstPort, dns);
         setProperty(key, value);
     }
     setProperty("AWDLRxIpFrames", __atomic_load_n(&fRxIpCount, __ATOMIC_ACQUIRE), 32);
