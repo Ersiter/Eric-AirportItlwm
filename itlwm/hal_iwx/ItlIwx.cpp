@@ -9414,8 +9414,12 @@ iwx_umac_scan_fill_channels(struct iwx_softc *sc,
         }
         
 #ifdef AIRPORT_WCL
+        const bool firmwareDirected = ic->ic_wcl_scan_requested &&
+            ic->ic_wcl_scan_ssid_length && sc->sc_nvm.lar_enabled && sc->sc_mcc_profile_synced &&
+            !IEEE80211_IS_CHAN_6GHZ(c);
         if (AirportWCL::probeChannel(n_ssids != 0,
-                c->ic_flags & IEEE80211_CHAN_PASSIVE, c->ic_flags & IEEE80211_CHAN_DFS))
+                c->ic_flags & IEEE80211_CHAN_PASSIVE, c->ic_flags & IEEE80211_CHAN_DFS,
+                firmwareDirected))
 #else
         if (n_ssids != 0 && !bgscan)
 #endif

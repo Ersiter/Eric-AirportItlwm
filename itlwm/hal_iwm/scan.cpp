@@ -228,8 +228,13 @@ iwm_umac_scan_fill_channels(struct iwm_softc *sc,
         chan->iter_count = 1;
         chan->iter_interval = htole16(0);
 #ifdef AIRPORT_WCL
+        // LAR firmware uses the SSID bitmap if it can probe on this channel.
+        const bool firmwareDirected = ic->ic_wcl_scan_requested &&
+            ic->ic_wcl_scan_ssid_length && sc->sc_device_family >= IWM_DEVICE_FAMILY_9000 &&
+            isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_LAR_SUPPORT);
         if (AirportWCL::probeChannel(n_ssids != 0,
-                c->ic_flags & IEEE80211_CHAN_PASSIVE, c->ic_flags & IEEE80211_CHAN_DFS))
+                c->ic_flags & IEEE80211_CHAN_PASSIVE, c->ic_flags & IEEE80211_CHAN_DFS,
+                firmwareDirected))
 #else
         if (n_ssids != 0 && !bgscan)
 #endif

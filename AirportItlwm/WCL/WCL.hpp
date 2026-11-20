@@ -386,8 +386,8 @@ inline bool scanUsesProbes(bool requested, bool activeRequest) {
     return requested ? activeRequest : true;
 }
 
-inline bool probeChannel(bool active, bool passiveOnly, bool dfs) {
-    return active && !passiveOnly && !dfs;
+inline bool probeChannel(bool active, bool passiveOnly, bool dfs, bool firmwareDirected = false) {
+    return active && !dfs && (!passiveOnly || firmwareDirected);
 }
 
 struct ScanRequest {
