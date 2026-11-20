@@ -12755,6 +12755,13 @@ iwx_awdl_listener_pick(struct iwx_softc *sc, uint8_t only)
     }
     uint8_t selected = 0, bestSlots = 0;
     uint8_t why[nitems(kOrder)] = {};
+    if (sc->sc_use_mld_api && !itlAWDLStandingFlag()) {
+        if (!only) {
+            memset(ic->ic_awdl_listener_why, 0x40, sizeof(ic->ic_awdl_listener_why));
+            ic->ic_awdl_listener_station = station ? ieee80211_chan2ieee(ic, station) : 0;
+        }
+        return 0;
+    }
     for (unsigned i = 0; i < nitems(kOrder); i++) {
         const unsigned c = kOrder[i];
         if (only && c != only)

@@ -41,6 +41,16 @@ inline bool itlAWDLLlwFlag()
     return itlAWDLEnabled() && PE_parse_boot_argn("-itlawdlllw", &value, sizeof(value));
 }
 
+// BE (MLD) firmware completes none of the frames queued on a standing listener link after the first few (every capture
+// of 2026-11-19/20, on channels 6 and 149, TxFwOk frozen while TxFwBusy climbs), while the same frames sent in a
+// remain-on-channel window complete and the peer's SYN arrives. So MLD listens with ROC unless -itlawdlstanding asks for
+// the standing link, which is for finding why it stalls.
+inline bool itlAWDLStandingFlag()
+{
+    int value = 0;
+    return itlAWDLEnabled() && PE_parse_boot_argn("-itlawdlstanding", &value, sizeof(value));
+}
+
 inline bool itlAWDLLegacyBaFlag()
 {
     int value = 0;
