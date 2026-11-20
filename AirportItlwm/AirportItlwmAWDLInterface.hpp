@@ -279,7 +279,7 @@ private:
     bool fListenAlignedActive;      // the listen timer drives the listens
     uint8_t fListenNextChan;
     uint32_t fListenNextDwellTU;
-    uint64_t fListenNextEndUs;
+    uint64_t fListenNextTxStartUs, fListenNextEndUs;
     uint64_t fListenAligned;
     uint64_t fListenNoSlot;
     uint64_t fListenHunt;

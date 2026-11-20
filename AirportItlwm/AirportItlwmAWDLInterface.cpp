@@ -1036,7 +1036,7 @@ startAWTimeline()
     fLastValid = false;
     fInAW = false;
     fAWRunning = true;
-    fHuntStartUs = fHuntNextUs = fListenNextEndUs = fListenNextHuntGapUs = 0;
+    fHuntStartUs = fHuntNextUs = fListenNextTxStartUs = fListenNextEndUs = fListenNextHuntGapUs = 0;
     publishAWDLAddress();
     AWDL_LOG("seq %u slot %llu us", fRefSeq, slotUs());
     scheduleNextAW(now);
@@ -1767,9 +1767,11 @@ scheduleOwnListen(uint64_t afterUs)
     ic->ic_awdl_want_data = havePeerTiming;
     updatePeerChannels(ic, now);
     const uint64_t from = MAX(afterUs, now);
-    const auto armListen = [&](uint8_t chan, uint32_t dwell, uint64_t start, uint64_t huntGapUs) {
+    const auto armListen = [&](uint8_t chan, uint32_t dwell, uint64_t start,
+                               uint64_t txStart, uint64_t huntGapUs) {
         fListenNextChan = chan;
         fListenNextDwellTU = dwell;
+        fListenNextTxStartUs = txStart;
         fListenNextEndUs = protectOwnSlots ? start + (uint64_t)dwell * 1024 : 0;
         fListenNextHuntGapUs = huntGapUs;
         uint64_t abs;
@@ -1825,7 +1827,7 @@ scheduleOwnListen(uint64_t afterUs)
         // Keep the P2P receive filter open while looking for the first sync frame.
         ic->ic_awdl_want_data = 1;
         if (huntChan && !protectOwnSlots)
-            return armListen(huntChan, kHuntDwellTU, huntStart, huntGap);
+            return armListen(huntChan, kHuntDwellTU, huntStart, 0, huntGap);
     }
     int64_t slot = (int64_t)slotUs();
     uint16_t pm = presenceMode();
@@ -1883,13 +1885,14 @@ scheduleOwnListen(uint64_t afterUs)
             const uint64_t gapTU = (start - huntStart) / 1024;
             if (gapTU >= 32 + kListenDwellMinTU) {
                 const uint32_t huntDwell = (uint32_t)MIN(kHuntDwellTU, gapTU - 32);
-                return armListen(huntChan, huntDwell, huntStart, huntGap);
+                return armListen(huntChan, huntDwell, huntStart, 0, huntGap);
             }
         }
-        return armListen(chan, MIN(dwell, fListenDwellTU), (uint64_t)start, 0);
+        return armListen(chan, MIN(dwell, fListenDwellTU), (uint64_t)start,
+            peerWindow ? 0 : (uint64_t)slotStart, 0);
     }
     if (huntChan)
-        return armListen(huntChan, kHuntDwellTU, huntStart, huntGap);
+        return armListen(huntChan, kHuntDwellTU, huntStart, 0, huntGap);
     fListenNoSlot++;
     return false;
 }
@@ -1898,7 +1901,7 @@ void AirportItlwmAWDLInterface::
 scheduleAlignedListen(uint64_t afterUs)
 {
     fListenAlignedActive = false;
-    fListenNextEndUs = fListenNextHuntGapUs = 0;
+    fListenNextTxStartUs = fListenNextEndUs = fListenNextHuntGapUs = 0;
     if (awDataAllowed()) {
         scheduleOwnListen(afterUs);
         return;
@@ -1949,6 +1952,7 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *timer)
         return;
     const uint64_t now = hostUs();
     const uint8_t chan = that->fListenNextChan;
+    const uint64_t txStart = that->fListenNextTxStartUs;
     const uint64_t end = that->fListenNextEndUs;
     uint32_t dwell = that->fListenNextDwellTU;
     const uint64_t huntGap = that->fListenNextHuntGapUs;
@@ -1970,14 +1974,16 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *timer)
         if (matches && !(++that->fListenSlot % that->fListenEveryNth)) {
             const int err = that->startListen(chan, dwell, home, true);
             if (!that->fAWRunning || !that->fListenAlignedActive ||
-                that->fListenNextEndUs != end || that->fListenNextChan != chan)
+                that->fListenNextEndUs != end || that->fListenNextChan != chan ||
+                that->fListenNextTxStartUs != txStart)
                 return;
             if (huntGap)
                 that->fHuntNextUs = dwellEnd + huntGap;
             if (!err) {
                 if (awDataAllowed())
                     that->fListenOwn++;
-                that->scheduleTx(chan, now + kListenLeadUs, dwellEnd);
+                // A retry can shorten the dwell without moving the advertised AW.
+                that->scheduleTx(chan, txStart ? txStart : now + kListenLeadUs, dwellEnd);
             } else if (end && !huntGap && (err == EBUSY || err == EAGAIN)) {
                 // A previous ROC can still be waiting for its END notification.
                 constexpr uint64_t retryDelayUs = 4 * 1024;
@@ -3117,7 +3123,7 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fListenAlignedActive = false;
     fListenNextChan = 0;
     fListenNextDwellTU = 0;
-    fListenNextEndUs = 0;
+    fListenNextTxStartUs = fListenNextEndUs = 0;
     fListenAligned = 0;
     fListenNoSlot = 0;
     fListenHunt = 0;
