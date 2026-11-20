@@ -11305,18 +11305,25 @@ iwx_awdl_rx_ba(struct ieee80211com *ic, const uint8_t *peer, uint8_t tid,
     return EAGAIN;
 }
 
+static int
+iwx_awdl_tx_ready(struct ieee80211com *ic, uint8_t chan)
+{
+    const auto *sc = (const struct iwx_softc *)IC2IFP(ic)->if_softc;
+    return chan && sc->sc_p2p_queue && sc->sc_aux_roc_running &&
+        ic->ic_awdl_listen_chan == chan && ic->ic_state == IEEE80211_S_RUN &&
+        !(sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN | IWX_FLAG_SHUTDOWN |
+            IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)) &&
+        (!sc->sc_listener_up || (!sc->sc_listener_refitting && !sc->sc_listener_retry_us &&
+            sc->sc_listener_chan == chan));
+}
+
 void ItlIwx::
 iwx_awdl_ba_reply(struct iwx_softc *sc)
 {
     struct ieee80211com *ic = &sc->sc_ic;
-    const int lowLatency = sc->sc_awdl_low_latency && sc->sc_listener_up &&
-        sc->sc_awdl_ba_tid == 6;
     if (!sc->sc_awdl_ba_reply_pending || sc->sc_awdl_ba_pending || sc->sc_awdl_peer_busy ||
-        sc->sc_listener_refitting || sc->sc_listener_retry_us ||
         !sc->sc_awdl_peer_added || sc->sc_awdl_peer_mgmt_qid < 0 ||
-        (!lowLatency && (!sc->sc_aux_roc_running ||
-         ic->ic_awdl_listen_chan != sc->sc_awdl_ba_reply_chan)) ||
-        (lowLatency && sc->sc_listener_chan != sc->sc_awdl_ba_reply_chan) ||
+        !iwx_awdl_tx_ready(ic, sc->sc_awdl_ba_reply_chan) ||
         !IEEE80211_ADDR_EQ(sc->sc_awdl_ba_peer, sc->sc_awdl_peer_addr))
         return;
     int err = iwx_awdl_tx_frame(sc, sc->sc_awdl_ba_reply,
@@ -12070,18 +12077,6 @@ failed:
     sc->sc_awdl_ba_reply_pending = 0;
     sc->sc_awdl_peer_busy = 0;
     iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
-}
-
-static int
-iwx_awdl_tx_ready(struct ieee80211com *ic, uint8_t chan)
-{
-    const auto *sc = (const struct iwx_softc *)IC2IFP(ic)->if_softc;
-    return chan && sc->sc_p2p_queue && sc->sc_aux_roc_running &&
-        ic->ic_awdl_listen_chan == chan && ic->ic_state == IEEE80211_S_RUN &&
-        !(sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN | IWX_FLAG_SHUTDOWN |
-            IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)) &&
-        (!sc->sc_listener_up || (!sc->sc_listener_refitting && !sc->sc_listener_retry_us &&
-            sc->sc_listener_chan == chan));
 }
 
 int ItlIwx::
@@ -14101,8 +14096,13 @@ iwx_awdl_stop(struct ieee80211com *ic)
 void ItlIwx::
 iwx_awdl_listen_abort(struct iwx_softc *sc)
 {
-    if (sc->sc_listener_up)
-        return;     /* the listener stays for the whole AWDL session */
+    if (sc->sc_listener_up) {
+        // The firmware link stays allocated while the current host window closes.
+        sc->sc_awdl_listen_active = 0;
+        sc->sc_aux_roc_running = 0;
+        sc->sc_ic.ic_awdl_listen_chan = 0;
+        return;
+    }
     if (iwx_p2p_listen_enabled()) {
         if (sc->sc_mld_roc_canceling)
             return;
