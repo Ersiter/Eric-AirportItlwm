@@ -1306,17 +1306,19 @@ iwm_rx_pkt(struct iwm_softc *sc, struct iwm_rx_data *data, struct mbuf_list *ml)
                 break;
                 
             case IWM_SCAN_OFFLOAD_COMPLETE: {
+                if (!IWM_NOTIF_FITS(pkt, struct iwm_periodic_scan_complete))
+                    break;
                 struct iwm_periodic_scan_complete *notif;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwm_periodic_scan_complete *);
+                iwm_record_diagnostic(sc, "lmac-scan-complete", __FUNCTION__, __LINE__, 0,
+                    notif->status, notif->last_schedule_iteration, notif->ebs_status);
+                if (notif->status == IWM_SCAN_OFFLOAD_COMPLETED)
+                    iwm_endscan(sc);
                 break;
             }
-                
-            case IWM_SCAN_ITERATION_COMPLETE: {
-                struct iwm_lmac_scan_complete_notif *notif;
-                SYNC_RESP_STRUCT(notif, pkt, struct iwm_lmac_scan_complete_notif *);
-                iwm_endscan(sc);
+
+            case IWM_SCAN_ITERATION_COMPLETE:
                 break;
-            }
                 
             case IWM_SCAN_COMPLETE_UMAC: {
                 struct iwm_umac_scan_complete *notif;

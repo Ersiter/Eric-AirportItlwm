@@ -428,7 +428,6 @@ iwm_lmac_scan(struct iwm_softc *sc, int bgscan)
     req->delay = 0;
     
     req->scan_flags = htole32(IWM_LMAC_SCAN_FLAG_PASS_ALL |
-                              IWM_LMAC_SCAN_FLAG_ITER_COMPLETE |
                               IWM_LMAC_SCAN_FLAG_EXTENDED_DWELL);
 #ifdef AIRPORT_WCL
     if (timing.fragmented) {
@@ -449,9 +448,6 @@ iwm_lmac_scan(struct iwm_softc *sc, int bgscan)
               IWM_UCODE_TLV_CAPA_WFA_TPC_REP_IE_SUPPORT))
         req->scan_flags |= htole32(IWM_LMAC_SCAN_FLAGS_RRM_ENABLED);
     
-    req->flags = htole32(IWM_PHY_BAND_24);
-    if (sc->sc_nvm.sku_cap_band_52GHz_enable)
-        req->flags |= htole32(IWM_PHY_BAND_5);
     req->filter_flags =
     htole32(IWM_MAC_FILTER_ACCEPT_GRP | IWM_MAC_FILTER_IN_BEACON);
     
@@ -477,9 +473,15 @@ iwm_lmac_scan(struct iwm_softc *sc, int bgscan)
                scanSSIDLength);
     }
     
-    req->n_channels = iwm_lmac_scan_fill_channels(sc,
-                                                  (struct iwm_scan_channel_cfg_lmac *)req->data,
-                                                  scanActive, bgscan);
+    auto *channels = (struct iwm_scan_channel_cfg_lmac *)req->data;
+    req->n_channels = iwm_lmac_scan_fill_channels(sc, channels, scanActive, bgscan);
+    if (req->n_channels == 0) {
+        ::free(req);
+        return EINVAL;
+    }
+    // The LMAC request encodes the first channel's band, not a band mask.
+    req->flags = htole32(le16toh(channels[0].channel_num) <= 14 ?
+        IWM_PHY_BAND_24 : IWM_PHY_BAND_5);
     
     preq = (struct iwm_scan_probe_req_v1 *)(req->data +
                                             (sizeof(struct iwm_scan_channel_cfg_lmac) *
@@ -498,7 +500,12 @@ iwm_lmac_scan(struct iwm_softc *sc, int bgscan)
     req->channel_opt[0].non_ebs_ratio = 1;
     req->channel_opt[1].non_ebs_ratio = 1;
     
+    const uint32_t scanFlags = le32toh(req->scan_flags);
+    const uint8_t channelCount = req->n_channels;
+    const uint16_t firstChannel = le16toh(channels[0].channel_num);
     err = iwm_send_cmd(sc, &hcmd);
+    iwm_record_diagnostic(sc, "lmac-scan-request", __FUNCTION__, __LINE__, err,
+        channelCount, firstChannel, scanFlags);
     ::free(req);
     return err;
 }
