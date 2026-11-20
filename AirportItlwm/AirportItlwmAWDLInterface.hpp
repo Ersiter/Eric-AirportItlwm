@@ -240,6 +240,7 @@ private:
     static bool peerScheduleFresh(const PeerSchedule &peer, uint64_t us);
     const PeerSchedule *findPeerSchedule(const uint8_t *address, uint64_t us) const;
     bool canSendData(const uint8_t *address, uint8_t chan, uint64_t now) const;
+    const PeerSchedule *preferredPeerSchedule(uint64_t now) const;
     void updatePeerChannels(ieee80211com *ic, uint64_t now) const;
     void scheduleAlignedListen(uint64_t afterUs);
     // -itlawdldata: dwell on our own channel sequence (what we advertise), as

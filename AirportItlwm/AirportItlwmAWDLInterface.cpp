@@ -1646,16 +1646,22 @@ canSendData(const uint8_t *address, uint8_t chan, uint64_t now) const
         peerChannelAt(*peer, now + guardUs) == chan);
 }
 
+const AirportItlwmAWDLInterface::PeerSchedule *AirportItlwmAWDLInterface::
+preferredPeerSchedule(uint64_t now) const
+{
+    if (fTxPeerUs && now - fTxPeerUs <= kPeerReplaceUs)
+        return findPeerSchedule((const uint8_t *)&fTxPeer, now);
+    const auto &peer = fPeers[fListenPeer];
+    return peerScheduleFresh(peer, now) ? &peer : nullptr;
+}
+
 void AirportItlwmAWDLInterface::
 updatePeerChannels(ieee80211com *ic, uint64_t now) const
 {
-    const bool haveTarget = fTxPeerUs && now - fTxPeerUs <= kPeerReplaceUs;
-    const auto *peer = haveTarget ? findPeerSchedule((const uint8_t *)&fTxPeer, now) : nullptr;
-    if (!peer && !haveTarget)
-        peer = &fPeers[fListenPeer];
+    const auto *peer = preferredPeerSchedule(now);
     auto &slots = ic->ic_awdl_peer_channel_slots;
     memset(slots, 0, sizeof(slots));
-    if (!peer || !peerScheduleFresh(*peer, now))
+    if (!peer)
         return;
     for (const uint8_t channel : peer->channels) {
         if (channel == 149)
@@ -1788,11 +1794,8 @@ scheduleOwnListen(uint64_t afterUs)
     if (homeOnly && home != ic->ic_awdl_home_chan)
         return false;
     uint64_t now = hostUs();
-    // Data frames are only accepted while a peer is around (see ic_awdl_want_data);
-    // the P2P MAC picks the change up before the next dwell.
-    const auto &peer = fPeers[fListenPeer];
-    const bool havePeerTiming = peerScheduleFresh(peer, now);
-    ic->ic_awdl_want_data = havePeerTiming;
+    const auto *peer = preferredPeerSchedule(now);
+    ic->ic_awdl_want_data = peer || peerScheduleFresh(fPeers[fListenPeer], now);
     updatePeerChannels(ic, now);
     const uint64_t from = MAX(afterUs, now);
     const auto armListen = [&](uint8_t chan, uint32_t dwell, uint64_t start,
@@ -1818,7 +1821,7 @@ scheduleOwnListen(uint64_t afterUs)
         fHuntStartUs = now;
         fHuntNextUs = now + kHuntGapUs;
     }
-    if (awHuntAllowed() && !havePeerTiming) {
+    if (awHuntAllowed() && !peer) {
         const bool receiving = fDataRxUnicastUs && now - fDataRxUnicastUs < kPeerStaleUs;
         const bool late = !receiving && now - fHuntStartUs >= kHuntWindowUs;
         // Give the 2.4 GHz social channel half of the extra search time.
@@ -1867,7 +1870,7 @@ scheduleOwnListen(uint64_t afterUs)
     // few seconds or IO80211Family drops it from NDP (lastAF ~6 s). When our own
     // slot keeps us home (or off AWDL) but the peer's slot at that time is on a
     // non-home channel, listen there instead (on unless -itlawdlnopeerlisten).
-    const bool usePeer = awPeerListenAllowed() && havePeerTiming;
+    const bool usePeer = awPeerListenAllowed() && peer;
     for (int i = 0; i < 32; i++, k++) {
         uint16_t seq = (uint16_t)(fRefSeq + k * pm);
         uint8_t chan = ownChannelAt(seq);
@@ -1879,9 +1882,9 @@ scheduleOwnListen(uint64_t afterUs)
             // its actual channel rather than listening on the midpoint's channel early.
             chan = 0;
             for (int64_t t = MAX(slotStart, (int64_t)from); t < slotStart + slot;) {
-                const int64_t peerSlot = floorDiv(t - peer.refUs, peer.slotUs);
-                const int64_t end = MIN(slotStart + slot, peer.refUs + (peerSlot + 1) * peer.slotUs);
-                const unsigned pc = peerChannelAt(peer, (uint64_t)t);
+                const int64_t peerSlot = floorDiv(t - peer->refUs, peer->slotUs);
+                const int64_t end = MIN(slotStart + slot, peer->refUs + (peerSlot + 1) * peer->slotUs);
+                const unsigned pc = peerChannelAt(*peer, (uint64_t)t);
                 if (end - t >= 8 * 1024 && pc && (allowHome || pc != home) &&
                     (!homeOnly || pc == home) && (!listener || pc == listener)) {
                     chan = (uint8_t)pc;
