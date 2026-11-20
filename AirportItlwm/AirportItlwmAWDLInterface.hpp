@@ -259,11 +259,8 @@ private:
     uint8_t fPeerCacheDone[kPeerCacheQueueDepth][kPeerCacheBytes];
     unsigned fPeerCacheDoneCount, fPeerCacheCompleted, fPeerCacheDropped;
     IOTimerEventSource *fPeerCacheTimer;
-    // -itlawdlumiack: the unicast action frame macOS sends through setAWDL_OOB_REQUEST (Continuity Camera and Sidecar
-    // register a real-time group that way) is followed by a wait for its transmit status, event 69: the peer's address
-    // and a status byte at +6, 0 = acknowledged. Broadcom's firmware reports it; without it the registration fails
-    // after 3 s (ForbiddenItlwm PR #57, Sequoia 24H232). The status is reported once the frame is queued on the
-    // listener, 150 ms later, as that PR does; it says "sent", not "acknowledged by this peer".
+    // macOS waits up to 3 s after setAWDL_OOB_REQUEST for event 69.
+    // A firmware TX completion that confirms the peer ACK supplies this event.
     static constexpr unsigned kUmiAckDepth = 8;
     uint8_t fUmiAckPeers[kUmiAckDepth][6];
     unsigned fUmiAckCount, fUmiAckPosted;
@@ -327,6 +324,16 @@ private:
     uint64_t fSyncTmplSets;
     uint8_t fMITmpl[1200];          // MI payload TLVs (OOB_AUTO_REQUEST)
     uint16_t fMITmplLen;
+    struct PendingUnicastMI {
+        uint64_t expiresUs;
+        uint8_t peer[6];
+        uint8_t channel;
+        uint16_t length;
+        uint8_t payload[sizeof(fMITmpl)];
+    };
+    PendingUnicastMI fPendingUnicastMI[kUmiAckDepth];
+    uint64_t fTxUnicastMIUs;
+    void sendPendingUnicastMI(uint64_t now);
     uint64_t fOOBSets;
     uint64_t fOOBAutoSets;
     uint32_t fAfTxMode;

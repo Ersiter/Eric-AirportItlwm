@@ -1075,6 +1075,8 @@ stopAWTimeline()
     memset(fPeers, 0, sizeof(fPeers));
     fListenPeer = 0;
     fTxPeerUs = 0;
+    memset(fPendingUnicastMI, 0, sizeof(fPendingUnicastMI));
+    fTxUnicastMIUs = 0;
     fDataRxUnicastUs = 0;
     fUmiAckCount = 0;
     if (fUmiAckTimer)
@@ -1129,6 +1131,8 @@ teardownAW()
         OSSafeReleaseNULL(fListenTimer);
     }
     fTxPending = 0;
+    memset(fPendingUnicastMI, 0, sizeof(fPendingUnicastMI));
+    fTxUnicastMIUs = 0;
     while (fDataQCount) {
         mbuf_freem(fDataQ[fDataQHead]);
         fDataQ[fDataQHead] = nullptr;
@@ -1649,8 +1653,16 @@ canSendData(const uint8_t *address, uint8_t chan, uint64_t now) const
 const AirportItlwmAWDLInterface::PeerSchedule *AirportItlwmAWDLInterface::
 preferredPeerSchedule(uint64_t now) const
 {
-    if (fTxPeerUs && now - fTxPeerUs <= kPeerReplaceUs)
-        return findPeerSchedule((const uint8_t *)&fTxPeer, now);
+    for (const auto &request : fPendingUnicastMI) {
+        if (request.expiresUs > now) {
+            if (const auto *peer = findPeerSchedule(request.peer, now))
+                return peer;
+        }
+    }
+    if (fTxPeerUs && now - fTxPeerUs <= kPeerReplaceUs) {
+        if (const auto *peer = findPeerSchedule((const uint8_t *)&fTxPeer, now))
+            return peer;
+    }
     const auto &peer = fPeers[fListenPeer];
     return peerScheduleFresh(peer, now) ? &peer : nullptr;
 }
@@ -2061,6 +2073,13 @@ scheduleTx(uint8_t chan, uint64_t slotStartUs, uint64_t windowEndUs)
     fTxEndUs = windowEndUs;
     fTxDataUs = kTxDataAtUs;
     fTxPollUs = 0;
+    fTxUnicastMIUs = 0;
+    for (const auto &request : fPendingUnicastMI) {
+        if (request.expiresUs > slotStartUs) {
+            fTxUnicastMIUs = slotStartUs;
+            break;
+        }
+    }
     fTxPending = kTxPendingPSF | kTxPendingData;
     if (fMITmplLen && fChanSeqValid) {
         const int64_t k = floorDiv(static_cast<int64_t>(slotStartUs) - fRefUs,
@@ -2084,8 +2103,11 @@ scheduleTxTimer()
         nextUs = fTxDataUs;
     if ((fTxPending & kTxPendingMI) && fTxMIOffsetUs < nextUs)
         nextUs = fTxMIOffsetUs;
+    uint64_t next = nextUs == UINT64_MAX ? fTxEndUs : fTxSlotUs + nextUs;
+    if (fTxUnicastMIUs)
+        next = MIN(next, fTxUnicastMIUs);
     uint64_t abs;
-    nanoseconds_to_absolutetime(MIN(fTxEndUs, MAX(fTxSlotUs + nextUs, fTxPollUs)) * 1000, &abs);
+    nanoseconds_to_absolutetime(MIN(fTxEndUs, MAX(next, fTxPollUs)) * 1000, &abs);
     fTxTimer->cancelTimeout();
     fTxTimer->wakeAtTime(abs);
 }
@@ -2094,11 +2116,12 @@ void AirportItlwmAWDLInterface::
 txTimerFired(OSObject *owner, IOTimerEventSource *)
 {
     AirportItlwmAWDLInterface *that = OSDynamicCast(AirportItlwmAWDLInterface, owner);
-    if (!that || !that->fTxPending || !that->fAWRunning)
+    if (!that || (!that->fTxPending && !that->fTxUnicastMIUs) || !that->fAWRunning)
         return;
     uint64_t now = hostUs();
     if (now >= that->fTxEndUs) {
         that->fTxPending = 0;
+        that->fTxUnicastMIUs = 0;
         return;
     }
     ieee80211com *ic = that->fController->fHalService->get80211Controller();
@@ -2130,6 +2153,8 @@ txTimerFired(OSObject *owner, IOTimerEventSource *)
         else
             that->fTxPending &= ~kTxPendingMI;
     }
+    if (that->fTxUnicastMIUs && now >= that->fTxUnicastMIUs)
+        that->sendPendingUnicastMI(hostUs());
     if ((that->fTxPending & kTxPendingData) && elapsed >= that->fTxDataUs) {
         bool pending = false;
         if (awDataAllowed()) {
@@ -2142,7 +2167,7 @@ txTimerFired(OSObject *owner, IOTimerEventSource *)
         else
             that->fTxPending &= ~kTxPendingData;
     }
-    if (that->fTxPending)
+    if (that->fTxPending || that->fTxUnicastMIUs)
         that->scheduleTxTimer();
     if (((that->fTxPSF + that->fTxMI + that->fTxRefused) & 0x1f) <= 1)
         that->publishTxState();
@@ -2302,6 +2327,42 @@ sendAWDLFrame(bool mi, uint8_t chan, const uint8_t *destination,
     else
         fTxPSF++;
     return 0;
+}
+
+void AirportItlwmAWDLInterface::
+sendPendingUnicastMI(uint64_t now)
+{
+    fTxUnicastMIUs = 0;
+    if (fAfTxMode == 3 || now >= fTxEndUs)
+        return;
+    for (auto &request : fPendingUnicastMI) {
+        if (request.expiresUs <= now) {
+            request.expiresUs = 0;
+            continue;
+        }
+        uint64_t retry = 0;
+        if (const auto *peer = findPeerSchedule(request.peer, now)) {
+            if (!canSendData(request.peer, fTxChan, now)) {
+                const int64_t slot = floorDiv((int64_t)now - peer->refUs, peer->slotUs);
+                retry = (uint64_t)(peer->refUs + (slot + 1) * peer->slotUs);
+            }
+        } else if (request.channel != fTxChan) {
+            continue;
+        }
+        if (!retry) {
+            const int err = sendAWDLFrame(true, fTxChan, request.peer, request.payload, request.length);
+            if (err == EAGAIN || err == EBUSY || err == ENOBUFS || err == EINPROGRESS)
+                retry = now + 1024;
+            else
+                request.expiresUs = 0;
+        }
+        if (retry && retry < fTxEndUs && retry < request.expiresUs &&
+            (!fTxUnicastMIUs || retry < fTxUnicastMIUs))
+            fTxUnicastMIUs = retry;
+        now = hostUs();
+        if (now >= fTxEndUs)
+            break;
+    }
 }
 
 void AirportItlwmAWDLInterface::
@@ -3176,6 +3237,8 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     memset(fPeers, 0, sizeof(fPeers));
     fListenPeer = 0;
     fTxPeerUs = 0;
+    memset(fPendingUnicastMI, 0, sizeof(fPendingUnicastMI));
+    fTxUnicastMIUs = 0;
     fDataRxUnicastUs = 0;
     fDataRxUnicastChannel = 0;
     fPeerUpdates = 0;
@@ -3675,14 +3738,44 @@ setAWDL_OOB_REQUEST(apple80211_awdl_oob_request *d)
         if (!awTxAllowed() || !that->fAWRunning || that->fAfTxMode == 3)
             return kIOReturnNotReady;
         ieee80211com *ic = that->fController->fHalService->get80211Controller();
-        if (!ic || !ic->ic_awdl_tx || !ic->ic_awdl_listen_chan)
+        if (!ic || !ic->ic_awdl_tx || !that->fTxTimer)
             return kIOReturnNotReady;
-        // sendUnicastMI calls this after confirming a shared channel and AW.
-        int err = that->sendAWDLFrame(true, (uint8_t)ic->ic_awdl_listen_chan,
-            raw + 4, payload, len);
-        if (err == EAGAIN || err == ENOBUFS)
+        const uint8_t *destination = raw + 4;
+        const uint8_t channel = (uint8_t)ic->ic_awdl_listen_chan;
+        if (IEEE80211_IS_MULTICAST(destination)) {
+            if (!channel)
+                return kIOReturnNotReady;
+            const int err = that->sendAWDLFrame(true, channel, destination, payload, len);
+            if (err == EAGAIN || err == EBUSY || err == ENOBUFS)
+                return kIOReturnBusy;
+            return err ? kIOReturnError : kIOReturnSuccess;
+        }
+        const uint64_t now = hostUs();
+        if (!channel && !that->findPeerSchedule(destination, now))
+            return kIOReturnNotReady;
+        PendingUnicastMI *available = nullptr;
+        for (auto &request : that->fPendingUnicastMI) {
+            if (request.expiresUs <= now) {
+                if (!available)
+                    available = &request;
+            } else if (IEEE80211_ADDR_EQ(request.peer, destination)) {
+                return kIOReturnBusy;
+            }
+        }
+        if (!available)
             return kIOReturnBusy;
-        return err ? kIOReturnError : kIOReturnSuccess;
+        IEEE80211_ADDR_COPY(available->peer, destination);
+        available->channel = channel;
+        available->length = len;
+        if (len)
+            memcpy(available->payload, payload, len);
+        // IO80211Family waits up to three seconds for the peer's TX status.
+        available->expiresUs = now + 3000000;
+        if (now < that->fTxEndUs) {
+            that->fTxUnicastMIUs = MAX(now, that->fTxSlotUs);
+            that->scheduleTxTimer();
+        }
+        return kIOReturnSuccess;
     };
     IOWorkLoop *workLoop = _fCommandGate->getWorkLoop();
     if (workLoop && workLoop->inGate())
