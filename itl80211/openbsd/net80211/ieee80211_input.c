@@ -743,11 +743,13 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
     if (ic->ic_vendor_action_handler && ic->ic_opmode == IEEE80211_M_STA) {
         if (type == IEEE80211_FC0_TYPE_MGT &&
             (subtype == IEEE80211_FC0_SUBTYPE_ACTION ||
-             subtype == IEEE80211_FC0_SUBTYPE_ACTION_NOACK) &&
-            mbuf_len(m) > sizeof(struct ieee80211_frame) &&
-            mtod(m, const uint8_t *)[sizeof(struct ieee80211_frame)] == IEEE80211_CATEG_VENDOR &&
-            (*ic->ic_vendor_action_handler)(ic, m, rxi))
-            goto out;
+             subtype == IEEE80211_FC0_SUBTYPE_ACTION_NOACK)) {
+            const size_t action_hdrlen = ieee80211_get_hdrlen(wh);
+            if (mbuf_len(m) > action_hdrlen &&
+                mtod(m, const uint8_t *)[action_hdrlen] == IEEE80211_CATEG_VENDOR &&
+                (*ic->ic_vendor_action_handler)(ic, m, rxi))
+                goto out;
+        }
         /*
          * The firmware filter is open for AWDL. Frames from other BSSes must
          * not reach net80211: a foreign deauth would drop our association and

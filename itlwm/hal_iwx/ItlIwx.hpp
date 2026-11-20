@@ -450,6 +450,7 @@ public:
     int iwx_awdl_ba_apply(struct iwx_softc *, uint8_t, uint16_t, uint16_t, int);
     void iwx_awdl_ba_reply(struct iwx_softc *);
     int    iwx_awdl_listen_v14(struct iwx_softc *, uint8_t, uint16_t);
+    static void iwx_awdl_stop(struct ieee80211com *);
     void   iwx_awdl_listen_abort(struct iwx_softc *);
     int    iwx_aux_roc(struct iwx_softc *, uint8_t, uint16_t);
     int    iwx_p2p_phy_cmd(struct iwx_softc *, struct iwx_phy_ctxt *, uint32_t);

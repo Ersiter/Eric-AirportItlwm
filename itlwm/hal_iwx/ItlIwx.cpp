@@ -5802,6 +5802,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
     sc->sc_use_mld_api = sc->sc_device_family >= IWX_DEVICE_FAMILY_BZ &&
         isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_MLD_API_SUPPORT);
     sc->sc_ic.ic_awdl_listen_home = sc->sc_use_mld_api;
+    sc->sc_ic.ic_awdl_stop = sc->sc_use_mld_api ? iwx_awdl_stop : NULL;
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
     sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_peer_cache : NULL;
 #ifdef AIRPORT_VTD
@@ -14045,6 +14046,23 @@ iwx_aux_roc_sync_counters(struct iwx_softc *sc)
     ic->ic_awdl_roc_sta_err = sc->sc_aux_roc_sta_err;
     ic->ic_awdl_roc_sta_stage = sc->sc_aux_roc_sta_stage;
     ic->ic_awdl_roc_sta_code = sc->sc_aux_roc_sta_code;
+}
+
+void ItlIwx::
+iwx_awdl_stop(struct ieee80211com *ic)
+{
+    auto *sc = static_cast<struct iwx_softc *>(IC2IFP(ic)->if_softc);
+    auto *that = container_of(sc, ItlIwx, com);
+    if (!that->getMainWorkLoop()->inGate()) {
+        that->getMainCommandGate()->runAction(
+            [](OSObject *, void *controller, void *arg, void *, void *) -> IOReturn {
+                static_cast<ItlIwx *>(controller)->iwx_awdl_listen_abort(
+                    static_cast<struct iwx_softc *>(arg));
+                return kIOReturnSuccess;
+            }, that, sc);
+        return;
+    }
+    that->iwx_awdl_listen_abort(sc);
 }
 
 void ItlIwx::

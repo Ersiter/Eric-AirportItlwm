@@ -842,7 +842,10 @@ noteRxGap(const uint8_t *src, uint64_t nowUs)
 int AirportItlwmAWDLInterface::
 inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
 {
-    const size_t hdr = sizeof(struct ieee80211_frame);
+    if (len < sizeof(struct ieee80211_frame))
+        return 0;
+    const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(frame);
+    const size_t hdr = ieee80211_get_hdrlen(wh);
     if (len < hdr + kAWDLFixedHeaderLen)
         return 0;
     // The firmware path delivers the frame body, starting at the category byte.
@@ -850,7 +853,6 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     if (af[0] != 127 || af[1] != 0x00 || af[2] != 0x17 || af[3] != 0xf2 || af[4] != 0x08)
         return 0;
 
-    const struct ieee80211_frame *wh = (const struct ieee80211_frame *)frame;
     const size_t payload = len - hdr;
     const bool timeline = awTimelineAllowed();
     const uint64_t rxUs = timeline ? hostRxUs(rxi) : 0;
@@ -1094,13 +1096,14 @@ stopAWTimeline()
 void AirportItlwmAWDLInterface::
 teardownAW()
 {
-    if (fAWRunning && fController) {
+    const bool wasRunning = fAWRunning;
+    fAWRunning = false;
+    fListenAlignedActive = false;
+    if (wasRunning && fController) {
         ieee80211com *ic = fController->fHalService->get80211Controller();
         if (ic->ic_awdl_stop)
             ic->ic_awdl_stop(ic);
     }
-    fAWRunning = false;
-    fListenAlignedActive = false;
     if (fListenTimer) {
         fListenTimer->cancelTimeout();
         if (fListenTimer->getWorkLoop())
@@ -1995,6 +1998,16 @@ txTimerFired(OSObject *owner, IOTimerEventSource *)
             that->sendAWDLFrame(false, that->fTxChan, nullptr, that->fSyncTmpl, that->fSyncTmplLen);
         that->fTxPending &= ~kTxPendingPSF;
     }
+    if ((that->fTxPending & kTxPendingMI) && elapsed >= that->fTxMIOffsetUs) {
+        int err = 0;
+        if (that->fMITmplLen && (that->fTxMIBitmap & (1U << that->fTxMISlot)))
+            err = that->sendAWDLFrame(true, that->fTxChan, nullptr,
+                that->fMITmpl, that->fMITmplLen);
+        if (err == EAGAIN || err == EBUSY || err == ENOBUFS)
+            that->fTxPollUs = now + 1024;
+        else
+            that->fTxPending &= ~kTxPendingMI;
+    }
     if ((that->fTxPending & kTxPendingData) && elapsed >= that->fTxDataUs) {
         bool pending = false;
         if (awDataAllowed()) {
@@ -2006,12 +2019,6 @@ txTimerFired(OSObject *owner, IOTimerEventSource *)
             that->fTxDataUs = elapsed + 1024;
         else
             that->fTxPending &= ~kTxPendingData;
-    }
-    if ((that->fTxPending & kTxPendingMI) && elapsed >= that->fTxMIOffsetUs) {
-        if (that->fMITmplLen &&
-            (that->fTxMIBitmap & (1U << that->fTxMISlot)))
-            that->sendAWDLFrame(true, that->fTxChan, nullptr, that->fMITmpl, that->fMITmplLen);
-        that->fTxPending &= ~kTxPendingMI;
     }
     if (that->fTxPending)
         that->scheduleTxTimer();
