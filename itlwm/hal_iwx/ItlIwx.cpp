@@ -12104,25 +12104,15 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
         ((uint16_t)frame[sizeof(*wh) + 1] << 8) : 0;
     const int unicast = !IEEE80211_IS_MULTICAST(wh->i_addr1);
     const int llwData = unicast && qosData && (qos & IEEE80211_QOS_TID) == 6;
-    const int llwBaResponse = sc->sc_awdl_low_latency && sc->sc_listener_up &&
-        type == IEEE80211_FC0_TYPE_MGT &&
-        subtype == IEEE80211_FC0_SUBTYPE_ACTION &&
-        len >= sizeof(*wh) + 9 &&
-        frame[sizeof(*wh)] == IEEE80211_CATEG_BA &&
-        frame[sizeof(*wh) + 1] == IEEE80211_ACTION_ADDBA_RESP &&
-        sc->sc_awdl_ba_tid == 6;
-    const int llwFrame = llwData || llwBaResponse;
     const bool standing = sc->sc_use_mld_api && sc->sc_listener_up;
-    if (llwFrame && (!standing || !sc->sc_awdl_low_latency)) {
-        if (unicast || isData)
-            iwx_awdl_record_uc(ic, chan, -1, frame, len, 2);
-        return standing && llwData ? EINPROGRESS : EAGAIN;
+    if (llwData && (!standing || !sc->sc_awdl_low_latency)) {
+        iwx_awdl_record_uc(ic, chan, -1, frame, len, 2);
+        return standing ? EINPROGRESS : EAGAIN;
     }
     if ((!iwx_p2p_listen_enabled() && !sc->sc_listener_up) ||
         !sc->sc_p2p_queue ||
         (sc->sc_use_mld_api && sc->sc_listener_up && !iwx_awdl_tx_ready(ic, chan)) ||
-        (!llwFrame && (!sc->sc_aux_roc_running ||
-         ic->ic_awdl_listen_chan != chan)) ||
+        !sc->sc_aux_roc_running || ic->ic_awdl_listen_chan != chan ||
         ic->ic_bss == NULL ||
         (sc->sc_flags & (IWX_FLAG_SHUTDOWN | IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL))) {
         ic->ic_awdl_tx_busy++;
@@ -12250,12 +12240,12 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
     const uint8_t subtype = frame[0] & IEEE80211_FC0_SUBTYPE_MASK;
     const uint8_t peerTid = qid == sc->sc_awdl_peer_llw_qid ? 6 : 0;
     /* The MLD peer uses TID 0 for AWDL data and TID 6 for LLW data. */
-    const bool qosPeerData = dataFrame && sc->sc_awdl_peer_tlc_configured &&
-        sc->sc_awdl_peer_added &&
+    const bool qosPeerData = dataFrame && sc->sc_awdl_peer_added &&
         (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid) &&
         IEEE80211_ADDR_EQ(frame + 4, sc->sc_awdl_peer_addr) &&
-        (subtype == IEEE80211_FC0_SUBTYPE_DATA ||
-         subtype == IEEE80211_FC0_SUBTYPE_QOS);
+        (subtype == IEEE80211_FC0_SUBTYPE_QOS ||
+         (subtype == IEEE80211_FC0_SUBTYPE_DATA && sc->sc_awdl_peer_tlc_configured));
+    const bool usePeerRate = qosPeerData && sc->sc_awdl_peer_tlc_configured;
     const size_t qosExtra = qosPeerData && subtype == IEEE80211_FC0_SUBTYPE_DATA ? 2 : 0;
     if (len > MCLBYTES - qosExtra)
         return EINVAL;
@@ -12313,7 +12303,7 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
     /* Management frames use 6 Mbps; configured MLD peer data uses its TLC rate profile. */
     uint32_t rate_n_flags = (1 << sc->sc_mgmt_last_antenna_idx) << IWX_RATE_MCS_ANT_POS;
     uint8_t cmdver = iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_TX_CMD);
-    if (qosPeerData) {
+    if (usePeerRate) {
         rate_n_flags = 0;
     } else if (cmdver > 8 && cmdver != IWX_FW_CMD_VER_UNKNOWN) {
         const uint32_t legacy = rate_n_flags | IWX_RATE_MCS_LEGACY_OFDM_MSK | (dataFrame ? iwx_rate2idx(108) : 0);
@@ -12324,7 +12314,7 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
 
     // Gen3 derives ACK handling from the station/TID queue; the legacy ACK bit is not in this API.
     uint32_t flags = IWX_TX_FLAGS_ENCRYPT_DIS |
-        (qosPeerData ? 0 : IWX_TX_FLAGS_CMD_RATE);
+        (usePeerRate ? 0 : IWX_TX_FLAGS_CMD_RATE);
     uint16_t offload_assist = itlTxOffloadHeader(hdrlen, false);
     uint16_t cmd_size;
     if (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210) {
