@@ -349,7 +349,7 @@ public:
     void    iwx_rx_frame(struct iwx_softc *, mbuf_t, int, uint32_t, int, int,
            uint32_t, struct ieee80211_rxinfo *, struct mbuf_list *);
     void iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
-                        size_t packet_len, struct mbuf_list *ml);
+                        size_t packet_len, unsigned awdl_flags, struct mbuf_list *ml);
     void    iwx_rx_tx_cmd_single(struct iwx_softc *, struct iwx_rx_packet *,
             struct iwx_tx_data *);
     void iwx_txd_done(struct iwx_softc *sc, struct iwx_tx_data *txd);

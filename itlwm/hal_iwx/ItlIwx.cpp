@@ -6760,9 +6760,81 @@ iwx_trace_hotspot_rx(struct iwx_softc *sc, struct iwx_rx_mpdu_desc *desc,
     record->release();
 }
 
+enum : unsigned {
+    IWX_AWDL_RX_UNICAST = 1 << 0,
+    IWX_AWDL_RX_GROUP_DATA = 1 << 1,
+};
+
+static unsigned
+iwx_awdl_rx_mpdu(struct iwx_softc *sc, const void *pktdata, size_t packet_len)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    const size_t desc_size = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+        sizeof(struct iwx_rx_mpdu_desc) : IWX_RX_DESC_SIZE_V1;
+    if (!ic->ic_awdl_addr_gen || packet_len < desc_size)
+        return 0;
+    const auto *desc = static_cast<const struct iwx_rx_mpdu_desc *>(pktdata);
+    unsigned flags = 0;
+    const uint16_t mpdu_len = le16toh(desc->mpdu_len);
+    if (mpdu_len < sizeof(struct ieee80211_frame) || mpdu_len > packet_len - desc_size)
+        return 0;
+
+    const struct ieee80211_frame *awh =
+        (const struct ieee80211_frame *)((const uint8_t *)pktdata + desc_size);
+    static const uint8_t awdl_bssid[IEEE80211_ADDR_LEN] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
+    const uint8_t *bssid = ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : awdl_bssid;
+    const bool awdlGroup = (awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
+        IEEE80211_IS_MULTICAST(awh->i_addr1) && IEEE80211_ADDR_EQ(awh->i_addr3, bssid);
+    const bool onRoc = !sc->sc_listener_up && sc->sc_aux_roc_running &&
+        (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+            desc->v3.channel : desc->v1.channel) == ic->ic_awdl_listen_chan;
+    if (awdlGroup) {
+        flags |= IWX_AWDL_RX_GROUP_DATA;
+        ic->ic_awdl_fw_group_data[onRoc]++;
+    }
+    if (IEEE80211_ADDR_EQ(awh->i_addr1, ic->ic_awdl_addr)) {
+        uint8_t at = awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+        flags |= IWX_AWDL_RX_UNICAST;
+        if (at == IEEE80211_FC0_TYPE_DATA)
+            ic->ic_awdl_fw_uc_data++;
+        else
+            ic->ic_awdl_fw_uc_mgmt++;
+        ic->ic_awdl_fw_uc_last_fc = (uint16_t)(awh->i_fc[0] | (awh->i_fc[1] << 8));
+        ic->ic_awdl_fw_uc_last_chan = (uint8_t)(sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+                                                desc->v3.channel : desc->v1.channel);
+        if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)))
+            ic->ic_awdl_fw_uc_badcrc++;
+    } else if (IEEE80211_IS_MULTICAST(awh->i_addr1) &&
+               (awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_MGT) {
+        const unsigned v = sc->sc_awdl_mc_variant & 3;
+        if (sc->sc_awdl_listen_active)
+            ic->ic_awdl_fw_mc_mgmt[v]++;
+        const uint8_t subtype = awh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+        if (subtype == IEEE80211_FC0_SUBTYPE_ACTION ||
+            subtype == IEEE80211_FC0_SUBTYPE_ACTION_NOACK) {
+            const size_t body = ieee80211_get_hdrlen(awh) +
+                ((desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) ? 2 : 0);
+            static const uint8_t awdl_action[] = { 127, 0x00, 0x17, 0xf2, 0x08 };
+            const auto *raw = reinterpret_cast<const uint8_t *>(awh);
+            if (mpdu_len >= body + 16 &&
+                memcmp(raw + body, awdl_action, sizeof(awdl_action)) == 0 &&
+                (raw[body + 6] == 0 || raw[body + 6] == 3)) {
+                ic->ic_awdl_fw_group_sync[onRoc]++;
+                if (sc->sc_awdl_listen_active)
+                    ic->ic_awdl_fw_mc_awdl[v]++;
+            }
+        }
+    } else if ((awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
+               !IEEE80211_IS_MULTICAST(awh->i_addr1) &&
+               !IEEE80211_ADDR_EQ(awh->i_addr1, ic->ic_myaddr)) {
+        ic->ic_awdl_fw_foreign_data++;
+    }
+    return flags;
+}
+
 void ItlIwx::
 iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
-               size_t packet_len, struct mbuf_list *ml)
+               size_t packet_len, unsigned awdl_flags, struct mbuf_list *ml)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     struct ieee80211_rxinfo rxi;
@@ -6785,63 +6857,9 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
     desc = (struct iwx_rx_mpdu_desc *)pktdata;
     iwx_trace_hotspot_rx(sc, desc, desc_size, packet_len);
     
-    /*
-     * AWDL diagnostics: did the firmware deliver anything addressed to
-     * awdl0 at all? Counted on the raw frame, before every host check.
-     */
-    int awdlUc = 0, awdlGroup = 0;
-    if (ic->ic_awdl_addr_gen && le16toh(desc->mpdu_len) >= sizeof(struct ieee80211_frame) &&
-        le16toh(desc->mpdu_len) <= packet_len - desc_size) {
-        const struct ieee80211_frame *awh =
-            (const struct ieee80211_frame *)((const uint8_t *)pktdata + desc_size);
-        static const uint8_t awdl_bssid[IEEE80211_ADDR_LEN] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
-        const uint8_t *bssid = ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : awdl_bssid;
-        awdlGroup = (awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
-            IEEE80211_IS_MULTICAST(awh->i_addr1) && IEEE80211_ADDR_EQ(awh->i_addr3, bssid);
-        const bool onRoc = !sc->sc_listener_up && sc->sc_aux_roc_running &&
-            (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
-                desc->v3.channel : desc->v1.channel) == ic->ic_awdl_listen_chan;
-        if (awdlGroup)
-            ic->ic_awdl_fw_group_data[onRoc]++;
-        if (IEEE80211_ADDR_EQ(awh->i_addr1, ic->ic_awdl_addr)) {
-            uint8_t at = awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
-            awdlUc = 1;
-            if (at == IEEE80211_FC0_TYPE_DATA)
-                ic->ic_awdl_fw_uc_data++;
-            else
-                ic->ic_awdl_fw_uc_mgmt++;
-            ic->ic_awdl_fw_uc_last_fc = (uint16_t)(awh->i_fc[0] | (awh->i_fc[1] << 8));
-            ic->ic_awdl_fw_uc_last_chan = (uint8_t)(sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
-                                                    desc->v3.channel : desc->v1.channel);
-            if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)))
-                ic->ic_awdl_fw_uc_badcrc++;
-        } else if (IEEE80211_IS_MULTICAST(awh->i_addr1) &&
-                   (awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_MGT) {
-            const unsigned v = sc->sc_awdl_mc_variant & 3;
-            if (sc->sc_awdl_listen_active)
-                ic->ic_awdl_fw_mc_mgmt[v]++;
-            const uint8_t subtype = awh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
-            if (subtype == IEEE80211_FC0_SUBTYPE_ACTION ||
-                subtype == IEEE80211_FC0_SUBTYPE_ACTION_NOACK) {
-                const size_t body = ieee80211_get_hdrlen(awh) +
-                    ((desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) ? 2 : 0);
-                static const uint8_t awdl_action[] = { 127, 0x00, 0x17, 0xf2, 0x08 };
-                const auto *raw = reinterpret_cast<const uint8_t *>(awh);
-                if (le16toh(desc->mpdu_len) >= body + 16 &&
-                    memcmp(raw + body, awdl_action, sizeof(awdl_action)) == 0 &&
-                    (raw[body + 6] == 0 || raw[body + 6] == 3)) {
-                    ic->ic_awdl_fw_group_sync[onRoc]++;
-                    if (sc->sc_awdl_listen_active)
-                        ic->ic_awdl_fw_mc_awdl[v]++;
-                }
-            }
-        } else if ((awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
-                   !IEEE80211_IS_MULTICAST(awh->i_addr1) &&
-                   !IEEE80211_ADDR_EQ(awh->i_addr1, ic->ic_myaddr)) {
-            ic->ic_awdl_fw_foreign_data++;
-        }
-    }
-    
+    const bool awdlUc = awdl_flags & IWX_AWDL_RX_UNICAST;
+    const bool awdlGroup = awdl_flags & IWX_AWDL_RX_GROUP_DATA;
+
     if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)) ||
         !(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_OVERRUN_OK))) {
         mbuf_freem(m);
@@ -18080,6 +18098,10 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
         if (len < minsz || len > (IWX_RBUF_SIZE - offset))
             break;
         
+        // Account for firmware-delivered frames even if the RX ring cannot
+        // allocate a replacement buffer or split this packet from the batch.
+        const unsigned awdl_flags = code == IWX_REPLY_RX_MPDU_CMD ?
+            iwx_awdl_rx_mpdu(sc, pkt->data, iwx_rx_packet_payload_len(pkt)) : 0;
         if (code == IWX_REPLY_RX_MPDU_CMD && ++nmpdu == 1) {
             /* Take mbuf m0 off the RX ring. */
             if (iwx_rx_addbuf(sc, IWX_RBUF_SIZE, (int)(data - sc->rxq.data))) {
@@ -18118,7 +18140,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                     if (offset > 0)
                         mbuf_adj(m0, offset);
                     iwx_rx_mpdu_mq(sc, m0, pkt->data,
-                        iwx_rx_packet_payload_len(pkt), ml);
+                        iwx_rx_packet_payload_len(pkt), awdl_flags, ml);
                     m0 = NULL; /* stack owns m0 now; abort loop */
                 } else {
                     /*
@@ -18135,7 +18157,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                     }
                     mbuf_adj(m, offset);
                     iwx_rx_mpdu_mq(sc, m, pkt->data,
-                        iwx_rx_packet_payload_len(pkt), ml);
+                        iwx_rx_packet_payload_len(pkt), awdl_flags, ml);
                 }
                 break;
             }
