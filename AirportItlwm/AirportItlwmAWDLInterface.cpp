@@ -1824,27 +1824,24 @@ scheduleOwnListen(uint64_t afterUs)
     if (awHuntAllowed() && !peer) {
         const bool receiving = fDataRxUnicastUs && now - fDataRxUnicastUs < kPeerStaleUs;
         const bool late = !receiving && now - fHuntStartUs >= kHuntWindowUs;
-        // Give the 2.4 GHz social channel half of the extra search time.
-        uint8_t alternate = 44;
-        if (ic->ic_awdl_listen_home && home != 149 && IEEE80211_IS_CHAN_5GHZ(ic->ic_bss->ni_chan) &&
+        // A 5 GHz infrastructure channel can also be an advertised AWDL channel.
+        uint8_t advertisedHome = 0;
+        if (ic->ic_awdl_listen_home && home != 44 && home != 149 &&
+            IEEE80211_IS_CHAN_5GHZ(ic->ic_bss->ni_chan) &&
             !(ic->ic_bss->ni_chan->ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC))) {
             const auto *channels = reinterpret_cast<const apple80211_channel *>(fChanSeq + kChanSeqEntries);
-            bool homeAdvertised = false;
-            bool has44 = false;
             for (unsigned i = 0; i < fChanSeq[kChanSeqCount]; i++) {
-                if (channels[i].flags & APPLE80211_C_FLAG_6GHZ)
-                    continue;
-                homeAdvertised |= channels[i].channel == home;
-                has44 |= channels[i].channel == 44;
+                if (channels[i].channel == home && !(channels[i].flags & APPLE80211_C_FLAG_6GHZ)) {
+                    advertisedHome = (uint8_t)home;
+                    break;
+                }
             }
-            if (homeAdvertised && !has44)
-                alternate = (uint8_t)home;
         }
-        const uint8_t huntChannels[] = { 6, 149, 6, alternate };
+        const uint8_t huntChannels[] = { 6, 149, 6, 44, advertisedHome };
         uint8_t list[nitems(huntChannels)];
         unsigned n = 0;
         for (uint8_t ch : huntChannels) {
-            if ((allowHome || ch != home) &&
+            if (ch && (allowHome || ch != home) &&
                 (!ic->ic_awdl_listen_home || isset(ic->ic_chan_active, ch)))
                 list[n++] = ch;
         }
