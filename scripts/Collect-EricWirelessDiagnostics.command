@@ -62,7 +62,7 @@ boot_build="$(/usr/bin/sw_vers -buildVersion)"
 os_version="$(/usr/bin/sw_vers -productVersion)"
 (
     ulimit -f 256
-    echo "Collector revision: 3"
+    echo "Collector revision: 4"
     echo "Report: $focus"
     stamp
     /usr/bin/sw_vers
@@ -169,7 +169,7 @@ timeline_pid=$!
 
 if [ "$focus" = continuity ] && /sbin/ifconfig awdl0 >/dev/null 2>&1; then
     # Correlate IPv6 mDNS at the BSD interface with the driver and daemon logs.
-    (ulimit -f 128; exec /usr/sbin/tcpdump -p -ni awdl0 -e -ql -s 96 -c 256 'ip6 and udp port 5353') > "$work/awdl-mdns.txt" 2>&1 &
+    (ulimit -f 128; exec /usr/sbin/tcpdump -p -ni awdl0 -evl -s 0 -c 256 'ip6 and udp port 5353') > "$work/awdl-mdns.txt" 2>&1 &
     mdns_pid=$!
 fi
 
