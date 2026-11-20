@@ -1473,6 +1473,12 @@ publishListenState()
     setProperty("AWDLRocRxLastChannel", ic->ic_awdl_roc_rx_last_chan, 32);
 }
 
+static bool
+awCanListenOnHome(const ieee80211com *ic, unsigned home)
+{
+    return ic->ic_awdl_listen_home || (home && ic->ic_awdl_listener_chan == home);
+}
+
 void AirportItlwmAWDLInterface::
 maybeListen(uint32_t slotChannel, uint16_t seq)
 {
@@ -1488,7 +1494,7 @@ maybeListen(uint32_t slotChannel, uint16_t seq)
         if (home != ic->ic_awdl_home_chan)
             return;
         slotChannel = home;
-    } else if (home == slotChannel && !ic->ic_awdl_listen_home) {
+    } else if (home == slotChannel && !awCanListenOnHome(ic, home)) {
         fListenSkippedHome++;
         return;
     }
@@ -1733,7 +1739,7 @@ scheduleOwnListen(uint64_t afterUs)
         return false;
     unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
     const bool homeOnly = ic->ic_awdl_home_chan != 0;
-    const bool allowHome = homeOnly || ic->ic_awdl_listen_home;
+    const bool allowHome = homeOnly || awCanListenOnHome(ic, home);
     const uint8_t listener = ic->ic_awdl_listener_chan;
     const bool protectOwnSlots = ic->ic_awdl_listen_home && !listener && !homeOnly &&
         !itlAWDLStandingFlag();
@@ -1900,7 +1906,7 @@ scheduleAlignedListen(uint64_t afterUs)
     for (int i = 0; i < 32; i++, k++) {
         uint16_t seq = (uint16_t)(peer.refSeq + k * peer.pm);
         unsigned chan = peer.channels[(seq / peer.pm) % 16];
-        if (!chan || (chan == home && !ic->ic_awdl_listen_home) || (forced && chan != forced))
+        if (!chan || (chan == home && !awCanListenOnHome(ic, home)) || (forced && chan != forced))
             continue;
         // Stay for the whole run of slots on this channel, up to the dwell limit.
         unsigned run = 1;
@@ -1946,7 +1952,7 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *timer)
         unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
         const bool matches = ic->ic_awdl_home_chan ?
             home == ic->ic_awdl_home_chan && chan == home :
-            ic->ic_awdl_listen_home || home != chan;
+            home != chan || awCanListenOnHome(ic, home);
         if (matches && !(++that->fListenSlot % that->fListenEveryNth)) {
             const int err = that->startListen(chan, dwell, home, true);
             if (!that->fAWRunning || !that->fListenAlignedActive ||
