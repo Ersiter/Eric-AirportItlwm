@@ -11998,7 +11998,7 @@ iwx_awdl_peer_task(void *arg)
         }
         sc->sc_awdl_peer_mgmt_qid = qid;
     }
-    {
+    if (sc->sc_ic.ic_awdl_llw_qos) {
         if (!that->iwx_nic_lock(sc)) {
             err = EBUSY;
             goto failed;
@@ -13229,22 +13229,24 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
             sc->sc_awdl_mcast_qid = mcastQueue;
         }
     }
-    setupStage(10);
-    if (!iwx_nic_lock(sc)) {
-        err = EBUSY;
-        goto fail;
+    if (itlAWDLLlwFlag()) {
+        setupStage(10);
+        if (!iwx_nic_lock(sc)) {
+            err = EBUSY;
+            goto fail;
+        }
+        llwQueue = iwx_tvqm_enable_txq(sc, 6, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_LISTENER_STA_ID);
+        iwx_nic_unlock(sc);
+        if (generation != sc->sc_generation) {
+            err = ENXIO;
+            goto fail;
+        }
+        if (llwQueue < 0) {
+            err = -llwQueue;
+            goto fail;
+        }
+        llw_queue_added = true;
     }
-    llwQueue = iwx_tvqm_enable_txq(sc, 6, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_LISTENER_STA_ID);
-    iwx_nic_unlock(sc);
-    if (generation != sc->sc_generation) {
-        err = ENXIO;
-        goto fail;
-    }
-    if (llwQueue < 0) {
-        err = -llwQueue;
-        goto fail;
-    }
-    llw_queue_added = true;
     sc->sc_p2p_queue = 1;
     sc->sc_aux_roc_qid = queue;
     sc->sc_awdl_listener_data_qid = dataQueue;
@@ -13269,9 +13271,8 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         ic->ic_awdl_listener_chan = 0;
         goto fail;
     }
-    // The dedicated TID 6 queue belongs to this standing link. ROC uses the
-    // shared AUX data path while LLW keeps its own BSD queue and EtherType.
-    ic->ic_awdl_llw_qos = 1;
+    // The dedicated TID 6 queue belongs to this standing link. ROC uses AUX.
+    ic->ic_awdl_llw_qos = llw_queue_added;
     setupStage(0);
     sc->sc_listener_restore_pending = sc->sc_listener_tries == 1;
     static const uint8_t noPeer[IEEE80211_ADDR_LEN] = {};
