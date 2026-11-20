@@ -1494,14 +1494,16 @@ static const int64_t kListenLeadUs = 6000;
 // Without a frame from the peer for this long, go back to listening blindly.
 static const uint64_t kPeerStaleUs = 30000000;
 // Hunt: each social channel for this long, dwell and pause between listens. The pause keeps
-// the station link alive (a beacon every 100 TU still gets through). It only runs for the
-// first kHuntWindowUs of each AWDL session (counted from its first listen), so a diagnostic
-// boot-arg left in place does not leave the station link at 60 % airtime for good. It used to
-// count from the first listen after boot, and a test started later never hunted.
+// the station link alive (a beacon every 100 TU still gets through). The first kHuntWindowUs of
+// each AWDL session (counted from its first listen) hunt at full pace, then at kHuntLateGapUs.
 static const uint64_t kHuntWindowUs = 600000000;
 static const uint64_t kHuntStepUs = 3000000;
 static const uint32_t kHuntDwellTU = 100;
 static const int64_t kHuntGapUs = 60000;
+// After the window, a slower hunt goes on (about 6 % of the airtime) while no peer has been heard: with the window
+// over and the schedule unknown, the Mac used to stop listening altogether and an iPhone could not find it again
+// until Wi-Fi was restarted (tester report, 2026-11-20).
+static const int64_t kHuntLateGapUs = 1500000;
 static const uint64_t kPeerReplaceUs = 10000000;
 
 static int64_t floorDiv(int64_t a, int64_t b)
@@ -1703,7 +1705,8 @@ scheduleOwnListen(uint64_t afterUs)
     uint64_t from = afterUs > now ? afterUs : now;
     if (awHuntAllowed() && !fHuntStartUs)
         fHuntStartUs = now;
-    if (awHuntAllowed() && !ic->ic_awdl_want_data && now - fHuntStartUs < kHuntWindowUs) {
+    if (awHuntAllowed() && !ic->ic_awdl_want_data) {
+        const bool late = now - fHuntStartUs >= kHuntWindowUs;
         // Channel 6 is the rendezvous every AWDL node visits (slot 9 of its sequence) and the one
         // channel Intel firmware transmits on reliably, so it gets half of the time.
         static const uint8_t kSocial[4] = { 6, 149, 6, 44 };
@@ -1722,7 +1725,7 @@ scheduleOwnListen(uint64_t afterUs)
         // peer is known, to let them through.
         ic->ic_awdl_want_data = 1;
         uint64_t abs;
-        nanoseconds_to_absolutetime((from + kHuntGapUs) * 1000, &abs);
+        nanoseconds_to_absolutetime((from + (late ? kHuntLateGapUs : kHuntGapUs)) * 1000, &abs);
         fListenTimer->cancelTimeout();
         fListenTimer->wakeAtTime(abs);
         fListenAlignedActive = true;
