@@ -970,7 +970,8 @@ iwm_rx_mpdu_mq(struct iwm_softc *sc, mbuf_t m, void *pktdata,
     rssi = MIN(rssi, ic->ic_max_rssi);    /* clip to max. 100% */
     
     rxi.rxi_rssi = rssi;
-    rxi.rxi_tstamp = le64toh(desc->v1.tsf_on_air_rise);
+    if (!(phy_info & IWM_RX_MPDU_PHY_TSF_OVERLOAD))
+        rxi.rxi_tstamp = (uint32_t)le64toh(desc->v1.tsf_on_air_rise);
     rxi.rxi_chan = chanidx;
     
     if (iwm_rx_reorder(sc, m, chanidx, desc,

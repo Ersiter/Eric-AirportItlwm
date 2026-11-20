@@ -7035,7 +7035,8 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         rxi.rxi_chan = channel_number;
         rxi.rxi_band = band;
         device_timestamp = desc->v3.gp2_on_air_rise;
-        rxi.rxi_tstamp = (uint32_t)le64toh(desc->v3.tsf_on_air_rise);
+        if (!(phy_info & IWX_RX_MPDU_PHY_TSF_OVERLOAD))
+            rxi.rxi_tstamp = (uint32_t)le64toh(desc->v3.tsf_on_air_rise);
     } else {
         rate_n_flags = le32toh(desc->v1.rate_n_flags);
         chanidx = desc->v1.channel;
@@ -7043,7 +7044,8 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         rxi.rxi_band = chanidx > 14 ? IEEE80211_CHAN_5GHZ :
             IEEE80211_CHAN_2GHZ;
         device_timestamp = desc->v1.gp2_on_air_rise;
-        rxi.rxi_tstamp = (uint32_t)le64toh(desc->v1.tsf_on_air_rise);
+        if (!(phy_info & IWX_RX_MPDU_PHY_TSF_OVERLOAD))
+            rxi.rxi_tstamp = (uint32_t)le64toh(desc->v1.tsf_on_air_rise);
     }
     
     if (sc->sc_aux_roc_running && sc->sc_awdl_listen_active) {
