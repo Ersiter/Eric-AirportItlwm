@@ -685,6 +685,7 @@ struct ieee80211com {
     int             (*ic_awdl_tx_ready)(struct ieee80211com *, uint8_t);
     uint8_t         ic_awdl_listener_chan;  /* standing listener's channel, 0 = none */
     uint8_t         ic_awdl_home_chan;      /* required infrastructure channel, 0 = unrestricted */
+    uint8_t         ic_awdl_listen_home;    /* backend can schedule a window on the infrastructure channel */
     void            (*ic_awdl_stop)(struct ieee80211com *);
     /* Why each of the listener's candidates (149, 44, 6) was left out, as bits: 1 no channel entry, 2 not in the
      * active set, 4 DFS, 8 passive and no beacon heard there, 16 band of a station link, 32 inside the station's 160 MHz group, 0x40 standing listener off on MLD; 0x80 chosen. */

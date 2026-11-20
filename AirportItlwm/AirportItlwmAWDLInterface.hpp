@@ -72,7 +72,8 @@ public:
     UInt32 dropOutput(mbuf_t m, void *param);
     uint64_t droppedPackets() const { return fDropped; }
     // Stage 4: an AWDL data frame for awdl0; consumes m, returns 1.
-    int inputAWDLData(mbuf_t m, class AirportItlwmAWDLInterface *awdl, struct ieee80211com *ic);
+    int inputAWDLData(mbuf_t m, class AirportItlwmAWDLInterface *awdl, struct ieee80211com *ic,
+        const struct ieee80211_rxinfo *rxi);
     // Stage 4 output: hand Ethernet frames to the AWDL interface's tx queue.
     UInt32 outputAWDL(mbuf_t m, void *param);
     UInt32 outputLowLatency(mbuf_t m, AirportItlwmLowLatencyEthernetInterface *source);
@@ -341,6 +342,8 @@ public:
     uint64_t fDataRxNoBuf;
     uint32_t fDataRxLastLen;
     uint16_t fDataRxLastType;
+    uint64_t fDataRxUnicastUs;
+    uint8_t fDataRxUnicastChannel;
     // Neighbour solicitations handed to the stack for a peer's first IPv6 frame (seeded), left out because the
     // peer was seeded recently (skipped), or that could not be built (failed).
     uint32_t fNdSeeded, fNdSeedSkipped, fNdSeedFailed;

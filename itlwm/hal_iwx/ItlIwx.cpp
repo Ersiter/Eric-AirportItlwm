@@ -5802,6 +5802,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
     sc->sc_use_mld_api = sc->sc_device_family >= IWX_DEVICE_FAMILY_BZ &&
         isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_MLD_API_SUPPORT);
     sc->sc_ic.ic_awdl_llw_qos = sc->sc_use_mld_api;
+    sc->sc_ic.ic_awdl_listen_home = sc->sc_use_mld_api;
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
     sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_peer_cache : NULL;
 #ifdef AIRPORT_VTD
@@ -7158,6 +7159,7 @@ iwx_awdl_tx_queue(const struct iwx_softc *sc, int qid)
 {
     return sc->sc_p2p_queue && (qid == sc->sc_aux_roc_qid ||
         qid == sc->sc_awdl_listener_data_qid || qid == sc->sc_awdl_listener_llw_qid ||
+        qid == sc->sc_awdl_mcast_qid ||
         iwx_awdl_peer_tx_queue(sc, qid));
 }
 
@@ -8844,8 +8846,12 @@ iwx_flush_sta_tids(struct iwx_softc *sc, int sta_id, uint16_t tids)
         if (sc->sc_use_mld_api && sta_id == IWX_AWDL_PEER_STA_ID) {
             if (!iwx_awdl_peer_tx_queue(sc, qid))
                 continue;
-        } else if (sc->sc_use_mld_api && sta_id == IWX_AWDL_BCAST_STA_ID) {
+        } else if (sc->sc_use_mld_api && (sta_id == IWX_AWDL_BCAST_STA_ID ||
+            sta_id == IWX_AUX_STA_ID)) {
             if (qid != sc->sc_aux_roc_qid)
+                continue;
+        } else if (sc->sc_use_mld_api && sta_id == IWX_AWDL_MCAST_STA_ID) {
+            if (qid != sc->sc_awdl_mcast_qid)
                 continue;
         } else if (sc->sc_use_mld_api && sta_id == IWX_LISTENER_STA_ID) {
             if (qid != sc->sc_awdl_listener_data_qid && qid != sc->sc_awdl_listener_llw_qid &&
@@ -11000,19 +11006,35 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
     if (chan == 0 || chan > IEEE80211_CHAN_MAX || ic->ic_channels[chan].ic_flags == 0)
         return EINVAL;
     int err;
-    if ((iwx_awdl_listener_enabled() && !sc->sc_use_mld_api) ||
-        ((iwx_awdl_listener_enabled() || iwx_awdl_client_enabled()) && sc->sc_use_mld_api)) {
-        if (sc->sc_use_mld_api && iwx_awdl_client_enabled() && ic->ic_awdl_sync_period_tu < 17)
-            return EAGAIN;
+    const bool standing = sc->sc_use_mld_api ?
+        itlAWDLStandingFlag() && (iwx_awdl_listener_enabled() || iwx_awdl_client_enabled()) :
+        iwx_awdl_listener_enabled();
+    if (sc->sc_use_mld_api && !standing) {
+        memset(ic->ic_awdl_listener_why, 0x40, sizeof(ic->ic_awdl_listener_why));
+        ic->ic_awdl_listener_station = ic->ic_bss ?
+            ieee80211_chan2number(ic, ic->ic_bss->ni_chan) : 0;
+    }
+    if (standing) {
         /* Allow one initial setup and one restore of an established MLD listener per boot. */
         if (!sc->sc_listener_up && (!sc->sc_listener_tries || sc->sc_listener_restore_pending) &&
             ic->ic_state == IEEE80211_S_RUN &&
             ic->ic_bss && ic->ic_bss->ni_chan != IEEE80211_CHAN_ANYC) {
+            uint8_t target = 0;
+            if (sc->sc_use_mld_api) {
+                if (!(sc->sc_flags & IWX_FLAG_STA_ACTIVE) || !ic->ic_bss->ni_port_valid ||
+                    sc->sc_mld_emlsr_active ||
+                    (iwx_awdl_client_enabled() && ic->ic_awdl_sync_period_tu < 17))
+                    return EAGAIN;
+                target = iwx_awdl_listener_pick(sc);
+                // There may be no permitted receiver channel until the MCC scan completes.
+                if (!target)
+                    return EAGAIN;
+            }
             sc->sc_listener_restore_pending = false;
             sc->sc_listener_tries++;
             ic->ic_awdl_listener_tries = sc->sc_listener_tries;
             err = sc->sc_use_mld_api ?
-                that->iwx_mld_listener_setup(sc) :
+                that->iwx_mld_listener_setup(sc, target) :
                 that->iwx_legacy_listener_setup(sc);
             if (err) {
                 sc->sc_awdl_listen_fail++;
@@ -12471,9 +12493,9 @@ iwx_p2p_setup(struct iwx_softc *sc, uint8_t chan)
             goto fail;
         }
         int qid = iwx_tvqm_enable_txq(sc, IWX_MGMT_TID, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_P2P_STA_ID);
+        iwx_nic_unlock(sc);
         if (generation != sc->sc_generation)
             return ENXIO;
-        iwx_nic_unlock(sc);
         if (qid < 0) {
             err = -qid;
             goto fail;
@@ -12781,13 +12803,6 @@ iwx_awdl_listener_pick(struct iwx_softc *sc, uint8_t only)
     }
     uint8_t selected = 0, bestSlots = 0;
     uint8_t why[nitems(kOrder)] = {};
-    if (sc->sc_use_mld_api && !itlAWDLStandingFlag()) {
-        if (!only) {
-            memset(ic->ic_awdl_listener_why, 0x40, sizeof(ic->ic_awdl_listener_why));
-            ic->ic_awdl_listener_station = station ? ieee80211_chan2ieee(ic, station) : 0;
-        }
-        return 0;
-    }
     for (unsigned i = 0; i < nitems(kOrder); i++) {
         const unsigned c = kOrder[i];
         if (only && c != only)
@@ -12799,9 +12814,7 @@ iwx_awdl_listener_pick(struct iwx_softc *sc, uint8_t only)
             why[i] |= 2;
         if (ch.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC))
             why[i] |= 4;
-        // -itlawdlstanding is a diagnostic for the standing link's transmit stall, which needs the link up on 149 even
-        // before an AP was heard there.
-        if ((ch.ic_flags & IEEE80211_CHAN_PASSIVE) && !isset(ic->ic_beacon_hint, c) && !itlAWDLStandingFlag())
+        if ((ch.ic_flags & IEEE80211_CHAN_PASSIVE) && !isset(ic->ic_beacon_hint, c))
             why[i] |= 8;
         // Diagnostic (-itlawdlstanding): the standing link may share the station's own channel, to tell whether its
         // transmit stall comes from time-sharing two bands on one radio.
@@ -12880,7 +12893,7 @@ iwx_awdl_listener_width(struct iwx_softc *sc, uint8_t chan)
  * 10 LLW queue and initial latency settings. A failure leaves the ROC listens as before.
  */
 int ItlIwx::
-iwx_mld_listener_setup(struct iwx_softc *sc)
+iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     uint32_t stage = 0;
@@ -12894,7 +12907,6 @@ iwx_mld_listener_setup(struct iwx_softc *sc)
     const int mgmtTid = client ? IWX_MGMT_TID : IWX_MAX_TID_COUNT;
     const size_t staCmdSize = iwx_lookup_cmd_ver(sc, IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD) == 2 ?
         sizeof(struct iwx_mld_sta_cfg_cmd_v2) : sizeof(struct iwx_mld_mvm_sta_cfg_cmd);
-    const uint8_t chan = iwx_awdl_listener_pick(sc);
     int generation = sc->sc_generation;
     /*
      * Every command here can sleep across a firmware restart. Commands sent after one went to the freshly
@@ -13442,11 +13454,13 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
     const auto pending = [sc](int qid) { return qid >= 0 && sc->txq[qid].queued; };
     if (sc->sc_listener_chan) {
         const int mgmtSta = iwx_awdl_client_enabled() ? IWX_AWDL_BCAST_STA_ID : IWX_LISTENER_STA_ID;
-        const int owners[] = {IWX_LISTENER_STA_ID, IWX_AWDL_BCAST_STA_ID, IWX_AWDL_PEER_STA_ID};
+        const int owners[] = {IWX_LISTENER_STA_ID, IWX_AWDL_BCAST_STA_ID,
+            IWX_AWDL_MCAST_STA_ID, IWX_AWDL_PEER_STA_ID};
         const auto hasPending = [&](int owner) {
             return (owner == mgmtSta && pending(sc->sc_aux_roc_qid)) ||
                 (owner == IWX_LISTENER_STA_ID &&
                     (pending(sc->sc_awdl_listener_data_qid) || pending(sc->sc_awdl_listener_llw_qid))) ||
+                (owner == IWX_AWDL_MCAST_STA_ID && pending(sc->sc_awdl_mcast_qid)) ||
                 (owner == IWX_AWDL_PEER_STA_ID &&
                     (pending(sc->sc_awdl_peer_qid) || pending(sc->sc_awdl_peer_llw_qid) ||
                         pending(sc->sc_awdl_peer_mgmt_qid)));
@@ -13639,6 +13653,7 @@ int ItlIwx::
 iwx_mld_p2p_setup(struct iwx_softc *sc, uint8_t chan)
 {
     struct ieee80211com *ic = &sc->sc_ic;
+    const int generation = sc->sc_generation;
     uint32_t stage = 0;
     int err = 0;
 
@@ -13649,6 +13664,8 @@ iwx_mld_p2p_setup(struct iwx_softc *sc, uint8_t chan)
         stage = sc->sc_p2p_mac ? 9 : 4;
         err = iwx_mld_p2p_mac_cmd(sc, sc->sc_p2p_mac ? IWX_FW_CTXT_ACTION_MODIFY :
             IWX_FW_CTXT_ACTION_ADD, wantPromisc);
+        if (generation != sc->sc_generation)
+            return ENXIO;
         if (err)
             goto fail;
         if (sc->sc_p2p_mac && sc->sc_p2p_addr_gen != ic->ic_awdl_addr_gen) {
@@ -13664,6 +13681,8 @@ iwx_mld_p2p_setup(struct iwx_softc *sc, uint8_t chan)
     if (!sc->sc_p2p_queue) {
         stage = 7;
         err = iwx_mld_aux_sta_add(sc);
+        if (generation != sc->sc_generation)
+            return ENXIO;
         if (err)
             goto fail;
     }
@@ -13731,20 +13750,18 @@ iwx_mld_roc_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt)
         iwx_p2p_roc_event(sc, 0, 1);
 }
 
-void ItlIwx::
+int ItlIwx::
 iwx_p2p_session_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu)
 {
-    if (sc->sc_use_mld_api) {
-        iwx_mld_roc_cmd(sc, action, duration_tu);
-        return;
-    }
+    if (sc->sc_use_mld_api)
+        return iwx_mld_roc_cmd(sc, action, duration_tu);
     struct iwx_session_prot_cmd cmd = {
         .id_and_color = htole32(IWX_FW_CMD_ID_AND_COLOR(IWX_P2P_MAC_ID, 0)),
         .action = htole32(action),
         .conf_id = htole32(IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV),
         .duration_tu = htole32(duration_tu),
     };
-    iwx_send_cmd_pdu(sc, iwx_cmd_id(IWX_SESSION_PROTECTION_CMD, IWX_MAC_CONF_GROUP, 0),
+    return iwx_send_cmd_pdu(sc, iwx_cmd_id(IWX_SESSION_PROTECTION_CMD, IWX_MAC_CONF_GROUP, 0),
                      IWX_CMD_ASYNC, sizeof(cmd), &cmd);
 }
 
@@ -13764,8 +13781,24 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
         }
         return EBUSY;
     }
-    if (sc->sc_use_mld_api)
+    if (sc->sc_use_mld_api) {
+        const int generation = sc->sc_generation;
         iwx_mld_roc_block_emlsr(sc);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (sc->sc_mld_emlsr_active)
+            return EBUSY;
+        const int qid = sc->sc_aux_roc_qid;
+        // The AUX queue persists across windows. Drain old-channel TX before
+        // the firmware can resume the queue on another channel.
+        if (chan != sc->sc_p2p_roc_chan && qid > 0 && sc->txq[qid].queued) {
+            err = iwx_flush_sta_tids(sc, IWX_AUX_STA_ID, 0xffff);
+            if (generation != sc->sc_generation)
+                return ENXIO;
+            if (err || sc->txq[qid].queued)
+                return err ? err : EBUSY;
+        }
+    }
     if ((err = iwx_p2p_setup(sc, chan)) != 0)
         return err;
     sc->sc_p2p_roc_chan = chan;
@@ -13773,10 +13806,15 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
     sc->sc_p2p_dwell_tu = duration_tu;
     sc->sc_p2p_req_us = iwx_uptime_us();
     sc->sc_aux_roc_pending = 1;
-    sc->sc_aux_roc_sent++;
-    iwx_p2p_session_cmd(sc, IWX_FW_CTXT_ACTION_ADD, duration_tu);
+    err = iwx_p2p_session_cmd(sc, IWX_FW_CTXT_ACTION_ADD, duration_tu);
+    if (err) {
+        sc->sc_aux_roc_pending = 0;
+        sc->sc_aux_roc_resp_err++;
+    } else {
+        sc->sc_aux_roc_sent++;
+    }
     iwx_aux_roc_sync_counters(sc);
-    return 0;
+    return err;
 }
 
 /*

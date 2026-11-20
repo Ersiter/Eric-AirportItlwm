@@ -457,12 +457,12 @@ public:
     int    iwx_p2p_setup(struct iwx_softc *, uint8_t);
     int    iwx_p2p_set_channel(struct iwx_softc *, uint8_t);
     int    iwx_p2p_roc(struct iwx_softc *, uint8_t, uint16_t);
-    void   iwx_p2p_session_cmd(struct iwx_softc *, uint32_t, uint32_t);
+    int    iwx_p2p_session_cmd(struct iwx_softc *, uint32_t, uint32_t);
     void   iwx_p2p_roc_event(struct iwx_softc *, uint32_t, uint32_t);
     int    iwx_mld_p2p_setup(struct iwx_softc *, uint8_t);
     int    iwx_mld_p2p_mac_cmd(struct iwx_softc *, uint32_t, bool);
     int    iwx_mld_aux_sta_add(struct iwx_softc *);
-    int    iwx_mld_listener_setup(struct iwx_softc *);
+    int    iwx_mld_listener_setup(struct iwx_softc *, uint8_t);
     int    iwx_legacy_listener_setup(struct iwx_softc *);
     int    iwx_legacy_listener_mac(struct iwx_softc *, uint32_t, uint8_t, bool);
     void   iwx_awdl_listener_refit(struct iwx_softc *);

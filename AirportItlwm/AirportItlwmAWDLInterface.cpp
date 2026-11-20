@@ -423,7 +423,8 @@ recordRxIp(mbuf_t m, AirportItlwmAWDLInterface *awdl)
 }
 
 int AirportItlwmAWDLEthernetInterface::
-inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
+inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic,
+    const ieee80211_rxinfo *rxi)
 {
     if (!awDataAllowed() || !getIfnet())
         return 0;
@@ -445,6 +446,15 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
     size_t len = mbuf_len(m);
     const struct ieee80211_frame *wh = (const struct ieee80211_frame *)p;
     size_t hdr = sizeof(*wh);
+    const auto noteUnicast = [&] {
+        if (ic && ic->ic_awdl_listen_home && rxi && rxi->rxi_chan > 0 &&
+            rxi->rxi_chan <= UINT8_MAX && rxi->rxi_band != IEEE80211_CHAN_6GHZ &&
+            !(ic->ic_channels[rxi->rxi_chan].ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)) &&
+            IEEE80211_ADDR_EQ(wh->i_addr1, ic->ic_awdl_addr)) {
+            awdl->fDataRxUnicastChannel = (uint8_t)rxi->rxi_chan;
+            awdl->fDataRxUnicastUs = hostUs();
+        }
+    };
     static const uint8_t kSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x17, 0xf2 };
     static const uint8_t kLlwSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
     auto *driver = OSDynamicCast(AirportItlwm, getController());
@@ -526,11 +536,12 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
                     inputPacket(sub, (UInt32)mbuf_pkthdr_len(sub), 0, sub);
                 offset += (consumed + 3) & ~size_t(3);
             }
-            mbuf_freem(m);
             if (deliveredAWDL) {
+                noteUnicast();
                 awdl->fDataRxAmsdu++;
                 awdl->publishDataState();
             }
+            mbuf_freem(m);
             return 1;
         }
     }
@@ -565,6 +576,7 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic)
     const uint8_t *ad = p + hdr + llc;
     uint8_t ethType[2] = { ad[6], ad[7] };
     uint8_t dst[6], src[6];
+    noteUnicast();
     memcpy(dst, wh->i_addr1, 6);
     memcpy(src, wh->i_addr2, 6);
 
@@ -1027,6 +1039,7 @@ stopAWTimeline()
     memset(fPeers, 0, sizeof(fPeers));
     fListenPeer = 0;
     fTxPeerUs = 0;
+    fDataRxUnicastUs = 0;
     if (fController) {
         if (ieee80211com *ic = fController->fHalService->get80211Controller()) {
             ic->ic_awdl_want_data = 0;
@@ -1453,12 +1466,14 @@ maybeListen(uint32_t slotChannel, uint16_t seq)
         if (home != ic->ic_awdl_home_chan)
             return;
         slotChannel = home;
-    } else if (home == slotChannel) {
+    } else if (home == slotChannel && !ic->ic_awdl_listen_home) {
         fListenSkippedHome++;
         return;
     }
     // The peer's timeline is known: the listen timer picks the moments instead.
     if (fListenAlignedActive)
+        return;
+    if (awDataAllowed() && scheduleOwnListen(hostUs()))
         return;
     if (++fListenSlot % fListenEveryNth)
         return;
@@ -1492,7 +1507,7 @@ startListen(unsigned chan, uint32_t dwellTU, unsigned home, bool aligned)
 // from the command to its START notification.
 static const int64_t kListenLeadUs = 6000;
 // Without a frame from the peer for this long, go back to listening blindly.
-static const uint64_t kPeerStaleUs = 30000000;
+static const uint64_t kPeerStaleUs = 6000000;
 // Hunt: each social channel for this long, dwell and pause between listens. The pause keeps
 // the station link alive (a beacon every 100 TU still gets through). The first kHuntWindowUs of
 // each AWDL session (counted from its first listen) hunt at full pace, then at kHuntLateGapUs.
@@ -1522,8 +1537,10 @@ parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len)
     if (!size || len < 6 + 16 * size)
         return false;
     const size_t at = v[1] == 1 ? 1 : 0;
-    for (unsigned i = 0; i < 16; i++)
-        peer.channels[i] = v[6 + i * size + at];
+    for (unsigned i = 0; i < 16; i++) {
+        const uint8_t chan = v[6 + i * size + at];
+        peer.channels[i] = chan == 0xff ? 0 : chan;
+    }
     peer.hasChannels = true;
     return true;
 }
@@ -1681,9 +1698,8 @@ ownChannelAt(uint16_t seq) const
     return (uint8_t)c->channel;
 }
 
-// Next slot of our own timeline whose channel is not 0 (0 = not on AWDL, the
-// firmware stays on the infra channel and posts no AW start) and is not the
-// station channel. Dwell for the run of equal-channel slots.
+// Next available slot on our timeline. Channel 0 stays on infrastructure and
+// posts no AW start. Dwell for the run of equal-channel slots.
 bool AirportItlwmAWDLInterface::
 scheduleOwnListen(uint64_t afterUs)
 {
@@ -1694,6 +1710,7 @@ scheduleOwnListen(uint64_t afterUs)
         return false;
     unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
     const bool homeOnly = ic->ic_awdl_home_chan != 0;
+    const bool allowHome = homeOnly || ic->ic_awdl_listen_home;
     if (homeOnly && home != ic->ic_awdl_home_chan)
         return false;
     uint64_t now = hostUs();
@@ -1706,23 +1723,45 @@ scheduleOwnListen(uint64_t afterUs)
     if (awHuntAllowed() && !fHuntStartUs)
         fHuntStartUs = now;
     if (awHuntAllowed() && !ic->ic_awdl_want_data) {
-        const bool late = now - fHuntStartUs >= kHuntWindowUs;
+        const bool receiving = fDataRxUnicastUs && now - fDataRxUnicastUs < kPeerStaleUs;
+        const bool late = !receiving && now - fHuntStartUs >= kHuntWindowUs;
         // Channel 6 is the rendezvous every AWDL node visits (slot 9 of its sequence) and the one
         // channel Intel firmware transmits on reliably, so it gets half of the time.
-        static const uint8_t kSocial[4] = { 6, 149, 6, 44 };
+        uint8_t alternate = 44;
+        if (ic->ic_awdl_listen_home && home != 149 && IEEE80211_IS_CHAN_5GHZ(ic->ic_bss->ni_chan) &&
+            !(ic->ic_bss->ni_chan->ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC))) {
+            const auto *channels = reinterpret_cast<const apple80211_channel *>(fChanSeq + kChanSeqEntries);
+            bool homeAdvertised = false;
+            bool has44 = false;
+            for (unsigned i = 0; i < fChanSeq[kChanSeqCount]; i++) {
+                homeAdvertised |= channels[i].channel == home;
+                has44 |= channels[i].channel == 44;
+            }
+            if (homeAdvertised && !has44)
+                alternate = (uint8_t)home;
+        }
+        const uint8_t huntChannels[] = { 6, 149, 6, alternate };
         const uint8_t listener = ic->ic_awdl_listener_chan;
-        uint8_t list[4];
+        uint8_t list[nitems(huntChannels)];
         unsigned n = 0;
-        for (unsigned i = 0; i < 4; i++)
-            if (kSocial[i] != home)
-                list[n++] = kSocial[i];
-        fListenNextChan = homeOnly ? home :
-            listener ? listener : list[(now / kHuntStepUs) % n];
+        for (uint8_t ch : huntChannels) {
+            if ((allowHome || ch != home) &&
+                (!ic->ic_awdl_listen_home || isset(ic->ic_chan_active, ch)))
+                list[n++] = ch;
+        }
+        if (homeOnly || listener) {
+            fListenNextChan = homeOnly ? home : listener;
+        } else if (receiving && isset(ic->ic_chan_active, fDataRxUnicastChannel)) {
+            // Keep the channel where data gets through until a sync frame
+            // gives us the peer's actual schedule.
+            fListenNextChan = fDataRxUnicastChannel;
+        } else if (n) {
+            fListenNextChan = list[(now / kHuntStepUs) % n];
+        } else {
+            return false;
+        }
         fListenNextDwellTU = kHuntDwellTU;
-        // On hardware an iPhone's unicast frames to awdl0 arrived while none of its broadcast
-        // PSF/MIF did, so the firmware filter drops broadcast frames that carry the AWDL BSSID.
-        // The P2P MAC is promiscuous (-itlawdlpromisc) from the first listen, not only once a
-        // peer is known, to let them through.
+        // Keep the P2P receive filter open while looking for the first sync frame.
         ic->ic_awdl_want_data = 1;
         uint64_t abs;
         nanoseconds_to_absolutetime((from + (late ? kHuntLateGapUs : kHuntGapUs)) * 1000, &abs);
@@ -1747,14 +1786,14 @@ scheduleOwnListen(uint64_t afterUs)
         if (homeOnly && usePeer &&
             peerChannelAt(peer, (uint64_t)(fRefUs + k * slot + slot / 2)) != home)
             continue;
-        if (!homeOnly && (!chan || chan == home) && usePeer) {
+        if (!homeOnly && (!chan || (chan == home && !allowHome)) && usePeer) {
             unsigned pc = peerChannelAt(peer, (uint64_t)(fRefUs + k * slot + slot / 2));
-            if (pc && pc != home) {
+            if (pc && (pc != home || allowHome)) {
                 chan = (uint8_t)pc;
                 fromPeer = true;
             }
         }
-        if (!chan || (!homeOnly && chan == home) ||
+        if (!chan || (!allowHome && chan == home) ||
             (ic->ic_awdl_listener_chan && chan != ic->ic_awdl_listener_chan))
             continue;
         unsigned run = 1;
@@ -1805,7 +1844,7 @@ scheduleAlignedListen(uint64_t afterUs)
     for (int i = 0; i < 32; i++, k++) {
         uint16_t seq = (uint16_t)(peer.refSeq + k * peer.pm);
         unsigned chan = peer.channels[(seq / peer.pm) % 16];
-        if (!chan || chan == home || (forced && chan != forced))
+        if (!chan || (chan == home && !ic->ic_awdl_listen_home) || (forced && chan != forced))
             continue;
         // Stay for the whole run of slots on this channel, up to the dwell limit.
         unsigned run = 1;
@@ -1839,7 +1878,7 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *)
         unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
         const bool matches = ic->ic_awdl_home_chan ?
             home == ic->ic_awdl_home_chan && that->fListenNextChan == home :
-            home != that->fListenNextChan;
+            ic->ic_awdl_listen_home || home != that->fListenNextChan;
         if (matches && !(++that->fListenSlot % that->fListenEveryNth)) {
             uint64_t before = that->fListenStarted;
             that->startListen(that->fListenNextChan, dwell, home, true);
@@ -2964,6 +3003,8 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     memset(fPeers, 0, sizeof(fPeers));
     fListenPeer = 0;
     fTxPeerUs = 0;
+    fDataRxUnicastUs = 0;
+    fDataRxUnicastChannel = 0;
     fPeerUpdates = 0;
     fPeerPredHit = 0;
     fPeerPredMiss = 0;
