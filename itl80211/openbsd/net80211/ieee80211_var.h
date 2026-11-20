@@ -721,6 +721,9 @@ struct ieee80211com {
      * filter on the P2P MAC.
      */
     uint32_t        ic_awdl_fw_foreign_data;
+    /* Group MPDUs before host RX checks. Index 1 is the active ROC channel. */
+    uint32_t        ic_awdl_fw_group_sync[2];
+    uint32_t        ic_awdl_fw_group_data[2];
     /* Group-addressed management / AWDL action frames the firmware delivered, by multicast-filter variant. */
     uint32_t        ic_awdl_fw_mc_mgmt[4];
     uint32_t        ic_awdl_fw_mc_awdl[4];

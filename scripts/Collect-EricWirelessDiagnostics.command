@@ -145,6 +145,9 @@ bounded snapshot > "$work/before.txt" 2>&1
 bounded kernel_lines > "$work/kernel-before.txt" 2>&1
 
 predicate='process IN {"bluetoothd","wifid","airportd","wifip2pd","sharingd","rapportd","nearbyd","eapolclient","IPConfiguration"} OR (process == "kernel" AND (eventMessage CONTAINS[c] "itlwm" OR eventMessage CONTAINS[c] "awdl" OR eventMessage CONTAINS[c] "btlfx" OR eventMessage CONTAINS[c] "BlueToolFixup" OR eventMessage CONTAINS[c] "IntelBT" OR eventMessage CONTAINS[c] "[advsets]" OR eventMessage CONTAINS[c] "[rpa]" OR eventMessage CONTAINS[c] "[pagein]"))'
+if [ "$focus" = continuity ]; then
+    predicate="$predicate"' OR (process == "mDNSResponder" AND (eventMessage CONTAINS[c] "awdl0" OR eventMessage CONTAINS[c] "_airdrop._tcp"))'
+fi
 printf 'Start: %s\n' "$(stamp)" >> "$work/attempt.txt"
 (ulimit -f 3072; exec /usr/bin/log stream --level debug --style compact --predicate "$predicate") > "$work/live.txt" 2>&1 &
 stream_pid=$!
@@ -155,7 +158,7 @@ stream_pid=$!
         for interface in $wifi_interfaces awdl0; do
             /usr/sbin/netstat -I "$interface" -b 2>&1 | /usr/bin/tail -n 2
         done
-        registry_state | /usr/bin/grep -aE 'Listener|Peer|AirDrop|Frame|Data|Status|Error|Scan|Join|Associate|Country|WCL' |
+        registry_state | /usr/bin/grep -aE 'Listener|Peer|AirDrop|Frame|Data|AWDL(Fw|Rx)Group|Status|Error|Scan|Join|Associate|Country|WCL' |
             /usr/bin/cut -c 1-250
         /bin/sleep 5
     done

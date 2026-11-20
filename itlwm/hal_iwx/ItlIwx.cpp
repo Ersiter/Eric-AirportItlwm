@@ -524,7 +524,7 @@ setMulticastList(IOEthernetAddress *addr, int count)
         addr_count = 0;
     len = roundup(sizeof(struct iwx_mcast_filter_cmd) + addr_count * ETHER_ADDR_LEN, 4);
     XYLog("%s multicast count=%d bssid=%s\n", __FUNCTION__, count, ether_sprintf(ic->ic_bss->ni_bssid));
-    cmd = (struct iwx_mcast_filter_cmd *)malloc(len, 0, 0);
+    cmd = (struct iwx_mcast_filter_cmd *)malloc(len, 0, M_NOWAIT | M_ZERO);
     if (!cmd)
         return kIOReturnError;
     cmd->pass_all = addr_count == 0;
@@ -6797,6 +6797,11 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         const uint8_t *bssid = ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : awdl_bssid;
         awdlGroup = (awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
             IEEE80211_IS_MULTICAST(awh->i_addr1) && IEEE80211_ADDR_EQ(awh->i_addr3, bssid);
+        const bool onRoc = !sc->sc_listener_up && sc->sc_aux_roc_running &&
+            (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+                desc->v3.channel : desc->v1.channel) == ic->ic_awdl_listen_chan;
+        if (awdlGroup)
+            ic->ic_awdl_fw_group_data[onRoc]++;
         if (IEEE80211_ADDR_EQ(awh->i_addr1, ic->ic_awdl_addr)) {
             uint8_t at = awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
             awdlUc = 1;
@@ -6809,15 +6814,26 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
                                                     desc->v3.channel : desc->v1.channel);
             if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)))
                 ic->ic_awdl_fw_uc_badcrc++;
-        } else if (sc->sc_awdl_listen_active && IEEE80211_IS_MULTICAST(awh->i_addr1) &&
+        } else if (IEEE80211_IS_MULTICAST(awh->i_addr1) &&
                    (awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_MGT) {
-            /* Which multicast-filter variant lets group-addressed frames through. */
             const unsigned v = sc->sc_awdl_mc_variant & 3;
-            ic->ic_awdl_fw_mc_mgmt[v]++;
-            if ((awh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) == IEEE80211_FC0_SUBTYPE_ACTION &&
-                le16toh(desc->mpdu_len) > sizeof(struct ieee80211_frame) &&
-                ((const uint8_t *)awh)[sizeof(struct ieee80211_frame)] == 127)
-                ic->ic_awdl_fw_mc_awdl[v]++;
+            if (sc->sc_awdl_listen_active)
+                ic->ic_awdl_fw_mc_mgmt[v]++;
+            const uint8_t subtype = awh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+            if (subtype == IEEE80211_FC0_SUBTYPE_ACTION ||
+                subtype == IEEE80211_FC0_SUBTYPE_ACTION_NOACK) {
+                const size_t body = ieee80211_get_hdrlen(awh) +
+                    ((desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) ? 2 : 0);
+                static const uint8_t awdl_action[] = { 127, 0x00, 0x17, 0xf2, 0x08 };
+                const auto *raw = reinterpret_cast<const uint8_t *>(awh);
+                if (le16toh(desc->mpdu_len) >= body + 16 &&
+                    memcmp(raw + body, awdl_action, sizeof(awdl_action)) == 0 &&
+                    (raw[body + 6] == 0 || raw[body + 6] == 3)) {
+                    ic->ic_awdl_fw_group_sync[onRoc]++;
+                    if (sc->sc_awdl_listen_active)
+                        ic->ic_awdl_fw_mc_awdl[v]++;
+                }
+            }
         } else if ((awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
                    !IEEE80211_IS_MULTICAST(awh->i_addr1) &&
                    !IEEE80211_ADDR_EQ(awh->i_addr1, ic->ic_myaddr)) {
@@ -12553,7 +12569,8 @@ iwx_p2p_roc_event(struct iwx_softc *sc, uint32_t status, uint32_t start)
         sc->sc_awdl_listen_active = 1;
         sc->sc_p2p_start_us = now;
         ric->ic_awdl_roc_delay_us = (uint32_t)(now - sc->sc_p2p_req_us);
-        if (iwx_awdl_promisc_enabled() && ric->ic_awdl_want_data)
+        /* On MLD, this command targets the associated station's filter port. */
+        if (!sc->sc_use_mld_api && iwx_awdl_promisc_enabled() && ric->ic_awdl_want_data)
             iwx_awdl_mcast_variant(sc, (uint8_t)(1 + sc->sc_awdl_mc_roc_count++ % 3));
     } else {
         uint32_t us = (uint32_t)(now - sc->sc_p2p_start_us);
@@ -12573,12 +12590,8 @@ iwx_p2p_roc_event(struct iwx_softc *sc, uint32_t status, uint32_t start)
 }
 
 /*
- * The firmware's multicast filter lets group-addressed frames through only from the station's
- * BSSID, which would drop every AWDL broadcast (PSF/MIF carry the AWDL BSSID) while unicast to
- * awdl0 still arrives, as seen on hardware. During a listen the station is off channel, so its
- * multicast does not matter: try a filter that does not name the AP, and put the AP's back at
- * the end. Variants rotate per listen (1 = AWDL BSSID, 2 = broadcast, 3 = zero) and
- * AWDLFwMcAwdl / AWDLFwMcMgmt count what each lets through, so one run shows which one works.
+ * Legacy P2P listen filter experiment: select the AWDL, broadcast or zero
+ * BSSID during a dwell and restore the association BSSID on exit.
  */
 void ItlIwx::
 iwx_awdl_mcast_variant(struct iwx_softc *sc, uint8_t variant)

@@ -404,6 +404,9 @@ recordRxIp(mbuf_t m, AirportItlwmAWDLInterface *awdl)
     size_t length = mbuf_pkthdr_len(m), n = length < sizeof(h) ? length : sizeof(h);
     if (n < 14 || mbuf_copydata(m, 0, n, h))
         return;
+    const bool group = IEEE80211_IS_MULTICAST(h);
+    if (group)
+        awdl->fRxGroupData++;
     uint32_t sequence = __sync_add_and_fetch(&awdl->fRxIpCount, 1);
     auto *r = &awdl->fRxIp[(sequence - 1) % AirportItlwmAWDLInterface::kRxIpRecords];
     __atomic_store_n(&r->sequence, 0, __ATOMIC_RELEASE);
@@ -423,6 +426,8 @@ recordRxIp(mbuf_t m, AirportItlwmAWDLInterface *awdl)
         } else if (r->nextHeader == 17 && n >= 14 + 40 + 4) {
             r->srcPort = (uint16_t)((h[54] << 8) | h[55]);
             r->dstPort = (uint16_t)((h[56] << 8) | h[57]);
+            if (group && r->dstPort == 5353)
+                awdl->fRxGroupUdp5353++;
         } else if (r->nextHeader == 58) {
             r->type = h[14 + 40];
         }
@@ -905,6 +910,8 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
         snprintf(hv, sizeof(hv), "%02x%02x%02x", af[5], af[6], af[7]);
         setProperty("AWDLRxHdrVer", hv);
     }
+    if (IEEE80211_IS_MULTICAST(wh->i_addr1) && (af[6] == 0 || af[6] == 3))
+        fRxGroupSync++;
     // Consumes buf (peer manager input + bpf, then returnBuffer).
     awdlBufSubmit(this, buf, &meta, sizeof(meta));
     return 1;
@@ -2365,6 +2372,8 @@ publishDataState()
         setProperty(key, value);
     }
     setProperty("AWDLRxIpFrames", __atomic_load_n(&fRxIpCount, __ATOMIC_ACQUIRE), 32);
+    setProperty("AWDLRxGroupData", fRxGroupData, 32);
+    setProperty("AWDLRxGroupUdp5353", fRxGroupUdp5353, 32);
     setProperty("AWDLDataRxLastLen", fDataRxLastLen, 32);
     setProperty("AWDLDataRxLastType", fDataRxLastType, 32);
     setProperty("AWDLDataTx", fDataTx, 64);
@@ -2502,6 +2511,11 @@ publishTxState()
     setProperty("AWDLFwUcMgmt", ic->ic_awdl_fw_uc_mgmt, 32);
     setProperty("AWDLFwUcData", ic->ic_awdl_fw_uc_data, 32);
     setProperty("AWDLFwUcBadCrc", ic->ic_awdl_fw_uc_badcrc, 32);
+    setProperty("AWDLFwGroupSyncROC", ic->ic_awdl_fw_group_sync[1], 32);
+    setProperty("AWDLFwGroupDataROC", ic->ic_awdl_fw_group_data[1], 32);
+    setProperty("AWDLFwGroupSyncOutsideROC", ic->ic_awdl_fw_group_sync[0], 32);
+    setProperty("AWDLFwGroupDataOutsideROC", ic->ic_awdl_fw_group_data[0], 32);
+    setProperty("AWDLRxGroupSync", fRxGroupSync, 32);
     {
         char mc[160];
         snprintf(mc, sizeof(mc), "v0:%u/%u v1:%u/%u v2:%u/%u v3:%u/%u",
@@ -2976,6 +2990,7 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fCallCount = 0;
     fRxAF = 0;
     fRxAFDropped = 0;
+    fRxGroupSync = 0;
     fAWTimer = nullptr;
     fPeerCacheTimer = nullptr;
     fUmiAckTimer = nullptr;
@@ -3059,6 +3074,7 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fNdSeeded = fNdSeedSkipped = fNdSeedFailed = 0;
     memset(fRxIp, 0, sizeof(fRxIp));
     fRxIpCount = 0;
+    fRxGroupData = fRxGroupUdp5353 = 0;
     memset(fDataQ, 0, sizeof(fDataQ));
     fDataQHead = 0;
     fDataQCount = 0;

@@ -362,6 +362,7 @@ public:
     };
     RxIpRecord fRxIp[kRxIpRecords];
     volatile uint32_t fRxIpCount;
+    uint32_t fRxGroupData, fRxGroupUdp5353;
     void publishDataState();
     // Ethernet frames from awdl0, sent as AWDL data frames during a dwell.
     void enqueueData(mbuf_t m);
@@ -409,6 +410,7 @@ private:
 
     uint64_t fRxAF;
     uint64_t fRxAFDropped;
+    uint32_t fRxGroupSync;
     AirportItlwm *fController;
     ether_addr fMac;
     // Cached configuration, returned by the matching getters.
