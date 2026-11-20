@@ -2,11 +2,11 @@
 
 <h1 align="center">Eric-AirportItlwm</h1>
 <p align="center"><b>Native macOS Wi-Fi for Intel cards, from 802.11n to Wi-Fi 7</b><br>
-macOS Tahoe 26 and Sequoia 15 · WPA3 · 6 GHz · 802.11be · BE200 / BE201 and every card itlwm supports</p>
+macOS 14 Sonoma to 27 Golden Gate · WPA3 · 6 GHz · 802.11be · BE200 / BE201 and every card itlwm supports</p>
 
 <p align="center">
 <a href="https://github.com/Ersiter/Eric-AirportItlwm/releases/latest"><img src="https://img.shields.io/github/v/release/Ersiter/Eric-AirportItlwm?label=release"></a>
-<img src="https://img.shields.io/badge/macOS-26%20Tahoe%20%7C%2015%20Sequoia-blue">
+<img src="https://img.shields.io/badge/macOS-14%20to%2027-blue">
 <img src="https://img.shields.io/badge/arch-x86__64-lightgrey">
 <img src="https://img.shields.io/badge/license-GPL--2.0-green">
 </p>
@@ -57,20 +57,18 @@ firmware and the highest adapted API is tried first. Not supported yet: the Wi-F
 ## Install
 
 1. Download the package for your macOS from [Releases](https://github.com/Ersiter/Eric-AirportItlwm/releases):
-   `macOS26-Tahoe` for macOS 26, `macOS15-Sequoia` for macOS 15.2 or later. **Release** for daily use;
+   `macOS26-Tahoe` for macOS 26, `macOS15-Sequoia` for macOS 15.2 or later, `macOS14-Sonoma` for macOS 14 and
+   `macOS27-GoldenGate` for macOS 27; a release carries all four. **Release** for daily use;
    **Debug** keeps the diagnostic logs a report needs.
 2. Put the kext in `EFI/OC/Kexts/` and add it to `Kernel → Add`. Use only one Intel Wi-Fi kext.
-   If one config boots both systems, limit the Tahoe kext to Darwin `25.0.0`–`25.99.99` and the
-   Sequoia kext to `24.2.0`–`24.99.99`.
+   If one config boots several systems, limit each kext to its own: Tahoe Darwin `25.0.0`–`25.99.99`, Sequoia
+   `24.2.0`–`24.99.99`, Sonoma `23.0.0`–`23.99.99`, Golden Gate `27.0.0`–`27.99.99`.
 3. Do not combine it with OpenCore Legacy Patcher's "Modern Wireless" root patches or any IO80211 /
    Skywalk replacement: this driver uses the system's own Wi-Fi stack.
 4. Keep a bootable copy of your EFI and test from a USB stick first.
 
 Get the optional Bluetooth companion from [Eric-BlueToolFixup Releases](https://github.com/Ersiter/Eric-BlueToolFixup/releases).
 It has its own version. Keep your current Bluetooth setup when updating Wi-Fi if it works for your configuration.
-
-The country and the channels allowed in it come from the networks around you, through the card's own
-regulatory logic, as on Linux. There is nothing to set.
 
 ### Boot arguments
 
@@ -95,8 +93,9 @@ radio (Wi-Fi 7 eMLSR is single radio too), so the firmware time-shares the two:
   [ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm) runs on the AX211 with AirDrop working
   both ways.
 - **BE cards** (MLD firmware): the same idea in the MLD command set, as a P2P client link next to the
-  station link (the combination Linux allows on two channels). The firmware's activation rules are being
-  worked out from its own code; not working yet.
+  station link (the combination Linux allows on two channels). On a test machine (BE200, iPhone, macOS 15,
+  2.4 GHz) files sent from the iPhone arrive at the Mac; the Mac to iPhone direction, discovery reliability
+  and speed are still in progress.
 - **iwm cards** (7000, 8000 and 9000 series): the standing listener starts after joining Wi-Fi. All bundled iwm firmware advertises the required P2P and DQA capabilities. The expanded hardware coverage is experimental and awaits hardware results.
 - **iwn cards with PAN and P2P** (first targets: 6205 and 6235): connect to a Wi-Fi network on channel 6 and boot with `-itlawdl`. The driver checks firmware and EEPROM capabilities and uses the PAN context on that same channel. AirDrop is experimental and awaits hardware verification.
 

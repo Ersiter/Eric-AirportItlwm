@@ -139,7 +139,7 @@ def page(code, folder, native, hl):
     ]
     cards_html = '\n'.join('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' % (
         '<span class="nw">%s</span>' % g, m, p, h) for g, m, p, h in cards_rows)
-    boot_codes = ['-itlawdl', 'itlwm_he=0']
+    boot_codes = ['-itlawdl', '-itlawdlllw', 'itlwm_he=0', 'itlwm_log=1']
     boot_rows = '\n'.join('<tr><td><code>%s</code></td><td>%s</td></tr>' % (c, md_(e))
                           for c, e in zip(boot_codes, t['boot']))
     cred = '\n'.join('<li>%s</li>' % md_(c) for c in t['cred'])
@@ -150,8 +150,8 @@ def page(code, folder, native, hl):
     st = t['stats']
     th = lambda cols: ''.join('<th>%s</th>' % md_(c) for c in cols)   # noqa: E731
     desc = t['sub'] if code != 'en-US' else (
-        'Native macOS Wi-Fi for Intel cards, from 802.11n to Wi-Fi 7. macOS Tahoe 26 and Sequoia 15, WPA3, 6 GHz, '
-        '802.11be, BE200 / BE201 and every card itlwm supports.')
+        'Native macOS Wi-Fi for Intel cards, from 802.11n to Wi-Fi 7. macOS 14 Sonoma to 27 Golden Gate, WPA3, '
+        '6 GHz, 802.11be, BE200 / BE201 and every card itlwm supports.')
     is_root = not folder
     root_js = '<script>var SITE_ROOT=true;</script>\n' if is_root else ''
 
@@ -204,7 +204,7 @@ def page(code, folder, native, hl):
 <div><dt>{st[2]}</dt><dd><span class="num">1.84</span> <span class="unit">Gbit/s</span></dd></div>
 <div><dt>{st[3]}</dt><dd><span class="num">320</span> <span class="unit">{'ГГц' if code == 'ru' else 'MHz'}</span></dd></div>
 </dl><p class="note">{md_(t['note'])}</p>
-<ul class="chips"><li>macOS 26 Tahoe</li><li>macOS 15.2+ Sequoia</li><li>x86_64</li><li>GPL-2.0</li></ul></div>
+<ul class="chips"><li>macOS 14+ Sonoma</li><li>macOS 15.2+ Sequoia</li><li>macOS 26 Tahoe</li><li>macOS 27 Golden Gate</li><li>x86_64</li><li>GPL-2.0</li></ul></div>
 </section>
 <section class="lineage" id="lineage"><div class="wrap">
 <h2>{md_(t['lin_h2'])}</h2>
@@ -227,7 +227,7 @@ def page(code, folder, native, hl):
 </tbody></table></div><p>{md_(t['cards_p'])}</p></div></section>
 <section id="install"><div class="wrap"><h2>{md_(t['install_h2'])}</h2><ol class="steps">
 {steps}
-</ol><p>{md_(t['country'])}</p>
+</ol>
 <h3>{md_(t['boot_h3'])}</h3><div class="table-wrap"><table><thead><tr>{th(t['th_boot'])}</tr></thead><tbody>
 {boot_rows}
 </tbody></table></div></div></section>
