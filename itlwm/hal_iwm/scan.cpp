@@ -506,6 +506,10 @@ iwm_lmac_scan(struct iwm_softc *sc, int bgscan)
     err = iwm_send_cmd(sc, &hcmd);
     iwm_record_diagnostic(sc, "lmac-scan-request", __FUNCTION__, __LINE__, err,
         channelCount, firstChannel, scanFlags);
+#if DEBUG
+    IOLog("itlwm: %s: LMAC scan request channels=%u first=%u flags=0x%x error=%d\n",
+        DEVNAME(sc), channelCount, firstChannel, scanFlags, err);
+#endif
     ::free(req);
     return err;
 }

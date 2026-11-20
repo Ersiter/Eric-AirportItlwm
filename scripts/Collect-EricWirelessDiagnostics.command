@@ -111,7 +111,7 @@ wifi_interfaces="$(/usr/sbin/networksetup -listallhardwareports 2>/dev/null |
 
 registry_state() {
     /usr/sbin/ioreg -p IOService -l -w 0 2>/dev/null |
-        /usr/bin/grep -aE '"(AirportItlwm-[^"]+|AWDL[^"]*|ITLAWDL[^"]*|BTLEAdv[^"]*|BluetoothFirmwareVersion)"[[:space:]]*=' |
+        /usr/bin/grep -aE '"(AirportItlwm-[^"]+|AWDL[^"]*|ITLAWDL[^"]*|BTLEAdv[^"]*|BluetoothFirmwareVersion|WCLScanLast[^"]*)"[[:space:]]*=' |
         /usr/bin/cut -c 1-2500
 }
 snapshot() {

@@ -1312,6 +1312,10 @@ iwm_rx_pkt(struct iwm_softc *sc, struct iwm_rx_data *data, struct mbuf_list *ml)
                 SYNC_RESP_STRUCT(notif, pkt, struct iwm_periodic_scan_complete *);
                 iwm_record_diagnostic(sc, "lmac-scan-complete", __FUNCTION__, __LINE__, 0,
                     notif->status, notif->last_schedule_iteration, notif->ebs_status);
+#if DEBUG
+                IOLog("itlwm: %s: LMAC scan complete status=%u iteration=%u ebs=%u\n",
+                    DEVNAME(sc), notif->status, notif->last_schedule_iteration, notif->ebs_status);
+#endif
                 if (notif->status == IWM_SCAN_OFFLOAD_COMPLETED)
                     iwm_endscan(sc);
                 break;
