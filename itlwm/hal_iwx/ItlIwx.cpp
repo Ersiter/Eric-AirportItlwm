@@ -11833,6 +11833,9 @@ iwx_awdl_peer_task(void *arg)
                 goto done;
             }
         }
+        // The old queues are drained. A previous transient flush result no
+        // longer blocks the frames waiting for this peer.
+        sc->sc_awdl_peer_error = 0;
         for (int i = 0; i < nitems(sc->sc_rxba_data); i++) {
             struct iwx_rxba_data *rxba = &sc->sc_rxba_data[i];
             if (rxba->baid == IWX_RX_REORDER_DATA_INVALID_BAID ||
@@ -12130,8 +12133,16 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
                 sc->sc_awdl_peer_error = 0;
             }
             if (sc->sc_awdl_peer_error) {
+                const int peerError = sc->sc_awdl_peer_error;
+                if (peerError == EBUSY || peerError == EAGAIN) {
+                    const auto queued = [sc](int qid) { return qid >= 0 && sc->txq[qid].queued; };
+                    if (!queued(sc->sc_awdl_peer_qid) && !queued(sc->sc_awdl_peer_llw_qid) &&
+                        !queued(sc->sc_awdl_peer_mgmt_qid))
+                        task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
+                    return EAGAIN;
+                }
                 iwx_awdl_record_uc(ic, chan, -1, frame, len, 3);
-                return sc->sc_awdl_peer_error;
+                return peerError;
             }
             int peerQid = unicastData ?
                 (llwData ? sc->sc_awdl_peer_llw_qid : sc->sc_awdl_peer_qid) :
