@@ -303,6 +303,7 @@ struct iwn_softc {
 #ifdef AIRPORT_WCL
     bool               pan_sku;
     bool               pan_requested;
+    bool               pan_low_latency;
     bool               pan_task_pending;
     bool               pan_deactivation_pending;
     bool               pan_configured;

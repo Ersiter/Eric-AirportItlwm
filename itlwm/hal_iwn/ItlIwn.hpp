@@ -216,6 +216,7 @@ public:
     static int  iwn_awdl_listen(struct ieee80211com *, uint8_t, uint16_t);
     static int  iwn_awdl_tx(struct ieee80211com *, uint8_t, const uint8_t *, size_t);
     static void iwn_awdl_stop(struct ieee80211com *);
+    static int  iwn_awdl_set_low_latency(struct ieee80211com *, int);
     static void iwn_awdl_pan_task(void *);
     void        iwn_awdl_pan_update(struct iwn_softc *);
     int         iwn_awdl_pan_disable(struct iwn_softc *);

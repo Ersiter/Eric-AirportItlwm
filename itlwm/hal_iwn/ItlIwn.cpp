@@ -669,6 +669,7 @@ iwn_attach(struct iwn_softc *sc, struct pci_attach_args *pa)
             ic->ic_awdl_tx = iwn_awdl_tx;
             ic->ic_awdl_llw_tx = iwn_awdl_tx;
             ic->ic_awdl_stop = iwn_awdl_stop;
+            ic->ic_awdl_set_low_latency = iwn_awdl_set_low_latency;
         }
     }
 #endif
@@ -4569,6 +4570,23 @@ iwn_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     return 0;
 }
 
+int ItlIwn::
+iwn_awdl_set_low_latency(struct ieee80211com *ic, int active)
+{
+    auto *sc = (struct iwn_softc *)IC2IFP(ic)->if_softc;
+    auto *that = container_of(sc, ItlIwn, com);
+    const bool previous = sc->pan_low_latency;
+    sc->pan_low_latency = active != 0;
+    if (ic->ic_state != IEEE80211_S_RUN || !(ic->ic_if.if_flags & IFF_RUNNING) ||
+        sc->calib.state != IWN_CALIB_STATE_RUN || !(ic->ic_flags & IEEE80211_F_PMGTON))
+        return 0;
+    const uint64_t epoch = that->dmaEpoch;
+    int err = that->iwn_set_pslevel(sc, 0, 3, 0);
+    if (err && epoch == that->dmaEpoch)
+        sc->pan_low_latency = previous;
+    return err;
+}
+
 void ItlIwn::
 iwn_awdl_stop(struct ieee80211com *ic)
 {
@@ -5555,6 +5573,11 @@ send:
 int ItlIwn::
 iwn_set_pslevel(struct iwn_softc *sc, int dtim, int level, int async)
 {
+#ifdef AIRPORT_WCL
+    // The PAN shares the radio with the station and needs it awake for LLW.
+    if (sc->pan_low_latency)
+        level = 0;
+#endif
     struct iwn_pmgt_cmd cmd;
     const struct iwn_pmgt *pmgt;
     uint32_t max, skip_dtim;
