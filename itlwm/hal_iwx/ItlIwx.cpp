@@ -11961,11 +11961,12 @@ iwx_awdl_peer_task(void *arg)
             tlc.ht_rates[IWX_TLC_NSS_1][IWX_TLC_MCS_PER_BW_80] =
                 htole16(0x00ff);
             tlc.max_mpdu_len = htole16(3839);
+            // Peer TX can rely on TLC only after the firmware accepts it.
             int tlc_err;
             if (tlc_version == 4) {
                 tlc_err = that->iwx_send_cmd_pdu(sc,
                     IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD),
-                    IWX_CMD_ASYNC, sizeof(tlc), &tlc);
+                    0, sizeof(tlc), &tlc);
             } else {
                 struct iwx_tlc_config_cmd_v6 mld_tlc = {};
                 mld_tlc.sta_mask = htole32(1U << IWX_AWDL_PEER_STA_ID);
@@ -11984,7 +11985,7 @@ iwx_awdl_peer_task(void *arg)
                             htole32(le16toh(tlc.ht_rates[nss][bw]));
                 tlc_err = that->iwx_send_cmd_pdu(sc,
                     IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD),
-                    IWX_CMD_ASYNC, sizeof(mld_tlc), &mld_tlc);
+                    0, sizeof(mld_tlc), &mld_tlc);
             }
             if (generation != sc->sc_generation)
                 return;
