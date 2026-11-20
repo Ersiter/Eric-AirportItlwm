@@ -7,6 +7,11 @@
 
 #include "AirportItlwmV2.hpp"
 #include "AirportItlwmAWDLInterface.hpp"
+
+// Kernel KPI without a header in MacKernelSDK: the interface's extended flags, which decide whether XNU runs
+// neighbour discovery itself (IFEF_IPV6_ND6ALT = 0x40000) or leaves it to an AWDL/NAN manager.
+extern "C" uint32_t ifnet_eflags(ifnet_t);
+extern "C" int ifnet_set_eflags(ifnet_t, uint32_t);
 #include "AirportItlwmSkywalkInterface.hpp"
 #include <HAL/ItlAWDLBootArg.hpp>
 
@@ -244,6 +249,17 @@ attachToDataLinkLayer(IOOptionBits options, void *parameter)
     if (ret == kIOReturnSuccess && getIfnet()) {
         errno_t err = ifnet_set_lladdr(getIfnet(), &fMac, sizeof(fMac));
         AWDL_LOG("lladdr %s err %d", ether_sprintf(fMac.octet), err);
+        /*
+         * XNU leaves the neighbour cache of an AWDL interface to an alternate manager
+         * (IFEF_IPV6_ND6ALT): it installs no fe80::/64 route and never sends a neighbour
+         * solicitation, and wirelessd/wifip2pd's own table was empty in every run, so a
+         * peer's SYN reached this Mac and no SYN-ACK ever left. This driver has no such
+         * manager, so give the kernel the interface back.
+         */
+        const uint32_t eflags = ifnet_eflags(getIfnet());
+        if (eflags & 0x00040000u)
+            ifnet_set_eflags(getIfnet(), eflags & ~0x00040000u);
+        AWDL_LOG("eflags %x -> %x", eflags, ifnet_eflags(getIfnet()));
     }
     return ret;
 }
