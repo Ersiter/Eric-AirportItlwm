@@ -4320,6 +4320,14 @@ iwm_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
         that->iwm_del_task(sc, systq, &sc->chan_ctxt_task);
     }
     
+#ifdef AIRPORT_WCL
+    if (nstate == IEEE80211_S_SCAN && ic->ic_state == IEEE80211_S_SCAN &&
+        (sc->sc_flags & IWM_FLAG_SCANNING) && ic->ic_wcl_scan_requested) {
+        // Let the firmware finish before starting the new request.
+        ic->ic_wcl_scan_restart = true;
+        return 0;
+    }
+#endif
     sc->ns_nstate = nstate;
     sc->ns_arg = arg;
     
@@ -4346,6 +4354,13 @@ iwm_endscan(struct iwm_softc *sc)
     iwm_record_diagnostic(sc, "scan-end", __FUNCTION__, __LINE__, 0, (uint32_t)sc->sc_flags,
         ic->ic_bss ? (uint32_t)ic->ic_bss->ni_rssi : 0, ic->ic_bgscan_fail);
     sc->sc_flags &= ~(IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN);
+#ifdef AIRPORT_WCL
+    if (ic->ic_wcl_scan_restart) {
+        ic->ic_wcl_scan_restart = false;
+        iwm_newstate(ic, IEEE80211_S_SCAN, -1);
+        return;
+    }
+#endif
     ieee80211_end_scan(&ic->ic_if);
 }
 
@@ -4885,7 +4900,7 @@ iwm_stop(struct _ifnet *ifp)
     // Clear software busy state before advertising the stop or starting a new scan.
     ic->ic_flags &= ~(IEEE80211_F_BGSCAN | IEEE80211_F_ASCAN);
     ic->ic_wcl_scan_requested = false;
-    ic->ic_wcl_scan_active = false;
+    ic->ic_wcl_scan_active = ic->ic_wcl_scan_restart = false;
     ic->ic_wcl_scan_ssid_length = 0;
     if (ic->ic_event_handler)
         ic->ic_event_handler(ic, IEEE80211_EVT_DRIVER_STOPPED, NULL);

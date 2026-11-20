@@ -1054,6 +1054,34 @@ processBSDCommand(struct __ifnet *ifp, unsigned int cmd, void *data)
 IOReturn AirportItlwmSkywalkInterface::
 setSCAN_REQ(struct apple80211_scan_data *sd)
 {
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    if (!sd || sd->ssid_len > sizeof(sd->ssid) ||
+        sd->num_channels > nitems(sd->channels) ||
+        sd->scan_type < APPLE80211_SCAN_TYPE_ACTIVE ||
+        sd->scan_type > APPLE80211_SCAN_TYPE_BACKGROUND)
+        return kIOReturnBadArgument;
+
+    AirportWCL::ScanRequest scan = {};
+    scan.type = sd->scan_type;
+    scan.ssidLength = sd->ssid_len;
+    scan.channelCount = sd->num_channels;
+    memcpy(scan.ssid, sd->ssid, scan.ssidLength);
+    memcpy(scan.bssid, sd->bssid.octet, sizeof(scan.bssid));
+    for (unsigned i = 0; i < scan.channelCount; ++i) {
+        const auto &entry = sd->channels[i];
+        if (entry.channel == 0 || entry.channel >= 256)
+            continue;
+        auto channels = (entry.flags & APPLE80211_C_FLAG_6GHZ) ?
+            scan.channels6GHz : scan.channels;
+        setbit(channels, entry.channel);
+    }
+    return _fCommandGate->runAction([](OSObject *, void *owner, void *request, void *, void *) -> IOReturn {
+        auto *self = static_cast<AirportItlwmSkywalkInterface *>(owner);
+        if (self->wclStopping)
+            return kIOReturnNotReady;
+        return self->startWCLScan(*static_cast<AirportWCL::ScanRequest *>(request));
+    }, this, &scan);
+#else
     struct ieee80211com *ic = fHalService->get80211Controller();
 #if 0
     XYLog("%s Type: %u BSS Type: %u PHY Mode: %u Dwell time: %u Rest time: %u Num channels: %u SSID: %s BSSID: %s\n",
@@ -1084,6 +1112,7 @@ setSCAN_REQ(struct apple80211_scan_data *sd)
         scanSource->enable();
     }
     return kIOReturnSuccess;
+#endif
 }
 
 extern OSDictionary *convertScanToDictionary(apple80211_scan_result *a1);

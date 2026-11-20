@@ -1199,11 +1199,8 @@ getCARD_CAPABILITIES(OSObject *object,
     // directed scan (the Personal Hotspot join) unless it is set, and Tahoe's IO80211Family
     // answers type 86 with an unconditional error, so airportd's scan failed with 102 nine times
     // and gave up. With it set they send the ordinary SCAN_REQ (type 10, len 5528) that every
-    // other scan already uses. The pre-WCL branch below has always set the same bit. Set on
-    // macOS 26 only: type 86 on macOS 15 has not been looked at, so its capabilities stay as they were.
-#if __IO80211_TARGET != __MAC_15_2
+    // other scan already uses. Sequoia 15.4.1 also times out on type 86.
     cd->capabilities[9] |= 0x02;
-#endif
     // Apple80211Associate2 filters SAE using both MFP and SAE capabilities.
     if (caps & IEEE80211_C_MFP)
         cd->capabilities[6] |= 0x01;
