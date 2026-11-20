@@ -856,8 +856,8 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     const size_t payload = len - hdr;
     const bool timeline = awTimelineAllowed();
     const uint64_t rxUs = timeline ? hostRxUs(rxi) : 0;
-    trackPeer(af, payload, wh->i_addr2, rxUs, rxi->rxi_chan);
     syncFromFrame(af, payload, wh->i_addr2, rxUs);
+    trackPeer(af, payload, wh->i_addr2, rxUs, rxi->rxi_chan);
 
     fRxAF++;
     noteRxGap(wh->i_addr2, hostUs());
@@ -1692,15 +1692,19 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
                 fPeerPredMiss++;
         }
     }
-    const uint64_t referenceSeen = fPeers[fListenPeer].seenUs;
+    const bool hadReference = peerScheduleFresh(fPeers[fListenPeer], rxUs);
     IEEE80211_ADDR_COPY(&peer.mac, src);
     peer.seenUs = rxUs;
     fPeers[index] = peer;
-    if (!referenceSeen || (rxUs >= referenceSeen && rxUs - referenceSeen >= kPeerReplaceUs))
+    const bool acquiredReference = !hadReference && peerScheduleFresh(peer, rxUs);
+    if (acquiredReference)
         fListenPeer = index;
     fPeerUpdates++;
-    if (!fListenAlignedActive)
-        scheduleAlignedListen(hostUs());
+    // Finish the current TX window, then replace any pending channel hunt.
+    if (!fListenAlignedActive || (acquiredReference && fListenNextHuntGapUs)) {
+        const uint64_t now = hostUs();
+        scheduleAlignedListen(MAX(now, fTxEndUs));
+    }
 }
 
 unsigned AirportItlwmAWDLInterface::
