@@ -866,14 +866,16 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     const bool timeline = awTimelineAllowed();
     const uint64_t rxUs = timeline ? hostRxUs(rxi) : 0;
     syncFromFrame(af, payload, wh->i_addr2, rxUs);
-    trackPeer(af, payload, wh->i_addr2, rxUs, rxi->rxi_chan);
+    const bool receivedOn6GHz = rxi->rxi_band == IEEE80211_CHAN_6GHZ;
+    const unsigned listenChannel = receivedOn6GHz ? 0 : rxi->rxi_chan;
+    trackPeer(af, payload, wh->i_addr2, rxUs, listenChannel);
 
     fRxAF++;
     noteRxGap(wh->i_addr2, hostUs());
-    uint64_t *chanCount = rxi->rxi_chan == 6 ? &fRxAFChan6 :
-        rxi->rxi_chan == 44 ? &fRxAFChan44 :
-        rxi->rxi_chan == 149 ? &fRxAFChan149 : &fRxAFChanOther;
-    if (rxi->rxi_chan == 161)
+    uint64_t *chanCount = listenChannel == 6 ? &fRxAFChan6 :
+        listenChannel == 44 ? &fRxAFChan44 :
+        listenChannel == 149 ? &fRxAFChan149 : &fRxAFChanOther;
+    if (listenChannel == 161)
         fRxAFChan161++;
     bool firstOnChan = (*chanCount)++ == 0;
     // A frame on a social channel is rare and is the result 2b is looking for.
@@ -911,8 +913,11 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     memcpy(meta.addr, wh->i_addr2, sizeof(meta.addr));
     meta.chan.version = APPLE80211_VERSION;
     meta.chan.channel = rxi->rxi_chan;
-    meta.chan.flags = APPLE80211_C_FLAG_20MHZ |
-        (rxi->rxi_chan <= 14 ? APPLE80211_C_FLAG_2GHZ : APPLE80211_C_FLAG_5GHZ);
+    const bool receivedOn2GHz = rxi->rxi_band ?
+        rxi->rxi_band == IEEE80211_CHAN_2GHZ : rxi->rxi_chan <= 14;
+    const uint32_t bandFlag = receivedOn6GHz ? APPLE80211_C_FLAG_6GHZ :
+        receivedOn2GHz ? APPLE80211_C_FLAG_2GHZ : APPLE80211_C_FLAG_5GHZ;
+    meta.chan.flags = APPLE80211_C_FLAG_20MHZ | bandFlag;
     // rxi_rssi is normalized to 0..67 (dBm - IWX_MIN_DBM); the peer manager
     // compares dBm against its threshold.
     meta.rssi = rxi->rxi_rssi - 100;
@@ -1585,8 +1590,11 @@ parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len)
         return false;
     const size_t at = v[1] == 1 ? 1 : 0;
     for (unsigned i = 0; i < 16; i++) {
-        const uint8_t chan = v[6 + i * size + at];
-        peer.channels[i] = chan == 0xff ? 0 : chan;
+        const uint8_t *entry = v + 6 + i * size;
+        const uint8_t chan = entry[at];
+        // The AWDL scheduler can tune 2.4/5 GHz channels only.
+        const bool sixGHz = v[1] == 3 && entry[1] >= 131 && entry[1] <= 137;
+        peer.channels[i] = (sixGHz || chan == 0xff) ? 0 : chan;
     }
     peer.hasChannels = true;
     return true;
@@ -1712,7 +1720,7 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
     }
     if (!sync)
         return;
-    if (known && peerScheduleFresh(old, rxUs)) {
+    if (rxChan && known && peerScheduleFresh(old, rxUs)) {
         if (unsigned predicted = peerChannelAt(old, rxUs)) {
             if (predicted == rxChan)
                 fPeerPredHit++;
@@ -1750,6 +1758,8 @@ ownChannelAt(uint16_t seq) const
         return 0;
     const auto *channels = reinterpret_cast<const apple80211_channel *>(fChanSeq + kChanSeqEntries);
     const auto *c = &channels[channelSequenceIndex(seq)];
+    if (c->flags & APPLE80211_C_FLAG_6GHZ)
+        return 0;
     const ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
     // A standing link cannot follow the system's hopping sequence. Keep idle slots.
     if (c->channel && ic && ic->ic_awdl_listener_chan)
@@ -1819,6 +1829,8 @@ scheduleOwnListen(uint64_t afterUs)
             bool homeAdvertised = false;
             bool has44 = false;
             for (unsigned i = 0; i < fChanSeq[kChanSeqCount]; i++) {
+                if (channels[i].flags & APPLE80211_C_FLAG_6GHZ)
+                    continue;
                 homeAdvertised |= channels[i].channel == home;
                 has44 |= channels[i].channel == 44;
             }
