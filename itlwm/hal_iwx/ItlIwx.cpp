@@ -111,6 +111,7 @@
 #endif
 #include "ItlIwx.hpp"
 #include <HAL/ItlAWDLBootArg.hpp>
+#include <HAL/ItlAWDLRx.hpp>
 
 static bool iwx_awdl_legacy_ba_enabled();
 static bool iwx_awdl_client_enabled();
@@ -6782,17 +6783,14 @@ iwx_awdl_rx_mpdu(struct iwx_softc *sc, const void *pktdata, size_t packet_len)
 
     const struct ieee80211_frame *awh =
         (const struct ieee80211_frame *)((const uint8_t *)pktdata + desc_size);
-    static const uint8_t awdl_bssid[IEEE80211_ADDR_LEN] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
-    const uint8_t *bssid = ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : awdl_bssid;
-    const bool awdlGroup = (awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
-        IEEE80211_IS_MULTICAST(awh->i_addr1) && IEEE80211_ADDR_EQ(awh->i_addr3, bssid);
+    const unsigned padding = (desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) ? 2 : 0;
+    const auto group = itlAWDLClassifyGroupRx(ic, awh, mpdu_len, padding);
     const bool onRoc = !sc->sc_listener_up && sc->sc_aux_roc_running &&
         (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
             desc->v3.channel : desc->v1.channel) == ic->ic_awdl_listen_chan;
-    if (awdlGroup) {
+    itlAWDLCountGroupRx(ic, group, onRoc);
+    if (group == ItlAWDLGroupRx::Data)
         flags |= IWX_AWDL_RX_GROUP_DATA;
-        ic->ic_awdl_fw_group_data[onRoc]++;
-    }
     if (IEEE80211_ADDR_EQ(awh->i_addr1, ic->ic_awdl_addr)) {
         uint8_t at = awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
         flags |= IWX_AWDL_RX_UNICAST;
@@ -6810,23 +6808,12 @@ iwx_awdl_rx_mpdu(struct iwx_softc *sc, const void *pktdata, size_t packet_len)
         const unsigned v = sc->sc_awdl_mc_variant & 3;
         if (sc->sc_awdl_listen_active)
             ic->ic_awdl_fw_mc_mgmt[v]++;
-        const uint8_t subtype = awh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
-        if (subtype == IEEE80211_FC0_SUBTYPE_ACTION ||
-            subtype == IEEE80211_FC0_SUBTYPE_ACTION_NOACK) {
-            const size_t body = ieee80211_get_hdrlen(awh) +
-                ((desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) ? 2 : 0);
-            static const uint8_t awdl_action[] = { IEEE80211_CATEG_VENDOR, 0x00, 0x17, 0xf2, 0x08 };
-            const auto *raw = reinterpret_cast<const uint8_t *>(awh);
-            if (mpdu_len >= body + 16 &&
-                memcmp(raw + body, awdl_action, sizeof(awdl_action)) == 0 &&
-                (raw[body + 6] == 0 || raw[body + 6] == 3)) {
-                ic->ic_awdl_fw_group_sync[onRoc]++;
-                if (!(awh->i_fc[1] & IEEE80211_FC1_PROTECTED) &&
-                    IEEE80211_ADDR_EQ(awh->i_addr3, bssid))
-                    flags |= IWX_AWDL_RX_CLEAR_GROUP_SYNC;
-                if (sc->sc_awdl_listen_active)
-                    ic->ic_awdl_fw_mc_awdl[v]++;
-            }
+        if (group == ItlAWDLGroupRx::Sync) {
+            if (!(awh->i_fc[1] & IEEE80211_FC1_PROTECTED) &&
+                IEEE80211_ADDR_EQ(awh->i_addr3, itlAWDLBssid(ic)))
+                flags |= IWX_AWDL_RX_CLEAR_GROUP_SYNC;
+            if (sc->sc_awdl_listen_active)
+                ic->ic_awdl_fw_mc_awdl[v]++;
         }
     } else if ((awh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
                !IEEE80211_IS_MULTICAST(awh->i_addr1) &&

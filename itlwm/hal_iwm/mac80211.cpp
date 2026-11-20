@@ -121,6 +121,7 @@
 
 #include "ItlIwm.hpp"
 #include <HAL/ItlAWDLBootArg.hpp>
+#include <HAL/ItlAWDLRx.hpp>
 #include <net/ethernet.h>
 #include <IOKit/IOCommandGate.h>
 #include <net80211/ieee80211_priv.h>
@@ -2393,12 +2394,7 @@ iwm_awdl_is_frame(struct iwm_softc *sc, mbuf_t m)
         mtod(m, const struct ieee80211_frame *);
     if (IEEE80211_ADDR_EQ(wh->i_addr1, ic->ic_awdl_addr))
         return true;
-    if (mbuf_len(m) < sizeof(struct ieee80211_frame))
-        return false;
-    return (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA &&
-        IEEE80211_IS_MULTICAST(wh->i_addr1) &&
-        IEEE80211_ADDR_EQ(wh->i_addr3,
-            ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : iwm_awdl_default_bssid);
+    return itlAWDLClassifyGroupRx(ic, wh, mbuf_len(m), 0) != ItlAWDLGroupRx::None;
 }
 
 uint8_t ItlIwm::

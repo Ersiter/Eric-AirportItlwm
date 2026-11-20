@@ -121,6 +121,7 @@
 
 #include "ItlIwm.hpp"
 #include <net80211/ieee80211_priv.h>
+#include <HAL/ItlAWDLRx.hpp>
 
 void ItlIwm::
 iwm_disable_rx_dma(struct iwm_softc *sc)
@@ -1037,6 +1038,25 @@ iwm_rx_pkt(struct iwm_softc *sc, struct iwm_rx_data *data, struct mbuf_list *ml)
         if (len < minsz || len > (IWM_RBUF_SIZE - offset))
             break;
         
+        if (code == IWM_REPLY_RX_MPDU_CMD && sc->sc_ic.ic_awdl_addr_gen) {
+            const size_t payloadLen = len - minsz;
+            if (sc->sc_mqrx_supported && payloadLen >= sizeof(struct iwm_rx_mpdu_desc)) {
+                const auto *desc = reinterpret_cast<const struct iwm_rx_mpdu_desc *>(pkt->data);
+                const size_t frameLen = le16toh(desc->mpdu_len);
+                if (frameLen <= payloadLen - sizeof(*desc)) {
+                    const unsigned padding = (desc->mac_flags2 & IWM_RX_MPDU_MFLG2_PAD) ? 2 : 0;
+                    const bool reversedBssid = desc->mac_flags2 & IWM_RX_MPDU_MFLG2_AMSDU;
+                    itlAWDLCountGroupRx(&sc->sc_ic, itlAWDLClassifyGroupRx(
+                        &sc->sc_ic, desc + 1, frameLen, padding, reversedBssid), false);
+                }
+            } else if (!sc->sc_mqrx_supported && payloadLen >= sizeof(struct iwm_rx_mpdu_res_start) + sizeof(uint32_t)) {
+                const auto *desc = reinterpret_cast<const struct iwm_rx_mpdu_res_start *>(pkt->data);
+                const size_t frameLen = le16toh(desc->byte_count);
+                if (frameLen <= payloadLen - sizeof(*desc) - sizeof(uint32_t))
+                    itlAWDLCountGroupRx(&sc->sc_ic,
+                        itlAWDLClassifyGroupRx(&sc->sc_ic, desc + 1, frameLen, 0), false);
+            }
+        }
         if (code == IWM_REPLY_RX_MPDU_CMD && ++nmpdu == 1) {
             /* Take mbuf m0 off the RX ring. */
             if (iwm_rx_addbuf(sc, IWM_RBUF_SIZE, sc->rxq.cur)) {

@@ -39,6 +39,7 @@
 #endif
 #include "ItlIwn.hpp"
 #include <HAL/ItlAWDLBootArg.hpp>
+#include <HAL/ItlAWDLRx.hpp>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <FwData.h>
@@ -2223,6 +2224,13 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
         len = letoh16(stat->len);
     }
 
+    const size_t frameOffset = head - reinterpret_cast<const char *>(desc);
+    const size_t reportLen = sizeof(desc->len) + (letoh32(desc->len) & IWN_RX_DESC_LEN_MASK);
+    if (reportLen > IWN_RBUF_SIZE || frameOffset + len + sizeof(flags) > reportLen) {
+        ifp->netStat->inputErrors++;
+        return;
+    }
+    itlAWDLCountGroupRx(ic, itlAWDLClassifyGroupRx(ic, head, len, 0), false);
     flags = letoh32(*(uint32_t *)(head + len));
 
     /* Discard frames with a bad FCS early. */
