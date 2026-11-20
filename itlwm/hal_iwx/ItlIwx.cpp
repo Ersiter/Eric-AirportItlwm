@@ -6763,6 +6763,7 @@ iwx_trace_hotspot_rx(struct iwx_softc *sc, struct iwx_rx_mpdu_desc *desc,
 enum : unsigned {
     IWX_AWDL_RX_UNICAST = 1 << 0,
     IWX_AWDL_RX_GROUP_DATA = 1 << 1,
+    IWX_AWDL_RX_CLEAR_GROUP_SYNC = 1 << 2,
 };
 
 static unsigned
@@ -6814,12 +6815,15 @@ iwx_awdl_rx_mpdu(struct iwx_softc *sc, const void *pktdata, size_t packet_len)
             subtype == IEEE80211_FC0_SUBTYPE_ACTION_NOACK) {
             const size_t body = ieee80211_get_hdrlen(awh) +
                 ((desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) ? 2 : 0);
-            static const uint8_t awdl_action[] = { 127, 0x00, 0x17, 0xf2, 0x08 };
+            static const uint8_t awdl_action[] = { IEEE80211_CATEG_VENDOR, 0x00, 0x17, 0xf2, 0x08 };
             const auto *raw = reinterpret_cast<const uint8_t *>(awh);
             if (mpdu_len >= body + 16 &&
                 memcmp(raw + body, awdl_action, sizeof(awdl_action)) == 0 &&
                 (raw[body + 6] == 0 || raw[body + 6] == 3)) {
                 ic->ic_awdl_fw_group_sync[onRoc]++;
+                if (!(awh->i_fc[1] & IEEE80211_FC1_PROTECTED) &&
+                    IEEE80211_ADDR_EQ(awh->i_addr3, bssid))
+                    flags |= IWX_AWDL_RX_CLEAR_GROUP_SYNC;
                 if (sc->sc_awdl_listen_active)
                     ic->ic_awdl_fw_mc_awdl[v]++;
             }
@@ -6990,9 +6994,9 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
      * the TID supplied in QoS frame headers and this TID is implicitly
      * verified as part of the CCMP nonce.
      */
-    if (!awdlUc && !awdlGroup && iwx_rx_hwdecrypt(sc, m, le16toh(desc->status), &rxi)) {
-        if (awdlUc)
-            ic->ic_awdl_fw_uc_drop_decrypt++;
+    // AWDL discovery uses unprotected vendor actions outside the AP's PMF context.
+    if (!awdlUc && !awdlGroup && !(awdl_flags & IWX_AWDL_RX_CLEAR_GROUP_SYNC) &&
+        iwx_rx_hwdecrypt(sc, m, le16toh(desc->status), &rxi)) {
         mbuf_freem(m);
         return;
     }
