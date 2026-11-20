@@ -6785,9 +6785,17 @@ iwx_awdl_rx_mpdu(struct iwx_softc *sc, const void *pktdata, size_t packet_len)
         (const struct ieee80211_frame *)((const uint8_t *)pktdata + desc_size);
     const unsigned padding = (desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) ? 2 : 0;
     const auto group = itlAWDLClassifyGroupRx(ic, awh, mpdu_len, padding);
-    const bool onRoc = !sc->sc_listener_up && sc->sc_aux_roc_running &&
-        (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
-            desc->v3.channel : desc->v1.channel) == ic->ic_awdl_listen_chan;
+    const uint8_t channel = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+        desc->v3.channel : desc->v1.channel;
+    bool onRoc = !sc->sc_listener_up && sc->sc_aux_roc_running &&
+        channel == ic->ic_awdl_listen_chan;
+    if (onRoc && isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_BAND_IN_RX_DATA)) {
+        const uint8_t rxBand = (desc->mac_phy_idx & IWX_RX_MPDU_BAND_MASK) >>
+            IWX_RX_MPDU_BAND_POS;
+        // AWDL listen channels use the 2.4/5 GHz channel table entries.
+        const uint8_t listenBand = channel > 14 ? IWX_PHY_BAND_5 : IWX_PHY_BAND_24;
+        onRoc = rxBand == listenBand;
+    }
     itlAWDLCountGroupRx(ic, group, onRoc);
     if (group == ItlAWDLGroupRx::Data)
         flags |= IWX_AWDL_RX_GROUP_DATA;
@@ -6799,8 +6807,7 @@ iwx_awdl_rx_mpdu(struct iwx_softc *sc, const void *pktdata, size_t packet_len)
         else
             ic->ic_awdl_fw_uc_mgmt++;
         ic->ic_awdl_fw_uc_last_fc = (uint16_t)(awh->i_fc[0] | (awh->i_fc[1] << 8));
-        ic->ic_awdl_fw_uc_last_chan = (uint8_t)(sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
-                                                desc->v3.channel : desc->v1.channel);
+        ic->ic_awdl_fw_uc_last_chan = channel;
         if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)))
             ic->ic_awdl_fw_uc_badcrc++;
     } else if (IEEE80211_IS_MULTICAST(awh->i_addr1) &&
