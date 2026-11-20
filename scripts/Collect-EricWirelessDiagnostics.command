@@ -62,7 +62,7 @@ boot_build="$(/usr/bin/sw_vers -buildVersion)"
 os_version="$(/usr/bin/sw_vers -productVersion)"
 (
     ulimit -f 256
-    echo "Collector revision: 4"
+    echo "Collector revision: 5"
     echo "Report: $focus"
     stamp
     /usr/bin/sw_vers
@@ -122,6 +122,10 @@ snapshot() {
         /sbin/ifconfig -v "$interface"
         /usr/sbin/netstat -I "$interface" -b
     done
+    if [ "$focus" = continuity ] && /sbin/ifconfig awdl0 >/dev/null 2>&1; then
+        echo '[Group memberships on awdl0]'
+        /usr/sbin/netstat -g -I awdl0 -v
+    fi
     echo '[IPv6 neighbours, routes and AirDrop connections on awdl0/llw0]'
     /usr/sbin/ndp -an 2>&1 | /usr/bin/grep -E 'Neighbor|awdl0|llw0'
     /usr/sbin/netstat -rn -f inet6 2>&1 | /usr/bin/grep -E 'awdl0|llw0'
@@ -160,7 +164,7 @@ stream_pid=$!
         for interface in $wifi_interfaces awdl0; do
             /usr/sbin/netstat -I "$interface" -b 2>&1 | /usr/bin/tail -n 2
         done
-        registry_state | /usr/bin/grep -aE 'Listener|Peer|AirDrop|Frame|Data|AWDL(Fw|Rx)Group|Status|Error|Scan|Join|Associate|Country|WCL' |
+        registry_state | /usr/bin/grep -aE 'Listener|Peer|AirDrop|Frame|Data|AWDL((Fw|Rx)Group|Listen(Rx|ByChan)|Roc(Started|Ended|Rx|LastUs))|Status|Error|Scan|Join|Associate|Country|WCL' |
             /usr/bin/cut -c 1-250
         /bin/sleep 5
     done
