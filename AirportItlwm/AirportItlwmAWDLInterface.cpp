@@ -869,23 +869,28 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     bool firstOnChan = (*chanCount)++ == 0;
     // A frame on a social channel is rare and is the result 2b is looking for.
     bool socialChan = chanCount != &fRxAFChanOther;
-    // XYLog goes to kprintf, so publish progress where ioreg can see it.
-    if (firstOnChan || socialChan || fRxAF <= 8 || (fRxAF & 0xf) == 0) {
-        publishListenState();
-        setProperty("AWDLRxFrames", fRxAF, 64);
-        setProperty("AWDLRxDropped", fRxAFDropped, 64);
-        setProperty("AWDLRxLastChannel", rxi->rxi_chan, 32);
-    }
-
+    const bool groupSync = IEEE80211_IS_MULTICAST(wh->i_addr1) && (af[6] == 0 || af[6] == 3);
     AWDLBufferPoolABI *pool = awdlMgmtPool(this, fController);
     AWDLBufferABI *buf = pool ? awdlBufGet(pool) : nullptr;
-    if (!buf) {
-        fRxAFDropped++;
-        return 1;
-    }
-    if (payload > awdlBufCapacity(buf)) {
+    if (buf && payload > awdlBufCapacity(buf)) {
         awdlBufReturn(buf);
+        buf = nullptr;
+    }
+    if (!buf)
         fRxAFDropped++;
+    else if (groupSync)
+        fRxGroupSync++;
+
+    const auto publishRx = [&] {
+        if (firstOnChan || socialChan || groupSync || fRxAF <= 8 || (fRxAF & 0xf) == 0) {
+            publishListenState();
+            setProperty("AWDLRxFrames", fRxAF, 64);
+            setProperty("AWDLRxDropped", fRxAFDropped, 64);
+            setProperty("AWDLRxLastChannel", rxi->rxi_chan, 32);
+        }
+    };
+    if (!buf) {
+        publishRx();
         return 1;
     }
     // Copied verbatim: bytes 8..15 are phy_tx_time / target_tx_time, which the
@@ -912,10 +917,9 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
         snprintf(hv, sizeof(hv), "%02x%02x%02x", af[5], af[6], af[7]);
         setProperty("AWDLRxHdrVer", hv);
     }
-    if (IEEE80211_IS_MULTICAST(wh->i_addr1) && (af[6] == 0 || af[6] == 3))
-        fRxGroupSync++;
     // Consumes buf (peer manager input + bpf, then returnBuffer).
     awdlBufSubmit(this, buf, &meta, sizeof(meta));
+    publishRx();
     return 1;
 }
 
@@ -1471,6 +1475,11 @@ publishListenState()
     setProperty("AWDLRocRxHome", ic->ic_awdl_roc_rx_home, 32);
     setProperty("AWDLRocRxOther", ic->ic_awdl_roc_rx_other, 32);
     setProperty("AWDLRocRxLastChannel", ic->ic_awdl_roc_rx_last_chan, 32);
+    setProperty("AWDLFwGroupSyncROC", ic->ic_awdl_fw_group_sync[1], 32);
+    setProperty("AWDLFwGroupDataROC", ic->ic_awdl_fw_group_data[1], 32);
+    setProperty("AWDLFwGroupSyncOutsideROC", ic->ic_awdl_fw_group_sync[0], 32);
+    setProperty("AWDLFwGroupDataOutsideROC", ic->ic_awdl_fw_group_data[0], 32);
+    setProperty("AWDLRxGroupSync", fRxGroupSync, 32);
 }
 
 static bool
@@ -2608,11 +2617,6 @@ publishTxState()
     setProperty("AWDLFwUcMgmt", ic->ic_awdl_fw_uc_mgmt, 32);
     setProperty("AWDLFwUcData", ic->ic_awdl_fw_uc_data, 32);
     setProperty("AWDLFwUcBadCrc", ic->ic_awdl_fw_uc_badcrc, 32);
-    setProperty("AWDLFwGroupSyncROC", ic->ic_awdl_fw_group_sync[1], 32);
-    setProperty("AWDLFwGroupDataROC", ic->ic_awdl_fw_group_data[1], 32);
-    setProperty("AWDLFwGroupSyncOutsideROC", ic->ic_awdl_fw_group_sync[0], 32);
-    setProperty("AWDLFwGroupDataOutsideROC", ic->ic_awdl_fw_group_data[0], 32);
-    setProperty("AWDLRxGroupSync", fRxGroupSync, 32);
     {
         char mc[160];
         snprintf(mc, sizeof(mc), "v0:%u/%u v1:%u/%u v2:%u/%u v3:%u/%u",

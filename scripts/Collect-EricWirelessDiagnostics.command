@@ -62,7 +62,7 @@ boot_build="$(/usr/bin/sw_vers -buildVersion)"
 os_version="$(/usr/bin/sw_vers -productVersion)"
 (
     ulimit -f 256
-    echo "Collector revision: 5"
+    echo "Collector revision: 6"
     echo "Report: $focus"
     stamp
     /usr/bin/sw_vers
@@ -164,7 +164,7 @@ stream_pid=$!
         for interface in $wifi_interfaces awdl0; do
             /usr/sbin/netstat -I "$interface" -b 2>&1 | /usr/bin/tail -n 2
         done
-        registry_state | /usr/bin/grep -aE 'Listener|Peer|AirDrop|Frame|Data|AWDL((Fw|Rx)Group|Listen(Rx|ByChan)|Roc(Started|Ended|Rx|LastUs))|Status|Error|Scan|Join|Associate|Country|WCL' |
+        registry_state | /usr/bin/grep -aE 'Listener|Peer|AirDrop|Frame|Data|AWDL(FwGroup|Rx(Group|Dropped)|Listen(Rx|ByChan)|Roc(Started|Ended|Rx|LastUs))|Status|Error|Scan|Join|Associate|Country|WCL' |
             /usr/bin/cut -c 1-250
         /bin/sleep 5
     done
