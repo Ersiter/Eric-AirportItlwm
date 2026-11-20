@@ -1804,34 +1804,43 @@ scheduleOwnListen(uint64_t afterUs)
     for (int i = 0; i < 32; i++, k++) {
         uint16_t seq = (uint16_t)(fRefSeq + k * pm);
         uint8_t chan = ownChannelAt(seq);
-        bool fromPeer = false;
-        if (homeOnly && usePeer &&
-            peerChannelAt(peer, (uint64_t)(fRefUs + k * slot + slot / 2)) != home)
-            continue;
-        if (!homeOnly && (!chan || (chan == home && !allowHome)) && usePeer) {
-            unsigned pc = peerChannelAt(peer, (uint64_t)(fRefUs + k * slot + slot / 2));
-            if (pc && (pc != home || allowHome)) {
-                chan = (uint8_t)pc;
-                fromPeer = true;
+        const int64_t slotStart = fRefUs + k * slot;
+        int64_t listenStart = slotStart, listenEnd = slotStart + slot;
+        const uint8_t listener = ic->ic_awdl_listener_chan;
+        const bool peerWindow = usePeer && (homeOnly || !chan || (chan == home && !allowHome));
+        if (peerWindow) {
+            // A peer slot can begin anywhere in our slot. Use the overlap with
+            // its actual channel rather than listening on the midpoint's channel early.
+            chan = 0;
+            for (int64_t t = slotStart; t < slotStart + slot;) {
+                const int64_t peerSlot = floorDiv(t - peer.refUs, peer.slotUs);
+                const int64_t end = MIN(slotStart + slot, peer.refUs + (peerSlot + 1) * peer.slotUs);
+                const unsigned pc = peerChannelAt(peer, (uint64_t)t);
+                if (end - t >= 8 * 1024 && pc && (allowHome || pc != home) &&
+                    (!homeOnly || pc == home) && (!listener || pc == listener)) {
+                    chan = (uint8_t)pc;
+                    listenStart = t;
+                    listenEnd = end;
+                    break;
+                }
+                t = end;
             }
         }
-        if (!chan || (!allowHome && chan == home) ||
-            (ic->ic_awdl_listener_chan && chan != ic->ic_awdl_listener_chan))
+        if (!chan || (!allowHome && chan == home) || (listener && chan != listener))
             continue;
-        unsigned run = 1;
-        if (!fromPeer) {
+        if (peerWindow) {
+            fListenPeerSlots++;
+        } else {
+            unsigned run = 1;
             while (run < 16 && ownChannelAt((uint16_t)(seq + run * pm)) == chan)
                 run++;
+            listenEnd = slotStart + run * slot;
         }
-        if (fromPeer)
-            fListenPeerSlots++;
-        uint32_t dwell = (uint32_t)((run * slot + kListenLeadUs) / 1024);
-        if (dwell > fListenDwellTU)
-            dwell = fListenDwellTU;
+        const uint32_t dwell = (uint32_t)((listenEnd - listenStart + kListenLeadUs) / 1024);
         fListenNextChan = chan;
-        fListenNextDwellTU = dwell;
+        fListenNextDwellTU = MIN(dwell, fListenDwellTU);
         uint64_t abs;
-        nanoseconds_to_absolutetime((uint64_t)(fRefUs + k * slot - kListenLeadUs) * 1000, &abs);
+        nanoseconds_to_absolutetime((uint64_t)(listenStart - kListenLeadUs) * 1000, &abs);
         fListenTimer->cancelTimeout();
         fListenTimer->wakeAtTime(abs);
         fListenAlignedActive = true;
@@ -1992,11 +2001,15 @@ txTimerFired(OSObject *owner, IOTimerEventSource *)
     that->fTxPollUs = 0;
     uint64_t elapsed = now > that->fTxSlotUs ? now - that->fTxSlotUs : 0;
     if ((that->fTxPending & kTxPendingPSF) && elapsed >= kTxPSFAtUs) {
+        int err = 0;
         if (that->fAfTxMode == 3 && !that->isSyncMaster())
             that->fTxSkipMode++;
         else if (that->fSyncTmplLen)
-            that->sendAWDLFrame(false, that->fTxChan, nullptr, that->fSyncTmpl, that->fSyncTmplLen);
-        that->fTxPending &= ~kTxPendingPSF;
+            err = that->sendAWDLFrame(false, that->fTxChan, nullptr, that->fSyncTmpl, that->fSyncTmplLen);
+        if (err == EAGAIN || err == EBUSY || err == ENOBUFS)
+            that->fTxPollUs = now + 1024;
+        else
+            that->fTxPending &= ~kTxPendingPSF;
     }
     if ((that->fTxPending & kTxPendingMI) && elapsed >= that->fTxMIOffsetUs) {
         int err = 0;
