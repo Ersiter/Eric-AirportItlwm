@@ -1827,8 +1827,11 @@ iwx_mld_queue_cmd(struct iwx_softc *sc, uint32_t sta_mask, int tid, int remove,
     err = iwx_send_cmd(sc, &hcmd);
     if (err)
         return err;
+    /* Only the infrastructure STA's queues participate in MLO link changes. */
+    const bool infrastructure = sta_mask & (sc->sc_mld_sta_mask | (1U << IWX_STATION_ID));
     if (remove) {
-        sc->sc_mld_txq_tidmask &= ~(1U << tid);
+        if (infrastructure)
+            sc->sc_mld_txq_tidmask &= ~(1U << tid);
         return 0;
     }
 
@@ -1840,7 +1843,8 @@ iwx_mld_queue_cmd(struct iwx_softc *sc, uint32_t sta_mask, int tid, int remove,
         struct iwx_tx_queue_cfg_rsp *resp = (struct iwx_tx_queue_cfg_rsp *)pkt->data;
         *qid = le16toh(resp->queue_number);
         *write_pointer = le16toh(resp->write_pointer);
-        sc->sc_mld_txq_tidmask |= (1U << tid);
+        if (infrastructure)
+            sc->sc_mld_txq_tidmask |= (1U << tid);
     }
     iwx_free_resp(sc, &hcmd);
     return err;
