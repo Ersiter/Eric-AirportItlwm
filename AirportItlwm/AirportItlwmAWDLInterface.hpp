@@ -273,12 +273,13 @@ private:
     void postPeerCacheCompletions();
     uint32_t fEncryptionType;
     uint64_t fDataTxNotCommon;      // data held: peer not on our channel now
-    void startListen(unsigned chan, uint32_t dwellTU, unsigned home, bool aligned);
+    int startListen(unsigned chan, uint32_t dwellTU, unsigned home, bool aligned);
     IOTimerEventSource *fListenTimer;
     uint32_t fListenAlign;          // AWDLListenAlign
     bool fListenAlignedActive;      // the listen timer drives the listens
     uint8_t fListenNextChan;
     uint32_t fListenNextDwellTU;
+    uint64_t fListenNextEndUs;
     uint64_t fListenAligned;
     uint64_t fListenNoSlot;
     uint64_t fListenHunt;
