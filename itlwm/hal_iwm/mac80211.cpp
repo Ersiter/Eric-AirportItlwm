@@ -4321,9 +4321,15 @@ iwm_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
     }
     
 #ifdef AIRPORT_WCL
-    if (nstate == IEEE80211_S_SCAN && (sc->sc_flags & IWM_FLAG_SCANNING) &&
-        ieee80211_wcl_queue_foreground_scan(ic))
-        return 0;
+    if (nstate == IEEE80211_S_SCAN && ic->ic_state == IEEE80211_S_SCAN &&
+        (sc->sc_flags & IWM_FLAG_SCANNING)) {
+        if (ic->ic_wcl_join_requested && !ic->ic_wcl_scan_requested) {
+            ic->ic_wcl_scan_restart = true;
+            return 0;
+        }
+        if (ieee80211_wcl_queue_foreground_scan(ic))
+            return 0;
+    }
 #endif
     sc->ns_nstate = nstate;
     sc->ns_arg = arg;
@@ -4352,10 +4358,14 @@ iwm_endscan(struct iwm_softc *sc)
         ic->ic_bss ? (uint32_t)ic->ic_bss->ni_rssi : 0, ic->ic_bgscan_fail);
     sc->sc_flags &= ~(IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN);
 #ifdef AIRPORT_WCL
-    if (ieee80211_wcl_take_scan_restart(ic)) {
+    const bool joinRestart = ic->ic_wcl_join_requested &&
+        !ic->ic_wcl_scan_requested && ic->ic_wcl_scan_restart;
+    if (joinRestart || ieee80211_wcl_take_scan_restart(ic)) {
+        ic->ic_wcl_scan_restart = false;
         iwm_newstate(ic, IEEE80211_S_SCAN, -1);
         return;
     }
+    ic->ic_wcl_scan_restart = false;
 #endif
     ieee80211_end_scan(&ic->ic_if);
 }

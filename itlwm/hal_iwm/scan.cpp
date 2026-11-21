@@ -179,7 +179,8 @@ iwm_lmac_scan_fill_channels(struct iwm_softc *sc,
 #ifdef AIRPORT_WCL
         if (!AirportWCL::scanChannelSelected(ic->ic_wcl_scan_channels,
                 ic->ic_wcl_scan_channels6GHz, IEEE80211_IS_CHAN_6GHZ(c),
-                ic->ic_wcl_scan_requested && ic->ic_wcl_scan_restricted,
+                (ic->ic_wcl_scan_requested || (ic->ic_wcl_join_requested && !bgscan)) &&
+                    ic->ic_wcl_scan_restricted,
                 ieee80211_chan2number(ic, c)))
             continue;
 #endif
@@ -219,7 +220,8 @@ iwm_umac_scan_fill_channels(struct iwm_softc *sc,
 #ifdef AIRPORT_WCL
         if (!AirportWCL::scanChannelSelected(ic->ic_wcl_scan_channels,
                 ic->ic_wcl_scan_channels6GHz, IEEE80211_IS_CHAN_6GHZ(c),
-                ic->ic_wcl_scan_requested && ic->ic_wcl_scan_restricted,
+                (ic->ic_wcl_scan_requested || (ic->ic_wcl_join_requested && !bgscan)) &&
+                    ic->ic_wcl_scan_restricted,
                 ieee80211_chan2number(ic, c)))
             continue;
 #endif
