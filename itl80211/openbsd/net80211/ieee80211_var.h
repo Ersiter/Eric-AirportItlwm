@@ -631,6 +631,7 @@ struct ieee80211com {
                         const uint8_t *frame, size_t len);
     int             (*ic_awdl_llw_tx)(struct ieee80211com *, uint8_t chan,
                         const uint8_t *frame, size_t len);
+    uint8_t         ic_awdl_tx_qos;    /* backend has a peer TID 0 aggregation queue */
     uint8_t         ic_awdl_llw_qos;    /* the firmware uses a dedicated LLW TID */
     void            (*ic_awdl_peer_cache)(struct ieee80211com *, uint32_t,
                         const uint8_t *);

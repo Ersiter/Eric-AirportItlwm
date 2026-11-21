@@ -2479,7 +2479,9 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
             err = EINVAL;
         } else {
             const bool group = IEEE80211_IS_MULTICAST(eh);
-            qos = lowLatency && ic->ic_awdl_llw_qos && !group;
+            // Normal AWDL unicast uses TID 0 so a peer ADDBA can select the
+            // backend's existing aggregation queue; LLW keeps its TID 6.
+            qos = !group && (lowLatency ? ic->ic_awdl_llw_qos : ic->ic_awdl_tx_qos);
             const size_t overhead = header + (qos ? 2 : 0);
             if (!group && !peerWaiting &&
                 (!fTxPeerUs || now - fTxPeerUs > kPeerReplaceUs || IEEE80211_ADDR_EQ(&fTxPeer, eh))) {
@@ -2505,11 +2507,11 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
                 IEEE80211_ADDR_COPY(wh->i_addr1, eh);
                 IEEE80211_ADDR_COPY(wh->i_addr2, &fMac);
                 IEEE80211_ADDR_COPY(wh->i_addr3, ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : kAWDLBssid);
-                const uint16_t sequence = (uint16_t)((qos ? fLowLatencySeq : fTxSeq) << 4);
+                const uint16_t sequence = (uint16_t)(((qos && lowLatency) ? fLowLatencySeq : fTxSeq) << 4);
                 wh->i_seq[0] = sequence & 0xff;
                 wh->i_seq[1] = sequence >> 8;
                 if (qos)
-                    frame[hdr] = 6;
+                    frame[hdr] = lowLatency ? 6 : 0;
                 uint8_t *snap = frame + hdr + (qos ? 2 : 0);
                 snap[0] = 0xaa; snap[1] = 0xaa; snap[2] = 0x03;
                 if (lowLatency) {
@@ -2542,7 +2544,7 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
             else if (ifp)
                 ifnet_stat_increment_out(ifp, 0, 1, 0);
         } else {
-            if (qos)
+            if (qos && lowLatency)
                 fLowLatencySeq++;
             else
                 fTxSeq++;

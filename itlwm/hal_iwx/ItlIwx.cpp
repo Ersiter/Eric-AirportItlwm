@@ -5806,6 +5806,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
     sc->sc_ic.ic_awdl_stop = sc->sc_use_mld_api ? iwx_awdl_stop : NULL;
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
     sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_peer_cache : NULL;
+    sc->sc_ic.ic_awdl_tx_qos = sc->sc_use_mld_api ? 1 : 0;
 #ifdef AIRPORT_VTD
     sc->sc_ic.ic_defer_eapol_key_input = sc->sc_use_mld_api ?
         iwx_defer_eapol_key_input : NULL;
@@ -12004,15 +12005,22 @@ iwx_awdl_peer_task(void *arg)
         if (tlc_version == 4 || tlc_version == 6) {
             struct iwx_tlc_config_cmd_v4 tlc = {};
             tlc.sta_id = IWX_AWDL_PEER_STA_ID;
-            tlc.max_ch_width = IWX_TLC_MNG_CH_WIDTH_20MHZ;
-            tlc.mode = IWX_TLC_MNG_MODE_HT;
             const uint8_t tx_ant = that->iwx_fw_valid_tx_ant(sc);
+            const bool wide = sc->sc_listener_phy.mld_width == IEEE80211_CHAN_WIDTH_80;
+            tlc.max_ch_width = wide ? IWX_TLC_MNG_CH_WIDTH_80MHZ : IWX_TLC_MNG_CH_WIDTH_20MHZ;
+            tlc.mode = wide ? IWX_TLC_MNG_MODE_VHT : IWX_TLC_MNG_MODE_HT;
             tlc.chains = ((tx_ant & IWX_ANT_A) ? IWX_TLC_MNG_CHAIN_A_MSK : 0) |
                 ((tx_ant & IWX_ANT_B) ? IWX_TLC_MNG_CHAIN_B_MSK : 0);
+            if (wide)
+                tlc.sgi_ch_width_supp = (1 << IWX_TLC_MNG_CH_WIDTH_20MHZ) |
+                    (1 << IWX_TLC_MNG_CH_WIDTH_40MHZ) |
+                    (1 << IWX_TLC_MNG_CH_WIDTH_80MHZ);
             tlc.non_ht_rates = htole16(IEEE80211_IS_CHAN_2GHZ(
                 sc->sc_listener_phy.channel) ? 0x0fff : 0x0ff0);
-            tlc.ht_rates[IWX_TLC_NSS_1][IWX_TLC_MCS_PER_BW_80] =
-                htole16(0x00ff);
+            const uint16_t mcs = wide ? 0x03ff : 0x00ff;
+            tlc.ht_rates[IWX_TLC_NSS_1][IWX_TLC_MCS_PER_BW_80] = htole16(mcs);
+            if ((tx_ant & IWX_ANT_A) && (tx_ant & IWX_ANT_B))
+                tlc.ht_rates[IWX_TLC_NSS_2][IWX_TLC_MCS_PER_BW_80] = htole16(mcs);
             tlc.max_mpdu_len = htole16(3839);
             // Peer TX can rely on TLC only after the firmware accepts it.
             int tlc_err;
