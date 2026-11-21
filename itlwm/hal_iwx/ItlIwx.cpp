@@ -7407,24 +7407,33 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
             }
         }
         if (iwx_awdl_tx_queue(sc, qid)) {
-            /* AWDL/LLW frames sent through P2P listener and peer queues. */
             const uint16_t txStatus = le16toh(tx_resp->status.status);
-            int st = txStatus & IWX_TX_STATUS_MSK;
-            if (iwx_tx_status_is_acked(txStatus)) {
-                sc->sc_ic.ic_awdl_tx_ok++;
-                if (st == IWX_TX_STATUS_SUCCESS && txd->type == IEEE80211_FC0_TYPE_MGT) {
-                    const auto &cmd = ring->cmd[(idx + ring->ring_count - 1) % ring->ring_count];
-                    const size_t txSize = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
-                        sizeof(struct iwx_tx_cmd_gen3) : sizeof(struct iwx_tx_cmd_gen2);
-                    const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(cmd.data + txSize);
-                    ieee80211_awdl_report_umi_ack(&sc->sc_ic, wh, txd->m);
+            const int st = txStatus & IWX_TX_STATUS_MSK;
+            const int last = (idx + ring->ring_count - 1) % ring->ring_count;
+            const int first = sc->sc_use_mld_api ? ring->tail : last;
+            txd = &ring->data[first];
+            const size_t txSize = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+                sizeof(struct iwx_tx_cmd_gen3) : sizeof(struct iwx_tx_cmd_gen2);
+            // iwl_mld_handle_tx_resp: the reported status belongs to the first
+            // reclaimed frame. A later frame in the same batch was already ACKed.
+            for (int slot = first; slot != idx; slot = (slot + 1) % ring->ring_count) {
+                const auto &completed = ring->data[slot];
+                if (!completed.m)
+                    continue;
+                if (slot == first && !iwx_tx_status_is_acked(txStatus)) {
+                    sc->sc_ic.ic_awdl_tx_fail++;
+                    sc->sc_ic.ic_awdl_tx_last_status = st;
+                    continue;
                 }
-                if (st == IWX_TX_STATUS_SUCCESS &&
-                    (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid))
+                sc->sc_ic.ic_awdl_tx_ok++;
+                if (slot == first && st != IWX_TX_STATUS_SUCCESS)
+                    continue;
+                if (completed.type == IEEE80211_FC0_TYPE_MGT) {
+                    const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(ring->cmd[slot].data + txSize);
+                    ieee80211_awdl_report_umi_ack(&sc->sc_ic, wh, completed.m);
+                }
+                if (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid)
                     sc->sc_listener_last_data_us = iwx_uptime_us();
-            } else {
-                sc->sc_ic.ic_awdl_tx_fail++;
-                sc->sc_ic.ic_awdl_tx_last_status = st;
             }
             if (!sc->sc_use_mld_api && (le16toh(tx_resp->frame_ctrl) & 0x0c) == 0x08) {
                 if (st == IWX_TX_STATUS_SUCCESS) {
