@@ -441,8 +441,6 @@ iwm_lmac_scan(struct iwm_softc *sc, int bgscan)
         req->scan_flags |= htole32(IWM_LMAC_SCAN_FLAG_FRAGMENTED);
         req->scan_flags &= ~htole32(IWM_LMAC_SCAN_FLAG_EXTENDED_DWELL);
     }
-    if (scanActive && scanSSIDLength == 0)
-        req->scan_flags &= ~htole32(IWM_LMAC_SCAN_FLAG_EXTENDED_DWELL);
 #endif
     if (!scanActive)
         req->scan_flags |= htole32(IWM_LMAC_SCAN_FLAG_PASSIVE);
@@ -462,7 +460,7 @@ iwm_lmac_scan(struct iwm_softc *sc, int bgscan)
     req->tx_cmd[0].tx_flags = htole32(IWM_TX_CMD_FLG_SEQ_CTL |
                                       IWM_TX_CMD_FLG_BT_DIS);
     req->tx_cmd[0].rate_n_flags =
-    iwm_scan_rate_n_flags(sc, IEEE80211_CHAN_2GHZ, 1/*XXX*/);
+    iwm_scan_rate_n_flags(sc, IEEE80211_CHAN_2GHZ, 0);
     req->tx_cmd[0].sta_id = IWM_AUX_STA_ID;
     
     /* Tx flags 5 GHz. */
