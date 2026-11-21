@@ -238,7 +238,9 @@ private:
     static bool parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len);
     static unsigned peerChannelAt(const PeerSchedule &peer, uint64_t us);
     static bool peerScheduleFresh(const PeerSchedule &peer, uint64_t us);
+    PeerSchedule &peerRecord(const uint8_t *address);
     const PeerSchedule *findPeerSchedule(const uint8_t *address, uint64_t us) const;
+    uint8_t observedPeerChannel(uint64_t now, const uint8_t *address = nullptr) const;
     bool canSendData(const uint8_t *address, uint8_t chan, uint64_t now) const;
     const PeerSchedule *preferredPeerSchedule(uint64_t now) const;
     void updatePeerChannels(ieee80211com *ic, uint64_t now) const;
@@ -287,6 +289,8 @@ private:
     struct PeerSchedule {
         ether_addr mac;
         uint64_t seenUs;
+        uint64_t dataRxUs;
+        uint8_t dataRxChannel;
         int64_t refUs;
         uint16_t refSeq, pm;
         uint32_t slotUs;
@@ -356,8 +360,6 @@ public:
     uint64_t fDataRxNoBuf;
     uint32_t fDataRxLastLen;
     uint16_t fDataRxLastType;
-    uint64_t fDataRxUnicastUs;
-    uint8_t fDataRxUnicastChannel;
     // Neighbour solicitations handed to the stack for a peer's first IPv6 frame (seeded), left out because the
     // peer was seeded recently (skipped), or that could not be built (failed).
     uint32_t fNdSeeded, fNdSeedSkipped, fNdSeedFailed;
@@ -375,6 +377,7 @@ public:
     volatile uint32_t fRxIpCount;
     uint32_t fRxGroupData, fRxGroupUdp5353;
     void publishDataState();
+    void noteDataPeer(const uint8_t *address, uint8_t channel);
     // Ethernet frames from awdl0, sent as AWDL data frames during a dwell.
     void enqueueData(mbuf_t m);
     void kickDataTx(uint64_t now);

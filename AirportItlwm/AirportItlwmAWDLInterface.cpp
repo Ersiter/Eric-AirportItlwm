@@ -468,14 +468,11 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic,
     size_t len = mbuf_len(m);
     const struct ieee80211_frame *wh = (const struct ieee80211_frame *)p;
     size_t hdr = sizeof(*wh);
-    const auto noteUnicast = [&] {
+    const auto notePeer = [&](const uint8_t *source) {
         if (ic && ic->ic_awdl_listen_home && rxi && rxi->rxi_chan > 0 &&
             rxi->rxi_chan <= UINT8_MAX && rxi->rxi_band != IEEE80211_CHAN_6GHZ &&
-            !(ic->ic_channels[rxi->rxi_chan].ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)) &&
-            IEEE80211_ADDR_EQ(wh->i_addr1, ic->ic_awdl_addr)) {
-            awdl->fDataRxUnicastChannel = (uint8_t)rxi->rxi_chan;
-            awdl->fDataRxUnicastUs = hostUs();
-        }
+            !(ic->ic_channels[rxi->rxi_chan].ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)))
+            awdl->noteDataPeer(source, (uint8_t)rxi->rxi_chan);
     };
     static const uint8_t kSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x17, 0xf2 };
     static const uint8_t kLlwSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
@@ -543,6 +540,7 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic,
                 }
                 mbuf_pkthdr_setlen(sub, sizeof(eh) + payload);
                 mbuf_pkthdr_setrcvif(sub, inputIf);
+                notePeer(eh + 6);
                 if (!lowLatency) {
                     deliveredAWDL = true;
                     awdl->fDataRx++;
@@ -559,7 +557,6 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic,
                 offset += (consumed + 3) & ~size_t(3);
             }
             if (deliveredAWDL) {
-                noteUnicast();
                 awdl->fDataRxAmsdu++;
                 awdl->publishDataState();
             }
@@ -577,6 +574,7 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic,
         uint8_t dst[6], src[6];
         memcpy(dst, wh->i_addr1, 6);
         memcpy(src, wh->i_addr2, 6);
+        notePeer(src);
         mbuf_adj(m, (int)(hdr + 8 - 14));
         uint8_t *eh = (uint8_t *)mbuf_data(m);
         memcpy(eh, dst, 6);
@@ -598,7 +596,7 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic,
     const uint8_t *ad = p + hdr + llc;
     uint8_t ethType[2] = { ad[6], ad[7] };
     uint8_t dst[6], src[6];
-    noteUnicast();
+    notePeer(wh->i_addr2);
     memcpy(dst, wh->i_addr1, 6);
     memcpy(src, wh->i_addr2, 6);
 
@@ -1077,7 +1075,6 @@ stopAWTimeline()
     fTxPeerUs = 0;
     memset(fPendingUnicastMI, 0, sizeof(fPendingUnicastMI));
     fTxUnicastMIUs = 0;
-    fDataRxUnicastUs = 0;
     fUmiAckCount = 0;
     if (fUmiAckTimer)
         fUmiAckTimer->cancelTimeout();
@@ -1620,6 +1617,51 @@ peerChannelAt(const PeerSchedule &peer, uint64_t us)
     return peer.channels[(seq / peer.pm) % 16];
 }
 
+AirportItlwmAWDLInterface::PeerSchedule &AirportItlwmAWDLInterface::
+peerRecord(const uint8_t *address)
+{
+    auto *oldest = &fPeers[0];
+    for (auto &peer : fPeers) {
+        const uint64_t seen = MAX(peer.seenUs, peer.dataRxUs);
+        if (seen && IEEE80211_ADDR_EQ(&peer.mac, address))
+            return peer;
+        if (seen < MAX(oldest->seenUs, oldest->dataRxUs))
+            oldest = &peer;
+    }
+    return *oldest;
+}
+
+void AirportItlwmAWDLInterface::
+noteDataPeer(const uint8_t *address, uint8_t channel)
+{
+    if (!fAWRunning || IEEE80211_IS_MULTICAST(address))
+        return;
+    auto &peer = peerRecord(address);
+    if (!IEEE80211_ADDR_EQ(&peer.mac, address)) {
+        peer = {};
+        IEEE80211_ADDR_COPY(&peer.mac, address);
+    }
+    peer.dataRxChannel = channel;
+    peer.dataRxUs = hostUs();
+}
+
+uint8_t AirportItlwmAWDLInterface::
+observedPeerChannel(uint64_t now, const uint8_t *address) const
+{
+    const PeerSchedule *latest = nullptr;
+    for (const auto &peer : fPeers) {
+        if (!peer.dataRxUs || peer.dataRxUs > now || now - peer.dataRxUs > kPeerStaleUs)
+            continue;
+        if (address) {
+            if (IEEE80211_ADDR_EQ(&peer.mac, address))
+                return peer.dataRxChannel;
+        } else if (!latest || peer.dataRxUs > latest->dataRxUs) {
+            latest = &peer;
+        }
+    }
+    return latest ? latest->dataRxChannel : 0;
+}
+
 const AirportItlwmAWDLInterface::PeerSchedule *AirportItlwmAWDLInterface::
 findPeerSchedule(const uint8_t *address, uint64_t us) const
 {
@@ -1645,9 +1687,11 @@ canSendData(const uint8_t *address, uint8_t chan, uint64_t now) const
             ownChannelAt((uint16_t)(fRefSeq + next * pm)) == chan;
     }
     const auto *peer = findPeerSchedule(address, now);
-    // A peer can be discovered through Bonjour before its first sync frame arrives.
-    return !peer || (peerChannelAt(*peer, now) == chan &&
-        peerChannelAt(*peer, now + guardUs) == chan);
+    if (peer)
+        return peerChannelAt(*peer, now) == chan && peerChannelAt(*peer, now + guardUs) == chan;
+    // A Bonjour response can precede the peer's first usable synchronization frame.
+    const uint8_t observed = observedPeerChannel(now, address);
+    return !observed || observed == chan;
 }
 
 const AirportItlwmAWDLInterface::PeerSchedule *AirportItlwmAWDLInterface::
@@ -1657,11 +1701,16 @@ preferredPeerSchedule(uint64_t now) const
         if (request.expiresUs > now) {
             if (const auto *peer = findPeerSchedule(request.peer, now))
                 return peer;
+            if (observedPeerChannel(now, request.peer))
+                return nullptr;
         }
     }
     if (fTxPeerUs && now - fTxPeerUs <= kPeerReplaceUs) {
-        if (const auto *peer = findPeerSchedule((const uint8_t *)&fTxPeer, now))
+        const auto *address = reinterpret_cast<const uint8_t *>(&fTxPeer);
+        if (const auto *peer = findPeerSchedule(address, now))
             return peer;
+        if (observedPeerChannel(now, address))
+            return nullptr;
     }
     const auto &peer = fPeers[fListenPeer];
     return peerScheduleFresh(peer, now) ? &peer : nullptr;
@@ -1691,18 +1740,11 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
     if (!fAWRunning || !awListenAllowed())
         return;
 
-    unsigned index = 0;
-    for (unsigned i = 0; i < nitems(fPeers); i++) {
-        if (fPeers[i].seenUs && IEEE80211_ADDR_EQ(&fPeers[i].mac, src)) {
-            index = i;
-            break;
-        }
-        if (fPeers[i].seenUs < fPeers[index].seenUs)
-            index = i;
-    }
-    const auto &old = fPeers[index];
-    const bool known = old.seenUs && IEEE80211_ADDR_EQ(&old.mac, src);
-    PeerSchedule peer = known ? old : PeerSchedule{};
+    auto &old = peerRecord(src);
+    const unsigned index = (unsigned)(&old - fPeers);
+    const bool samePeer = IEEE80211_ADDR_EQ(&old.mac, src);
+    const bool known = samePeer && old.seenUs;
+    PeerSchedule peer = samePeer ? old : PeerSchedule{};
     size_t off = kAWDLFixedHeaderLen;
     bool sync = false;
     while (off + 3 <= len) {
@@ -1834,8 +1876,16 @@ scheduleOwnListen(uint64_t afterUs)
         fHuntNextUs = now + kHuntGapUs;
     }
     if (awHuntAllowed() && !peer) {
-        const bool receiving = fDataRxUnicastUs && now - fDataRxUnicastUs < kPeerStaleUs;
-        const bool late = !receiving && now - fHuntStartUs >= kHuntWindowUs;
+        uint8_t observed = 0;
+        for (const auto &request : fPendingUnicastMI) {
+            if (request.expiresUs > now && (observed = observedPeerChannel(now, request.peer)))
+                break;
+        }
+        if (!observed && fTxPeerUs && now - fTxPeerUs <= kPeerReplaceUs)
+            observed = observedPeerChannel(now, reinterpret_cast<const uint8_t *>(&fTxPeer));
+        if (!observed)
+            observed = observedPeerChannel(now);
+        const bool late = !observed && now - fHuntStartUs >= kHuntWindowUs;
         // A 5 GHz infrastructure channel can also be an advertised AWDL channel.
         uint8_t advertisedHome = 0;
         if (ic->ic_awdl_listen_home && home != 44 && home != 149 &&
@@ -1859,8 +1909,8 @@ scheduleOwnListen(uint64_t afterUs)
         }
         if (homeOnly || listener) {
             huntChan = homeOnly ? home : listener;
-        } else if (receiving && isset(ic->ic_chan_active, fDataRxUnicastChannel)) {
-            huntChan = fDataRxUnicastChannel;
+        } else if (observed && isset(ic->ic_chan_active, observed)) {
+            huntChan = observed;
         } else if (n) {
             huntChan = list[(now / kHuntStepUs) % n];
         }
@@ -2346,8 +2396,10 @@ sendPendingUnicastMI(uint64_t now)
                 const int64_t slot = floorDiv((int64_t)now - peer->refUs, peer->slotUs);
                 retry = (uint64_t)(peer->refUs + (slot + 1) * peer->slotUs);
             }
-        } else if (request.channel != fTxChan) {
-            continue;
+        } else {
+            const uint8_t observed = observedPeerChannel(now, request.peer);
+            if ((observed ? observed : request.channel) != fTxChan)
+                continue;
         }
         if (!retry) {
             const int err = sendAWDLFrame(true, fTxChan, request.peer, request.payload, request.length);
@@ -3239,8 +3291,6 @@ init(IO80211Controller *controller, ether_addr *mac, unsigned int role, char con
     fTxPeerUs = 0;
     memset(fPendingUnicastMI, 0, sizeof(fPendingUnicastMI));
     fTxUnicastMIUs = 0;
-    fDataRxUnicastUs = 0;
-    fDataRxUnicastChannel = 0;
     fPeerUpdates = 0;
     fPeerPredHit = 0;
     fPeerPredMiss = 0;
@@ -3751,7 +3801,8 @@ setAWDL_OOB_REQUEST(apple80211_awdl_oob_request *d)
             return err ? kIOReturnError : kIOReturnSuccess;
         }
         const uint64_t now = hostUs();
-        if (!channel && !that->findPeerSchedule(destination, now))
+        const uint8_t observed = that->observedPeerChannel(now, destination);
+        if (!channel && !observed && !that->findPeerSchedule(destination, now))
             return kIOReturnNotReady;
         PendingUnicastMI *available = nullptr;
         for (auto &request : that->fPendingUnicastMI) {
@@ -3765,7 +3816,7 @@ setAWDL_OOB_REQUEST(apple80211_awdl_oob_request *d)
         if (!available)
             return kIOReturnBusy;
         IEEE80211_ADDR_COPY(available->peer, destination);
-        available->channel = channel;
+        available->channel = observed ? observed : channel;
         available->length = len;
         if (len)
             memcpy(available->payload, payload, len);
