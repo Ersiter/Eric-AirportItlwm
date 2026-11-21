@@ -5605,6 +5605,8 @@ static const struct pci_matchid iwm_devices[] = {
     { PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_7265_2 },
     { PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_8260_1 },
     { PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_8260_2 },
+    { PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_4165_1 },
+    { PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_4165_2 },
     { PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_8265_1 },
     { PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_9260_1 },
     { PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_9260_2 },
@@ -5881,6 +5883,8 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
             break;
         case PCI_PRODUCT_INTEL_WL_8260_1:
         case PCI_PRODUCT_INTEL_WL_8260_2:
+        case PCI_PRODUCT_INTEL_WL_4165_1:
+        case PCI_PRODUCT_INTEL_WL_4165_2:
             sc->sc_fwname = "iwm-8000C-36";
             sc->host_interrupt_operation_mode = 0;
             sc->sc_device_family = IWM_DEVICE_FAMILY_8000;
