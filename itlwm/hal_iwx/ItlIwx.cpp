@@ -10866,9 +10866,11 @@ iwx_scan(struct iwx_softc *sc)
         return EBUSY;
     }
     const int generation = sc->sc_generation;
-    iwx_awdl_listen_abort(sc);
+    err = iwx_awdl_listen_abort(sc);
     if (generation != sc->sc_generation)
         return ENXIO;
+    if (err)
+        return err;
     if (sc->sc_flags & IWX_FLAG_BGSCAN) {
         err = iwx_scan_abort(sc);
         if (err) {
@@ -10932,9 +10934,11 @@ iwx_bgscan(struct ieee80211com *ic)
         return 0;
     
     const int generation = sc->sc_generation;
-    that->iwx_awdl_listen_abort(sc);
+    err = that->iwx_awdl_listen_abort(sc);
     if (generation != sc->sc_generation)
         return ENXIO;
+    if (err)
+        return err;
     err = that->iwx_umac_scan(sc, 1);
     if (err) {
         XYLog("%s: could not initiate scan\n", DEVNAME(sc));
@@ -14408,9 +14412,11 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
     }
     if ((err = iwx_p2p_setup(sc, chan)) != 0)
         return err;
-    // Setup may sleep while Wi-Fi starts a scan or leaves RUN.
-    if (sc->sc_ic.ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN ||
-        (sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN)))
+    // Setup may sleep while the station starts a scan or rejoins.
+    const auto &ic = sc->sc_ic;
+    if (ic.ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN ||
+        (sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN)) ||
+        (sc->sc_use_mld_api && (ic.ic_flags & IEEE80211_F_RSNON) && !ic.ic_bss->ni_port_valid))
         return EBUSY;
     const uint64_t now_us = iwx_uptime_us();
     uint32_t dwell_tu = duration_tu;
@@ -14622,7 +14628,7 @@ iwx_awdl_stop(struct ieee80211com *ic)
         iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
 }
 
-void ItlIwx::
+int ItlIwx::
 iwx_awdl_listen_abort(struct iwx_softc *sc)
 {
     if (sc->sc_listener_up) {
@@ -14630,11 +14636,11 @@ iwx_awdl_listen_abort(struct iwx_softc *sc)
         sc->sc_awdl_listen_active = 0;
         sc->sc_aux_roc_running = 0;
         sc->sc_ic.ic_awdl_listen_chan = 0;
-        return;
+        return 0;
     }
     if (iwx_p2p_listen_enabled()) {
         if (sc->sc_mld_roc_canceling)
-            return;
+            return EBUSY;
         if (sc->sc_use_mld_api && (sc->sc_aux_roc_pending || sc->sc_aux_roc_running)) {
             const int generation = sc->sc_generation;
             sc->sc_mld_roc_canceling = 1;
@@ -14645,12 +14651,12 @@ iwx_awdl_listen_abort(struct iwx_softc *sc)
             sc->sc_p2p_wait = 0;
             int err = iwx_mld_roc_cmd(sc, IWX_FW_CTXT_ACTION_REMOVE, 0, 0);
             if (generation != sc->sc_generation)
-                return;
+                return ENXIO;
             sc->sc_mld_roc_canceling = 0;
             if (err && sc->sc_aux_roc_pending) {
                 sc->sc_aux_roc_resp_err++;
                 iwx_aux_roc_sync_counters(sc);
-                return;
+                return err;
             }
             // Reuse the channel-change drain before admitting TX in the next ROC.
             sc->sc_p2p_roc_chan = 0;
@@ -14660,7 +14666,7 @@ iwx_awdl_listen_abort(struct iwx_softc *sc)
         sc->sc_aux_roc_pending = 0;
         sc->sc_aux_roc_running = 0;
         sc->sc_awdl_listen_active = 0;
-        return;
+        return 0;
     }
     if (sc->sc_aux_roc_running && sc->sc_aux_roc_uid) {
         /* Linux iwl_mvm_remove_aux_roc_te: REMOVE with the event uid and the
@@ -14676,15 +14682,16 @@ iwx_awdl_listen_abort(struct iwx_softc *sc)
         iwx_send_cmd_pdu(sc, IWX_HOT_SPOT_CMD, IWX_CMD_ASYNC, sizeof(req), &req);
         sc->sc_aux_roc_running = 0;
         sc->sc_awdl_listen_active = 0;
-        return;
+        return 0;
     }
     if (sc->sc_aux_roc_pending || !sc->sc_awdl_listen_active)
-        return;
+        return 0;
     struct iwx_umac_scan_abort cmd = { 0 };
     cmd.uid = htole32(IWX_AWDL_LISTEN_UID);
     iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_LONG_GROUP, IWX_SCAN_ABORT_UMAC),
                      0, sizeof(cmd), &cmd);
     sc->sc_awdl_listen_active = 0;
+    return 0;
 }
 
 int ItlIwx::

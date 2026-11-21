@@ -2495,10 +2495,14 @@ iwx_mld_run_stop(struct iwx_softc *sc)
 {
     struct iwx_node *in = (struct iwx_node *)sc->sc_ic.ic_bss;
 
+    // End the off-channel activity before reconfiguring the home station.
+    int err = iwx_awdl_listen_abort(sc);
+    if (err)
+        return err;
 #ifdef AIRPORT_WCL
     iwx_mld_emlsr_stop(sc);
 #endif
-    int err = iwx_awdl_go_stop(sc, false);
+    err = iwx_awdl_go_stop(sc, false);
     if (err)
         return err;
     err = iwx_flush_sta(sc, in);
