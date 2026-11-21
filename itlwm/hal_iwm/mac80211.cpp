@@ -3176,7 +3176,7 @@ iwm_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
     if (sc->sc_flags & (IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN |
                         IWM_FLAG_SHUTDOWN | IWM_FLAG_HW_ERR | IWM_FLAG_RFKILL))
         return EBUSY;
-    if (ic->ic_state != IEEE80211_S_RUN || !selected)
+    if (ic->ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN || !selected)
         return EBUSY;
 #ifdef AIRPORT_WCL
     if (ic->ic_wcl_scan_requested)
@@ -3211,6 +3211,8 @@ iwm_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             return err;
         sc->sc_awdl_addr_gen = ic->ic_awdl_addr_gen;
     }
+    if (ic->ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN)
+        return EBUSY;
     sc->sc_awdl_listener_active = 1;
     ic->ic_awdl_listen_chan = sc->sc_awdl_listener_chan;
     return 0;
@@ -3226,8 +3228,8 @@ iwm_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     mbuf_t m = NULL;
     int err;
 
-    if (!sc->sc_awdl_listener_up ||
-        !sc->sc_awdl_listener_active || !in ||
+    if (ic->ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN ||
+        !sc->sc_awdl_listener_up || !sc->sc_awdl_listener_active || !in ||
         chan != sc->sc_awdl_listener_chan || !frame ||
         len < sizeof(struct ieee80211_frame) || len > MCLBYTES) {
         ic->ic_awdl_tx_busy++;

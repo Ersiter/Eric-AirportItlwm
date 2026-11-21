@@ -11090,7 +11090,8 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
         return EBUSY;
     /* iwx_p2p_roc does its own busy check, with recovery from a lost notification. */
     if ((sc->sc_awdl_listen_active && !iwx_p2p_listen_enabled()) ||
-        ic->ic_state != IEEE80211_S_RUN || (ic->ic_flags & IEEE80211_F_BGSCAN))
+        ic->ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN ||
+        (ic->ic_flags & IEEE80211_F_BGSCAN))
         return EBUSY;
 #ifdef AIRPORT_WCL
     if (ic->ic_wcl_scan_requested)
@@ -11148,6 +11149,8 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             }
         }
         if (sc->sc_listener_up) {
+            if (ic->ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN)
+                return EBUSY;
             if (sc->sc_use_mld_api && !sc->sc_listener_refitting) {
                 const uint8_t target = that->iwx_awdl_standing_channel(sc);
                 if (sc->sc_listener_candidate != target)
@@ -11356,6 +11359,7 @@ iwx_awdl_tx_ready(struct ieee80211com *ic, uint8_t chan)
     const auto *sc = (const struct iwx_softc *)IC2IFP(ic)->if_softc;
     return chan && sc->sc_p2p_queue && sc->sc_aux_roc_running &&
         ic->ic_awdl_listen_chan == chan && ic->ic_state == IEEE80211_S_RUN &&
+        sc->ns_nstate == IEEE80211_S_RUN &&
         !(sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN | IWX_FLAG_SHUTDOWN |
             IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)) &&
         (!sc->sc_listener_up || (!sc->sc_listener_refitting && !sc->sc_listener_retry_us &&
@@ -12164,7 +12168,8 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     }
     if ((!iwx_p2p_listen_enabled() && !sc->sc_listener_up) ||
         !sc->sc_p2p_queue ||
-        (sc->sc_use_mld_api && sc->sc_listener_up && !iwx_awdl_tx_ready(ic, chan)) ||
+        sc->ns_nstate != IEEE80211_S_RUN ||
+        (sc->sc_use_mld_api && !iwx_awdl_tx_ready(ic, chan)) ||
         !sc->sc_aux_roc_running || ic->ic_awdl_listen_chan != chan ||
         ic->ic_bss == NULL ||
         (sc->sc_flags & (IWX_FLAG_SHUTDOWN | IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL))) {
@@ -14395,6 +14400,10 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
     }
     if ((err = iwx_p2p_setup(sc, chan)) != 0)
         return err;
+    // Setup may sleep while Wi-Fi starts a scan or leaves RUN.
+    if (sc->sc_ic.ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN ||
+        (sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN)))
+        return EBUSY;
     const uint64_t now_us = iwx_uptime_us();
     uint32_t dwell_tu = duration_tu;
     uint32_t max_delay_tu = 0;
