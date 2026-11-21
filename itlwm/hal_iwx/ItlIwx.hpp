@@ -469,6 +469,9 @@ public:
     void   iwx_awdl_listener_refit(struct iwx_softc *);
     uint8_t iwx_awdl_standing_channel(struct iwx_softc *);
     int    iwx_awdl_go_beacon(struct iwx_softc *);
+    int    iwx_awdl_discovery_setup(struct iwx_softc *);
+    int    iwx_awdl_discovery_stop(struct iwx_softc *);
+    int    iwx_awdl_discovery_window(struct iwx_softc *, uint32_t);
     int    iwx_awdl_go_stop(struct iwx_softc *, bool);
     int    iwx_mld_listener_link(struct iwx_softc *, uint32_t, uint32_t, uint32_t);
     int    iwx_mld_roc_cmd(struct iwx_softc *, uint32_t, uint32_t, uint32_t);

@@ -7192,6 +7192,7 @@ static bool
 iwx_awdl_tx_queue(const struct iwx_softc *sc, int qid)
 {
     return sc->sc_p2p_queue && (qid == sc->sc_aux_roc_qid ||
+        (sc->sc_awdl_discovery_stage == 4 && qid == sc->sc_awdl_discovery_qid) ||
         qid == sc->sc_awdl_listener_data_qid || qid == sc->sc_awdl_mcast_qid ||
         iwx_awdl_peer_tx_queue(sc, qid));
 }
@@ -8893,6 +8894,9 @@ iwx_flush_sta_tids(struct iwx_softc *sc, int sta_id, uint16_t tids)
             continue;
         if (sc->sc_use_mld_api && sta_id == IWX_AWDL_PEER_STA_ID) {
             if (!iwx_awdl_peer_tx_queue(sc, qid))
+                continue;
+        } else if (sc->sc_use_mld_api && sta_id == IWX_AWDL_DISCOVERY_STA_ID) {
+            if (qid != sc->sc_awdl_discovery_qid)
                 continue;
         } else if (sc->sc_use_mld_api && (sta_id == IWX_AWDL_BCAST_STA_ID ||
             sta_id == IWX_AUX_STA_ID)) {
@@ -11160,6 +11164,8 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             ic->ic_awdl_listen_chan = chan;
             sc->sc_awdl_listen_active = 1;
             sc->sc_aux_roc_running = 1;
+            if (sc->sc_listener_go)
+                that->iwx_awdl_discovery_window(sc, dwell_tu);
             iwx_awdl_record_listen(ic, chan, 2, 0, 0);
             that->iwx_awdl_ba_reply(sc);
             return 0;
@@ -12158,7 +12164,12 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     int qid = sc->sc_aux_roc_qid;
     const bool unicastData = isData && unicast;
     if (standing) {
-        if (isData && !unicast) {
+        if (sc->sc_listener_go && !isData && !unicast) {
+            if (!sc->sc_awdl_discovery_ready ||
+                iwx_uptime_us() >= sc->sc_awdl_discovery_deadline_us)
+                return EAGAIN;
+            qid = sc->sc_awdl_discovery_qid;
+        } else if (isData && !unicast) {
             qid = sc->sc_awdl_mcast_qid >= 0 ? sc->sc_awdl_mcast_qid : sc->sc_awdl_listener_data_qid;
             if (qid < 0) {
                 iwx_awdl_record_uc(ic, chan, -1, frame, len, 4);
@@ -12885,6 +12896,205 @@ iwx_mld_listener_link(struct iwx_softc *sc, uint32_t action, uint32_t changes, u
 }
 
 int ItlIwx::
+iwx_awdl_discovery_setup(struct iwx_softc *sc)
+{
+    if (iwx_lookup_cmd_ver(sc, IWX_MAC_CONF_GROUP, IWX_SESSION_PROTECTION_CMD) != 2 ||
+        iwx_lookup_notif_ver(sc, IWX_MAC_CONF_GROUP, IWX_SESSION_PROTECTION_NOTIF) != 3)
+        return ENOTSUP;
+    auto *node = reinterpret_cast<struct iwx_node *>(sc->sc_ic.ic_bss);
+    if (!node || !node->in_phyctxt)
+        return EAGAIN;
+    const uint32_t phy = node->in_phyctxt->id;
+    sc->sc_awdl_discovery_phy = phy;
+    const int generation = sc->sc_generation;
+    int err;
+    if (!sc->sc_p2p_mac) {
+        err = iwx_mld_p2p_mac_cmd(sc, IWX_FW_CTXT_ACTION_ADD, false);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        sc->sc_p2p_mac = 1;
+        sc->sc_p2p_addr_gen = sc->sc_ic.ic_awdl_addr_gen;
+        sc->sc_p2p_promisc = 0;
+    } else if (sc->sc_p2p_addr_gen != sc->sc_ic.ic_awdl_addr_gen) {
+        err = iwx_mld_p2p_mac_cmd(sc, IWX_FW_CTXT_ACTION_MODIFY, sc->sc_p2p_promisc);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        sc->sc_p2p_addr_gen = sc->sc_ic.ic_awdl_addr_gen;
+    }
+
+    struct iwx_mld_link_config_cmd link = {};
+    link.action = htole32(IWX_FW_CTXT_ACTION_ADD);
+    link.link_id = htole32(IWX_AWDL_DISCOVERY_LINK_ID);
+    link.mac_id = htole32(IWX_P2P_MAC_ID);
+    link.phy_id = htole32(IWX_FW_CTXT_INVALID);
+    IEEE80211_ADDR_COPY(link.local_link_addr, sc->sc_ic.ic_awdl_addr);
+    const auto sendLink = [&]() -> int {
+        const int result = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
+            IWX_MLD_LINK_CONFIG_CMD), 0, sizeof(link), &link);
+        return generation == sc->sc_generation ? result : ENXIO;
+    };
+    if ((err = sendLink()) != 0)
+        return err;
+    sc->sc_awdl_discovery_stage = 1;
+    link.action = htole32(IWX_FW_CTXT_ACTION_MODIFY);
+    link.phy_id = htole32(phy);
+    if ((err = sendLink()) != 0)
+        return err;
+    link.modify_mask = htole32(IWX_MLD_LINK_CONTEXT_MODIFY_ACTIVE | IWX_MLD_LINK_CONTEXT_MODIFY_RATES_INFO);
+    link.active = htole32(1);
+    link.ofdm_rates = htole32(0x15);
+    if ((err = sendLink()) != 0)
+        return err;
+    sc->sc_awdl_discovery_stage = 2;
+
+    struct iwx_mld_sta_cfg_cmd_v2 sta = {};
+    sta.sta_id = htole32(IWX_AWDL_DISCOVERY_STA_ID);
+    sta.link_id = link.link_id;
+    sta.station_type = htole32(IWX_STA_GENERAL_PURPOSE);
+    memset(sta.peer_mld_address, 0xff, sizeof(sta.peer_mld_address));
+    memset(sta.peer_link_address, 0xff, sizeof(sta.peer_link_address));
+    const size_t staSize = iwx_lookup_cmd_ver(sc, IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD) == 2 ?
+        sizeof(sta) : sizeof(struct iwx_mld_mvm_sta_cfg_cmd);
+    err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD),
+        0, staSize, &sta);
+    if (generation != sc->sc_generation)
+        return ENXIO;
+    if (err)
+        return err;
+    sc->sc_awdl_discovery_stage = 3;
+    if (!iwx_nic_lock(sc))
+        return EBUSY;
+    const int qid = iwx_tvqm_enable_txq(sc, IWX_MGMT_TID, 0, IWX_DEFAULT_QUEUE_SIZE,
+        IWX_AWDL_DISCOVERY_STA_ID);
+    iwx_nic_unlock(sc);
+    if (generation != sc->sc_generation)
+        return ENXIO;
+    if (qid < 0)
+        return -qid;
+    sc->sc_awdl_discovery_qid = qid;
+    sc->sc_awdl_discovery_stage = 4;
+    return 0;
+}
+
+int ItlIwx::
+iwx_awdl_discovery_window(struct iwx_softc *sc, uint32_t dwell)
+{
+    if (sc->sc_awdl_discovery_stage != 4)
+        return ENXIO;
+    const uint64_t now = iwx_uptime_us();
+    if (sc->sc_awdl_discovery_requested) {
+        // START/END carry a link ID and no per-window cookie. Reuse follows END.
+        if (now > sc->sc_awdl_discovery_deadline_us + 250000) {
+            iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
+            return ETIMEDOUT;
+        }
+        return EBUSY;
+    }
+    const int generation = sc->sc_generation;
+    struct iwx_session_prot_cmd cmd = {};
+    cmd.id_and_color = htole32(IWX_AWDL_DISCOVERY_LINK_ID);
+    cmd.action = htole32(IWX_FW_CTXT_ACTION_ADD);
+    cmd.conf_id = htole32(IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV);
+    const uint32_t duration = MIN(dwell, 128U);
+    cmd.duration_tu = htole32(duration);
+    sc->sc_awdl_discovery_deadline_us = now + uint64_t(duration) * IEEE80211_DUR_TU;
+    sc->sc_awdl_discovery_requested = true;
+    const int err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_SESSION_PROTECTION_CMD),
+        IWX_CMD_ASYNC, sizeof(cmd), &cmd);
+    if (generation != sc->sc_generation)
+        return ENXIO;
+    if (err)
+        sc->sc_awdl_discovery_requested = sc->sc_awdl_discovery_ready = false;
+    return err;
+}
+
+int ItlIwx::
+iwx_awdl_discovery_stop(struct iwx_softc *sc)
+{
+    const int generation = sc->sc_generation;
+    int err;
+    if (sc->sc_awdl_discovery_requested) {
+        sc->sc_awdl_discovery_ready = false;
+        struct iwx_session_prot_cmd cmd = {};
+        cmd.id_and_color = htole32(IWX_AWDL_DISCOVERY_LINK_ID);
+        cmd.action = htole32(IWX_FW_CTXT_ACTION_REMOVE);
+        cmd.conf_id = htole32(IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV);
+        err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_SESSION_PROTECTION_CMD),
+            0, sizeof(cmd), &cmd);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        sc->sc_awdl_discovery_requested = false;
+    }
+    if (sc->sc_awdl_discovery_stage == 4) {
+        int qid = sc->sc_awdl_discovery_qid;
+        if (sc->txq[qid].queued) {
+            err = iwx_flush_sta_tids(sc, IWX_AWDL_DISCOVERY_STA_ID, 0xffff);
+            if (generation != sc->sc_generation)
+                return ENXIO;
+            if (err || sc->txq[qid].queued)
+                return err ? err : EBUSY;
+        }
+        err = iwx_mld_queue_cmd(sc, 1U << IWX_AWDL_DISCOVERY_STA_ID,
+            IWX_MGMT_TID, 1, 0, 0, 0, nullptr, nullptr);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        iwx_free_tx_ring(sc, &sc->txq[qid]);
+        sc->sc_awdl_discovery_qid = -1;
+        sc->sc_awdl_discovery_stage = 3;
+    }
+    if (sc->sc_awdl_discovery_stage == 3) {
+        struct iwx_mld_mvm_remove_sta_cmd sta = {};
+        sta.sta_id = htole32(IWX_AWDL_DISCOVERY_STA_ID);
+        err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_REMOVE_CMD),
+            0, sizeof(sta), &sta);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        sc->sc_awdl_discovery_stage = 2;
+    }
+    if (sc->sc_awdl_discovery_stage) {
+        struct iwx_mld_link_config_cmd link = {};
+        link.link_id = htole32(IWX_AWDL_DISCOVERY_LINK_ID);
+        link.mac_id = htole32(IWX_P2P_MAC_ID);
+        link.phy_id = htole32(IWX_FW_CTXT_INVALID);
+        if (sc->sc_awdl_discovery_stage == 2) {
+            link.action = htole32(IWX_FW_CTXT_ACTION_MODIFY);
+            link.phy_id = htole32(sc->sc_awdl_discovery_phy);
+            link.modify_mask = htole32(IWX_MLD_LINK_CONTEXT_MODIFY_ACTIVE);
+            link.ofdm_rates = htole32(0x15);
+            IEEE80211_ADDR_COPY(link.local_link_addr, sc->sc_ic.ic_awdl_addr);
+            err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_LINK_CONFIG_CMD),
+                0, sizeof(link), &link);
+            if (generation != sc->sc_generation)
+                return ENXIO;
+            if (err)
+                return err;
+            sc->sc_awdl_discovery_stage = 1;
+        }
+        link.action = htole32(IWX_FW_CTXT_ACTION_REMOVE);
+        link.modify_mask = 0;
+        link.phy_id = htole32(IWX_FW_CTXT_INVALID);
+        err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_LINK_CONFIG_CMD),
+            0, sizeof(link), &link);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        sc->sc_awdl_discovery_stage = 0;
+    }
+    return 0;
+}
+
+int ItlIwx::
 iwx_awdl_go_beacon(struct iwx_softc *sc)
 {
     // BE firmware Beacon Template v13, followed by a 5 GHz beacon with a TIM IE.
@@ -13350,6 +13560,14 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         }
         mcast_queue_added = true;
     }
+    if (go) {
+        setupStage(14);
+        err = iwx_awdl_discovery_setup(sc);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            goto fail;
+    }
     /* Apply the traffic registration before publishing the link and queues. */
     setupStage(10);
     err = iwx_awdl_update_low_latency(sc);
@@ -13384,8 +13602,8 @@ fail:
             iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
             return err;
         }
-        int cleanup = 0;
-        if (queue_added && generation == sc->sc_generation) {
+        int cleanup = go ? iwx_awdl_discovery_stop(sc) : 0;
+        if (!cleanup && queue_added && generation == sc->sc_generation) {
             cleanup = iwx_mld_queue_cmd(sc, 1U << mgmtSta,
                 mgmtTid, 1, 0, 0, 0, NULL, NULL);
             if (generation != sc->sc_generation)
@@ -13519,7 +13737,9 @@ iwx_awdl_go_stop(struct iwx_softc *sc, bool restoreStation)
             IWX_MLD_STA_REMOVE_CMD), 0, sizeof(cmd), &cmd);
     };
     const auto stop = [&]() -> int {
-        int err;
+        int err = iwx_awdl_discovery_stop(sc);
+        if (err)
+            return err;
         const int stations[] = {IWX_AWDL_PEER_STA_ID, IWX_AWDL_BCAST_STA_ID, IWX_AWDL_MCAST_STA_ID};
         for (int sta : stations) {
             if (sta == IWX_AWDL_PEER_STA_ID && !sc->sc_awdl_peer_added)
@@ -17696,6 +17916,10 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_legacy_ba_tids = 0;
     sc->sc_listener_up = 0;
     sc->sc_listener_go = 0;
+    sc->sc_awdl_discovery_stage = 0;
+    sc->sc_awdl_discovery_requested = sc->sc_awdl_discovery_ready = false;
+    sc->sc_awdl_discovery_deadline_us = 0;
+    sc->sc_awdl_discovery_qid = -1;
     sc->sc_listener_setting_up = 0;
     sc->sc_mld_link_updates = 0;
     sc->sc_ic.ic_awdl_llw_qos = 0;
@@ -18916,8 +19140,22 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                 if (!IWX_NOTIF_FITS(pkt, struct iwx_session_prot_notif))
                     break;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_session_prot_notif *);
-                if (le32toh(notif->mac_id) == IWX_P2P_MAC_ID) {
-                    iwx_p2p_roc_event(sc, le32toh(notif->status), le32toh(notif->start));
+                const uint32_t id = le32toh(notif->mac_id);
+                const uint32_t config = le32toh(notif->conf_id);
+                if (config == IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV) {
+                    if (sc->sc_use_mld_api) {
+                        if (id == IWX_AWDL_DISCOVERY_LINK_ID && sc->sc_awdl_discovery_requested) {
+                            if (le32toh(notif->start) == 1) {
+                                sc->sc_awdl_discovery_ready = le32toh(notif->status) == 1 &&
+                                    !sc->sc_listener_refitting;
+                            } else {
+                                sc->sc_awdl_discovery_requested = false;
+                                sc->sc_awdl_discovery_ready = false;
+                            }
+                        }
+                    } else if (id == IWX_P2P_MAC_ID) {
+                        iwx_p2p_roc_event(sc, le32toh(notif->status), le32toh(notif->start));
+                    }
                     break;
                 }
                 if (!notif->status) {

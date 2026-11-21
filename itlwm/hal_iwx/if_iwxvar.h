@@ -938,6 +938,10 @@ struct iwx_softc {
 	uint8_t sc_listener_setting_up;
 	uint8_t sc_listener_refitting;
 	bool sc_listener_go;
+	uint8_t sc_awdl_discovery_stage, sc_awdl_discovery_phy;
+	bool sc_awdl_discovery_requested, sc_awdl_discovery_ready;
+	uint64_t sc_awdl_discovery_deadline_us;
+	int sc_awdl_discovery_qid;
 	int sc_awdl_go_saved_roc_qid;
 	uint8_t sc_listener_candidate;
 	uint64_t sc_listener_candidate_us;
@@ -1052,6 +1056,9 @@ struct iwx_node {
 /* -itlawdllistener (MLD API): a standing LISTENER MAC + its own PHY context, link and station. */
 #define IWX_LISTENER_MAC_ID   2
 #define IWX_LISTENER_LINK_ID  3
+/* Standing AWDL reserves link slots 2 and 3. Infrastructure uses 0 and 1. */
+#define IWX_AWDL_DISCOVERY_LINK_ID 2
+#define IWX_AWDL_DISCOVERY_STA_ID 8
 #define IWX_LISTENER_STA_ID   9
 #define IWX_AWDL_PEER_STA_ID 10
 #define IWX_AWDL_BCAST_STA_ID 11
