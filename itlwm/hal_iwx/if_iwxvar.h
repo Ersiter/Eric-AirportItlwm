@@ -938,9 +938,8 @@ struct iwx_softc {
 	uint8_t sc_listener_setting_up;
 	uint8_t sc_listener_refitting;
 	bool sc_listener_go;
-	uint8_t sc_awdl_discovery_stage, sc_awdl_discovery_phy, sc_awdl_discovery_link_id;
+	uint8_t sc_awdl_discovery_stage, sc_awdl_discovery_phy;
 	bool sc_awdl_discovery_requested, sc_awdl_discovery_ready;
-	bool sc_awdl_roc_preparing;
 	uint64_t sc_awdl_discovery_deadline_us;
 	int sc_awdl_discovery_qid;
 	int sc_awdl_go_saved_roc_qid;

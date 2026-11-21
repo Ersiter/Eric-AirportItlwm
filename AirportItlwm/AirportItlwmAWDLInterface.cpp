@@ -1844,8 +1844,7 @@ scheduleOwnListen(uint64_t afterUs)
     const bool homeOnly = ic->ic_awdl_home_chan != 0;
     const bool allowHome = homeOnly || awCanListenOnHome(ic, home);
     const uint8_t listener = ic->ic_awdl_listener_chan;
-    const bool protectOwnSlots = ic->ic_awdl_listen_home && !listener && !homeOnly &&
-        !itlAWDLStandingFlag();
+    const bool protectOwnSlots = ic->ic_awdl_listen_home && !listener && !homeOnly;
     if (homeOnly && home != ic->ic_awdl_home_chan)
         return false;
     uint64_t now = hostUs();
@@ -1972,14 +1971,6 @@ scheduleOwnListen(uint64_t afterUs)
         const uint32_t dwell = (uint32_t)((listenEnd - start) / 1024);
         if (protectOwnSlots && dwell < kListenDwellMinTU)
             continue;
-        if (huntChan && huntStart < (uint64_t)start) {
-            // The MLD backend budgets firmware start latency inside this gap.
-            const uint64_t gapTU = (start - huntStart) / 1024;
-            if (gapTU >= kListenDwellMinTU) {
-                const uint32_t huntDwell = (uint32_t)MIN(kHuntDwellTU, gapTU);
-                return armListen(huntChan, huntDwell, huntStart, 0, huntGap);
-            }
-        }
         return armListen(chan, MIN(dwell, fListenDwellTU), (uint64_t)start,
             peerWindow ? 0 : (uint64_t)slotStart, 0);
     }

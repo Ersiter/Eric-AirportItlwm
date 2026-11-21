@@ -11049,9 +11049,7 @@ iwx_awdl_standing_channel(struct iwx_softc *sc)
         iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_BEACON_TEMPLATE_CMD) == 13 &&
         iwx_awdl_listener_pick(sc, kAwdlGoChannel))
         return kAwdlGoChannel;
-    if (sc->sc_listener_go || (!iwx_awdl_client_enabled() && !iwx_awdl_listener_enabled()))
-        return 0;
-    return iwx_awdl_listener_pick(sc);
+    return 0;
 }
 
 /* The AWDL TX queues as the driver sees them (index, queued, whether the TX watchdog is armed) and the listener's flags. */
@@ -11102,8 +11100,7 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
         return EINVAL;
     int err;
     const bool standing = sc->sc_use_mld_api ?
-        itlAWDLStandingFlag() && (sc->sc_listener_up || iwx_awdl_go_on_home(sc) ||
-            iwx_awdl_listener_enabled() || iwx_awdl_client_enabled()) :
+        itlAWDLStandingFlag() && (sc->sc_listener_up || iwx_awdl_go_on_home(sc)) :
         iwx_awdl_listener_enabled();
     if (sc->sc_use_mld_api && !standing) {
         memset(ic->ic_awdl_listener_why, 0x40, sizeof(ic->ic_awdl_listener_why));
@@ -11111,7 +11108,7 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             ieee80211_chan2number(ic, ic->ic_bss->ni_chan) : 0;
     }
     if (standing) {
-        if (sc->sc_listener_setting_up || sc->sc_awdl_roc_preparing)
+        if (sc->sc_listener_setting_up)
             return EBUSY;
         /* Allow one initial setup and one restore of an established MLD listener per boot. */
         if (!sc->sc_listener_up && (!sc->sc_listener_tries || sc->sc_listener_restore_pending) &&
@@ -11121,18 +11118,12 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             if (sc->sc_use_mld_api) {
                 if (!(sc->sc_flags & IWX_FLAG_STA_ACTIVE) || !ic->ic_bss->ni_port_valid ||
                     sc->sc_mld_link_updates ||
-                    __builtin_popcount((unsigned)sc->sc_mld_active_links) > 1 ||
-                    (!iwx_awdl_go_on_home(sc) && iwx_awdl_client_enabled() &&
-                        ic->ic_awdl_sync_period_tu < 17))
+                    __builtin_popcount((unsigned)sc->sc_mld_active_links) > 1)
                     return EAGAIN;
                 target = that->iwx_awdl_standing_channel(sc);
-                // There may be no permitted receiver channel until the MCC scan completes.
-                if (!target && (iwx_awdl_client_enabled() || iwx_awdl_listener_enabled()))
-                    return EAGAIN;
                 if (!target)
                     goto roc;
-                if (target == kAwdlGoChannel && iwx_awdl_go_on_home(sc) &&
-                    (sc->sc_aux_roc_pending || sc->sc_aux_roc_running)) {
+                if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running) {
                     that->iwx_awdl_listen_abort(sc);
                     return EAGAIN;
                 }
@@ -12931,34 +12922,6 @@ iwx_mld_listener_link(struct iwx_softc *sc, uint32_t action, uint32_t changes, u
 }
 
 int ItlIwx::
-iwx_awdl_discovery_add_link(struct iwx_softc *sc, uint8_t id)
-{
-    if (sc->sc_awdl_discovery_stage)
-        return sc->sc_awdl_discovery_link_id == id ? 0 : EBUSY;
-    const int generation = sc->sc_generation;
-    struct iwx_mld_link_config_cmd link = {};
-    link.action = htole32(IWX_FW_CTXT_ACTION_ADD);
-    link.link_id = htole32(id);
-    link.mac_id = htole32(IWX_P2P_MAC_ID);
-    link.phy_id = htole32(IWX_FW_CTXT_INVALID);
-    if (sc->sc_ic.ic_awdl_addr_gen)
-        IEEE80211_ADDR_COPY(link.local_link_addr, sc->sc_ic.ic_awdl_addr);
-    else {
-        IEEE80211_ADDR_COPY(link.local_link_addr, sc->sc_ic.ic_myaddr);
-        link.local_link_addr[0] ^= 0x02;
-    }
-    const int err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
-        IWX_MLD_LINK_CONFIG_CMD), 0, sizeof(link), &link);
-    if (generation != sc->sc_generation)
-        return ENXIO;
-    if (!err) {
-        sc->sc_awdl_discovery_stage = 1;
-        sc->sc_awdl_discovery_link_id = id;
-    }
-    return err;
-}
-
-int ItlIwx::
 iwx_awdl_discovery_setup(struct iwx_softc *sc)
 {
     if (iwx_lookup_cmd_ver(sc, IWX_MAC_CONF_GROUP, IWX_SESSION_PROTECTION_CMD) != 2 ||
@@ -12989,17 +12952,20 @@ iwx_awdl_discovery_setup(struct iwx_softc *sc)
         sc->sc_p2p_addr_gen = sc->sc_ic.ic_awdl_addr_gen;
     }
 
-    if ((err = iwx_awdl_discovery_add_link(sc, IWX_AWDL_DISCOVERY_LINK_ID)) != 0)
-        return err;
     struct iwx_mld_link_config_cmd link = {};
+    link.action = htole32(IWX_FW_CTXT_ACTION_ADD);
     link.link_id = htole32(IWX_AWDL_DISCOVERY_LINK_ID);
     link.mac_id = htole32(IWX_P2P_MAC_ID);
+    link.phy_id = htole32(IWX_FW_CTXT_INVALID);
     IEEE80211_ADDR_COPY(link.local_link_addr, sc->sc_ic.ic_awdl_addr);
     const auto sendLink = [&]() -> int {
         const int result = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
             IWX_MLD_LINK_CONFIG_CMD), 0, sizeof(link), &link);
         return generation == sc->sc_generation ? result : ENXIO;
     };
+    if ((err = sendLink()) != 0)
+        return err;
+    sc->sc_awdl_discovery_stage = 1;
     link.action = htole32(IWX_FW_CTXT_ACTION_MODIFY);
     link.phy_id = htole32(phy);
     if ((err = sendLink()) != 0)
@@ -13123,7 +13089,7 @@ iwx_awdl_discovery_stop(struct iwx_softc *sc)
     }
     if (sc->sc_awdl_discovery_stage) {
         struct iwx_mld_link_config_cmd link = {};
-        link.link_id = htole32(sc->sc_awdl_discovery_link_id);
+        link.link_id = htole32(IWX_AWDL_DISCOVERY_LINK_ID);
         link.mac_id = htole32(IWX_P2P_MAC_ID);
         link.phy_id = htole32(IWX_FW_CTXT_INVALID);
         if (sc->sc_awdl_discovery_stage == 2) {
@@ -14243,14 +14209,7 @@ iwx_mld_p2p_setup(struct iwx_softc *sc)
     uint32_t stage = 0;
     int err = 0;
 
-    const int wantPromisc = iwx_awdl_promisc_enabled() && ic->ic_awdl_want_data;
-    if (sc->sc_awdl_discovery_stage == 1 && sc->sc_p2p_addr_gen != ic->ic_awdl_addr_gen) {
-        err = iwx_awdl_discovery_stop(sc);
-        if (generation != sc->sc_generation)
-            return ENXIO;
-        if (err)
-            goto fail;
-    }
+    int wantPromisc = iwx_awdl_promisc_enabled() && ic->ic_awdl_want_data;
     if (!sc->sc_p2p_mac ||
         (sc->sc_p2p_addr_gen != ic->ic_awdl_addr_gen && ic->ic_awdl_addr_gen) ||
         sc->sc_p2p_promisc != wantPromisc) {
@@ -14270,16 +14229,6 @@ iwx_mld_p2p_setup(struct iwx_softc *sc)
         sc->sc_p2p_mac = 1;
         sc->sc_p2p_addr_gen = ic->ic_awdl_addr_gen;
         sc->sc_p2p_promisc = wantPromisc;
-    }
-    // Linux adds a default inactive link before starting P2P Device ROC.
-    if (!sc->sc_awdl_discovery_stage && ic->ic_mld_link_count < IWX_MLD_MAX_LINKS) {
-        stage = 10;
-        const uint8_t id = MAX(IWX_AWDL_DISCOVERY_LINK_ID, ic->ic_mld_link_count);
-        err = iwx_awdl_discovery_add_link(sc, id);
-        if (generation != sc->sc_generation)
-            return ENXIO;
-        if (err)
-            goto fail;
     }
     if (!sc->sc_p2p_queue) {
         stage = 7;
@@ -14410,7 +14359,7 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
     const uint64_t deadline_us = iwx_uptime_us() + uint64_t(duration_tu) * IEEE80211_DUR_TU;
     int err;
     
-    if (sc->sc_mld_roc_canceling || sc->sc_awdl_roc_preparing)
+    if (sc->sc_mld_roc_canceling)
         return EBUSY;
     if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running) {
         if (++sc->sc_p2p_wait > kP2pRocWaitLimit) {
@@ -14444,17 +14393,8 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
                 return err ? err : EBUSY;
         }
     }
-    const int generation = sc->sc_generation;
-    sc->sc_awdl_roc_preparing = sc->sc_use_mld_api;
-    err = iwx_p2p_setup(sc, chan);
-    if (generation != sc->sc_generation)
-        return ENXIO;
-    sc->sc_awdl_roc_preparing = false;
-    if (err)
+    if ((err = iwx_p2p_setup(sc, chan)) != 0)
         return err;
-    if (sc->sc_ic.ic_state != IEEE80211_S_RUN ||
-        (sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN)))
-        return EBUSY;
     const uint64_t now_us = iwx_uptime_us();
     uint32_t dwell_tu = duration_tu;
     uint32_t max_delay_tu = 0;
@@ -18004,7 +17944,6 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_listener_up = 0;
     sc->sc_listener_go = 0;
     sc->sc_awdl_discovery_stage = 0;
-    sc->sc_awdl_roc_preparing = false;
     sc->sc_awdl_discovery_requested = sc->sc_awdl_discovery_ready = false;
     sc->sc_awdl_discovery_deadline_us = 0;
     sc->sc_awdl_discovery_qid = -1;
