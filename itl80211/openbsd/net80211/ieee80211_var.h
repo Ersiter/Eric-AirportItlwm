@@ -575,7 +575,7 @@ struct ieee80211com {
      * non-zero when it consumed the frame. When set, the firmware also passes
      * foreign management frames, which ieee80211_inputm filters out again.
      */
-    int             (*ic_vendor_action_handler)(struct ieee80211com *, mbuf_t,
+    int             (*ic_awdl_action_handler)(struct ieee80211com *, mbuf_t,
                         struct ieee80211_rxinfo *);
     /*
      * Dwell on a channel for dwell_tu TU without touching net80211 state

@@ -10649,7 +10649,7 @@ iwx_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in, uint32_t action,
         cmd.filter_flags |= htole32(IWX_MAC_FILTER_IN_11AX);
     }
     // AWDL action frames are not addressed to our BSS.
-    if (ic->ic_vendor_action_handler)
+    if (ic->ic_awdl_action_handler)
         cmd.filter_flags |= htole32(IWX_MAC_FILTER_IN_CONTROL_AND_MGMT);
     
     return iwx_send_cmd_pdu(sc, IWX_MAC_CONTEXT_CMD, 0, sizeof(cmd), &cmd);

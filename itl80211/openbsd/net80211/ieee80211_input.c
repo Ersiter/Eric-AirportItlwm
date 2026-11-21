@@ -603,6 +603,10 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
     u_int16_t *orxseq, nrxseq, qos;
     u_int8_t dir, type, subtype, tid;
     int hdrlen, hasqos;
+#ifdef AIRPORT_WCL
+    static const uint8_t awdl_bssid[IEEE80211_ADDR_LEN] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
+    const uint8_t *bssid = ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : awdl_bssid;
+#endif
     
     _KASSERT(ni != NULL);
     security_ni = ieee80211_mld_primary_node(ic, ni);
@@ -637,8 +641,6 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
     if (ic->ic_awdl_addr_gen && ic->ic_awdl_data_handler &&
         type == IEEE80211_FC0_TYPE_DATA && mbuf_len(m) >= sizeof(struct ieee80211_frame) &&
         IEEE80211_IS_MULTICAST(wh->i_addr1)) {
-        static const uint8_t awdl_bssid[IEEE80211_ADDR_LEN] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
-        const uint8_t *bssid = ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : awdl_bssid;
         if (IEEE80211_ADDR_EQ(wh->i_addr3, bssid) &&
             (*ic->ic_awdl_data_handler)(ic, m, rxi)) {
             m = NULL;
@@ -686,6 +688,8 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
             mbuf_len(m) >= sizeof(struct ieee80211_frame) + 9 && rxi && ic->ic_awdl_tx) {
             const uint8_t *body = (const uint8_t *)&wh[1];
             if (body[0] == IEEE80211_CATEG_BA && body[1] == IEEE80211_ACTION_ADDBA_REQ) {
+                if (ic->ic_awdl_action_handler && IEEE80211_ADDR_EQ(wh->i_addr3, bssid))
+                    (*ic->ic_awdl_action_handler)(ic, m, rxi);
                 uint16_t params = body[3] | ((uint16_t)body[4] << 8);
                 uint16_t winsize = (params >> 6) & 0x3ff;
                 int accept_ba = (ic->ic_awdl_ba_accept || ic->ic_awdl_rx_ba != NULL) &&
@@ -746,14 +750,14 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
             goto out;
         }
     }
-    if (ic->ic_vendor_action_handler && ic->ic_opmode == IEEE80211_M_STA) {
+    if (ic->ic_awdl_action_handler && ic->ic_opmode == IEEE80211_M_STA) {
         if (type == IEEE80211_FC0_TYPE_MGT &&
             (subtype == IEEE80211_FC0_SUBTYPE_ACTION ||
              subtype == IEEE80211_FC0_SUBTYPE_ACTION_NOACK)) {
             const size_t action_hdrlen = ieee80211_get_hdrlen(wh);
             if (mbuf_len(m) > action_hdrlen &&
                 mtod(m, const uint8_t *)[action_hdrlen] == IEEE80211_CATEG_VENDOR &&
-                (*ic->ic_vendor_action_handler)(ic, m, rxi))
+                (*ic->ic_awdl_action_handler)(ic, m, rxi))
                 goto out;
         }
         /*

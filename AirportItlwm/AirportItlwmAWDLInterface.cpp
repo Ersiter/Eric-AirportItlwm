@@ -473,7 +473,7 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic,
         if (ic && ic->ic_awdl_listen_home && rxi && rxi->rxi_chan > 0 &&
             rxi->rxi_chan <= UINT8_MAX && rxi->rxi_band != IEEE80211_CHAN_6GHZ &&
             !(ic->ic_channels[rxi->rxi_chan].ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)))
-            awdl->noteDataPeer(source, (uint8_t)rxi->rxi_chan);
+            awdl->notePeerChannel(source, (uint8_t)rxi->rxi_chan);
     };
     static const uint8_t kSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x17, 0xf2 };
     static const uint8_t kLlwSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
@@ -854,10 +854,20 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
         return 0;
     const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(frame);
     const size_t hdr = ieee80211_get_hdrlen(wh);
+    if (len < hdr)
+        return 0;
+    const uint8_t *af = frame + hdr;
+    if (len >= hdr + 9 && af[0] == IEEE80211_CATEG_BA &&
+        af[1] == IEEE80211_ACTION_ADDBA_REQ) {
+        // A directed ADDBA can be the first frame we hear from this peer.
+        if (rxi->rxi_chan > 0 && rxi->rxi_chan <= IEEE80211_CHAN_MAX &&
+            rxi->rxi_band != IEEE80211_CHAN_6GHZ)
+            notePeerChannel(wh->i_addr2, (uint8_t)rxi->rxi_chan);
+        return 0;
+    }
     if (len < hdr + kAWDLFixedHeaderLen)
         return 0;
     // The firmware path delivers the frame body, starting at the category byte.
-    const uint8_t *af = frame + hdr;
     if (af[0] != 127 || af[1] != 0x00 || af[2] != 0x17 || af[3] != 0xf2 || af[4] != 0x08)
         return 0;
 
@@ -1623,17 +1633,17 @@ peerRecord(const uint8_t *address)
 {
     auto *oldest = &fPeers[0];
     for (auto &peer : fPeers) {
-        const uint64_t seen = MAX(peer.seenUs, peer.dataRxUs);
+        const uint64_t seen = MAX(peer.seenUs, peer.observedUs);
         if (seen && IEEE80211_ADDR_EQ(&peer.mac, address))
             return peer;
-        if (seen < MAX(oldest->seenUs, oldest->dataRxUs))
+        if (seen < MAX(oldest->seenUs, oldest->observedUs))
             oldest = &peer;
     }
     return *oldest;
 }
 
 void AirportItlwmAWDLInterface::
-noteDataPeer(const uint8_t *address, uint8_t channel)
+notePeerChannel(const uint8_t *address, uint8_t channel)
 {
     if (!fAWRunning || IEEE80211_IS_MULTICAST(address))
         return;
@@ -1642,8 +1652,8 @@ noteDataPeer(const uint8_t *address, uint8_t channel)
         peer = {};
         IEEE80211_ADDR_COPY(&peer.mac, address);
     }
-    peer.dataRxChannel = channel;
-    peer.dataRxUs = hostUs();
+    peer.observedChannel = channel;
+    peer.observedUs = hostUs();
 }
 
 uint8_t AirportItlwmAWDLInterface::
@@ -1651,16 +1661,16 @@ observedPeerChannel(uint64_t now, const uint8_t *address) const
 {
     const PeerSchedule *latest = nullptr;
     for (const auto &peer : fPeers) {
-        if (!peer.dataRxUs || peer.dataRxUs > now || now - peer.dataRxUs > kPeerStaleUs)
+        if (!peer.observedUs || peer.observedUs > now || now - peer.observedUs > kPeerStaleUs)
             continue;
         if (address) {
             if (IEEE80211_ADDR_EQ(&peer.mac, address))
-                return peer.dataRxChannel;
-        } else if (!latest || peer.dataRxUs > latest->dataRxUs) {
+                return peer.observedChannel;
+        } else if (!latest || peer.observedUs > latest->observedUs) {
             latest = &peer;
         }
     }
-    return latest ? latest->dataRxChannel : 0;
+    return latest ? latest->observedChannel : 0;
 }
 
 const AirportItlwmAWDLInterface::PeerSchedule *AirportItlwmAWDLInterface::

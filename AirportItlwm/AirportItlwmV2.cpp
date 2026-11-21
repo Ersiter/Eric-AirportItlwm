@@ -395,7 +395,7 @@ bool AirportItlwm::start(IOService *provider)
     }
     if (fAWDLEnabled) {
         XYLogE("experimental AWDL enabled\n");
-        fHalService->get80211Controller()->ic_vendor_action_handler = awdlActionFrameHandler;
+        fHalService->get80211Controller()->ic_awdl_action_handler = awdlActionFrameHandler;
         fHalService->get80211Controller()->ic_awdl_data_handler = awdlDataFrameHandler;
         fHalService->get80211Controller()->ic_awdl_umi_ack = awdlUnicastMIAck;
         fHalService->get80211Controller()->ic_awdl_ba_accept =
@@ -416,7 +416,7 @@ bool AirportItlwm::start(IOService *provider)
         XYLogE("AWDL off: no AirDrop support for this card\n");
         setProperty("AWDLBuildCheck", "blocked: no AirDrop support for this card");
         fAWDLEnabled = false;
-        fHalService->get80211Controller()->ic_vendor_action_handler = NULL;
+        fHalService->get80211Controller()->ic_awdl_action_handler = NULL;
         fHalService->get80211Controller()->ic_awdl_data_handler = NULL;
         fHalService->get80211Controller()->ic_awdl_umi_ack = NULL;
         fHalService->get80211Controller()->ic_awdl_ba_accept = 0;

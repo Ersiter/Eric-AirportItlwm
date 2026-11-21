@@ -289,8 +289,8 @@ private:
     struct PeerSchedule {
         ether_addr mac;
         uint64_t seenUs;
-        uint64_t dataRxUs;
-        uint8_t dataRxChannel;
+        uint64_t observedUs;
+        uint8_t observedChannel;
         int64_t refUs;
         uint16_t refSeq, pm;
         uint32_t slotUs;
@@ -377,7 +377,7 @@ public:
     volatile uint32_t fRxIpCount;
     uint32_t fRxGroupData, fRxGroupUdp5353;
     void publishDataState();
-    void noteDataPeer(const uint8_t *address, uint8_t channel);
+    void notePeerChannel(const uint8_t *address, uint8_t channel);
     // Ethernet frames from awdl0, sent as AWDL data frames during a dwell.
     void enqueueData(mbuf_t m);
     void kickDataTx(uint64_t now);
