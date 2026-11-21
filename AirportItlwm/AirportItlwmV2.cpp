@@ -833,8 +833,8 @@ setLinkStateGated(OSObject *target, void *arg0, void *arg1, void *arg2, void *ar
     auto *llw = that->fLLWBsdIf;
     if (that->fLLWIf && llw && llw->bsdRegistrationComplete() &&
         llw->bsdRegistrationResult() == kIOReturnSuccess && llw->getIfnet()) {
-        llw->setLinkState(state);
         const bool llwUp = up && (ifnet_flags(llw->getIfnet()) & IFF_UP);
+        llw->setLinkState(llwUp ? kIO80211NetworkLinkUp : kIO80211NetworkLinkDown);
         that->fLLWIf->setRunningState(llwUp);
         that->fLLWIf->reportLinkStatus(llwUp ? 3 : 1, llwUp ? 0x80 : 0);
     }

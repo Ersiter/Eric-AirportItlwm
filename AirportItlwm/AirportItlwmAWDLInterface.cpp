@@ -179,9 +179,8 @@ setLinkState(IO80211LinkState state)
 {
     if (!getIfnet())
         return false;
-    ifnet_set_flags(getIfnet(), state == kIO80211NetworkLinkUp ? IFF_RUNNING : 0,
-                    state == kIO80211NetworkLinkUp ? 0 : IFF_RUNNING);
-    return true;
+    return ifnet_set_flags(getIfnet(),
+        state == kIO80211NetworkLinkUp ? IFF_RUNNING : 0, IFF_RUNNING) == 0;
 }
 
 SInt32 AirportItlwmLowLatencyEthernetInterface::
@@ -194,6 +193,8 @@ performCommand(IONetworkController *controller, unsigned long cmd, void *arg0, v
             ifnet_t ifp = getIfnet();
             bool up = ifp && (ifnet_flags(ifp) & IFF_UP) &&
                 driver->fHalService->get80211Controller()->ic_state == IEEE80211_S_RUN;
+            if (!setLinkState(up ? kIO80211NetworkLinkUp : kIO80211NetworkLinkDown))
+                return EIO;
             llw->setRunningState(up);
             llw->reportLinkStatus(up ? 3 : 1, up ? 0x80 : 0);
         }
@@ -3084,9 +3085,9 @@ completeLowLatencyInterface(char *bsdName)
         return result != kIOReturnSuccess ? result : kIOReturnError;
     }
 
-    bool linkUp = fHalService->get80211Controller()->ic_state == IEEE80211_S_RUN;
-    bsd->setLinkState(linkUp ? kIO80211NetworkLinkUp : kIO80211NetworkLinkDown);
-    bool llwUp = linkUp && (ifnet_flags(ifp) & IFF_UP);
+    const bool llwUp = fHalService->get80211Controller()->ic_state == IEEE80211_S_RUN &&
+        (ifnet_flags(ifp) & IFF_UP);
+    bsd->setLinkState(llwUp ? kIO80211NetworkLinkUp : kIO80211NetworkLinkDown);
     fLLWIf->setRunningState(llwUp);
     fLLWIf->reportLinkStatus(llwUp ? 3 : 1, llwUp ? 0x80 : 0);
     snprintf(bsdName, 16, "%s%u", ifnet_name(ifp), ifnet_unit(ifp));
