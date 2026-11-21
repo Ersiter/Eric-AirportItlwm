@@ -1312,6 +1312,7 @@
 		F8C4BF822420FAEB007F410E /* iwm-3160-17 */ = {isa = PBXFileReference; lastKnownFileType = text; path = "iwm-3160-17"; sourceTree = "<group>"; };
 		F8C4BF8A2420FAEC007F410E /* iwm-3168-29 */ = {isa = PBXFileReference; lastKnownFileType = text; path = "iwm-3168-29"; sourceTree = "<group>"; };
 		F8C4BF8C2420FAED007F410E /* iwm-7265-17 */ = {isa = PBXFileReference; lastKnownFileType = text; path = "iwm-7265-17"; sourceTree = "<group>"; };
+		B741C565D04A29C112601316 /* iwm-7265D-29 */ = {isa = PBXFileReference; lastKnownFileType = text; path = "iwm-7265D-29"; sourceTree = "<group>"; };
 		F8C4BF8F2420FAED007F410E /* iwm-7260-17 */ = {isa = PBXFileReference; lastKnownFileType = text; path = "iwm-7260-17"; sourceTree = "<group>"; };
 		F8C594D125FD935B0007D19C /* ieee80211_ra.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ieee80211_ra.c; sourceTree = "<group>"; };
 		F8C594D225FD935B0007D19C /* ieee80211_ra.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ieee80211_ra.h; sourceTree = "<group>"; };
@@ -1628,6 +1629,7 @@
 				F8C4BF8A2420FAEC007F410E /* iwm-3168-29 */,
 				F8C4BF8F2420FAED007F410E /* iwm-7260-17 */,
 				F8C4BF8C2420FAED007F410E /* iwm-7265-17 */,
+				B741C565D04A29C112601316 /* iwm-7265D-29 */,
 				F8F884F6279128C400545F2C /* iwlwifi-QuZ-a0-jf-b0-68.ucode */,
 				F8F884F22791286E00545F2C /* iwlwifi-Qu-b0-jf-b0-68.ucode */,
 				F8F884F32791289200545F2C /* iwlwifi-Qu-c0-hr-b0-68.ucode */,
