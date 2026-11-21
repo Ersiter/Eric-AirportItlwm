@@ -7354,6 +7354,19 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
         if (idx == ring->tail)
             return;
         txd = &ring->data[(idx + ring->ring_count - 1) % ring->ring_count];
+        const int status_slot = sc->sc_use_mld_api ? ring->tail :
+            (idx + ring->ring_count - 1) % ring->ring_count;
+        const auto &status_frame = ring->data[status_slot];
+        uint8_t snap[8];
+        if (sc->sc_use_mld_api && status_frame.m &&
+            mbuf_copydata(status_frame.m, 0, sizeof(snap), snap) == 0 &&
+            snap[0] == LLC_SNAP_LSAP && snap[1] == LLC_SNAP_LSAP &&
+            snap[6] == 0x88 && snap[7] == 0x8e) {
+            const uint16_t status = le16toh(tx_resp->status.status);
+            XYLog("EAPOL TX complete gen=%d queue=%d slot=%d status=0x%x acked=%d\n",
+                sc->sc_generation, qid, status_slot, status,
+                (status & IWX_TX_STATUS_MSK) == IWX_TX_STATUS_SUCCESS);
+        }
         auto target = OSDynamicCast(OSData, sc->sc_pcitag->getProperty("AirportItlwm-HotspotScanSSID"));
         if (target && txd->m && txd->in && target->getLength() == txd->in->in_ni.ni_esslen &&
             memcmp(target->getBytesNoCopy(), txd->in->in_ni.ni_essid, target->getLength()) == 0 &&
@@ -8664,7 +8677,17 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
         wh = mtod(m, struct ieee80211_frame *);
     }
     rinfo = iwx_tx_fill_cmd(sc, tx_in, wh, &flags, &rate_n_flags);
-    
+    struct llc snap;
+    const bool control_port = sc->sc_use_mld_api && type == IEEE80211_FC0_TYPE_DATA &&
+        !(subtype & IEEE80211_FC0_SUBTYPE_NODATA) &&
+        !(wh->i_fc[1] & IEEE80211_FC1_PROTECTED) &&
+        mbuf_copydata(m, hdrlen, LLC_SNAPFRAMELEN, &snap) == 0 &&
+        snap.llc_dsap == LLC_SNAP_LSAP && snap.llc_ssap == LLC_SNAP_LSAP &&
+        snap.llc_snap.ether_type == htons(ETHERTYPE_PAE);
+    // iwl_mld sets HIGH_PRI for data on stations awaiting authorization.
+    if (control_port && !ni->ni_port_valid && !(flags & IWX_TX_FLAGS_CMD_RATE))
+        flags |= IWX_TX_FLAGS_HIGH_PRI;
+
 #if NBPFILTER > 0
     if (sc->sc_drvbpf != NULL) {
         struct iwx_tx_radiotap_header *tap = &sc->sc_txtap;
@@ -8824,6 +8847,10 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     ring->cur = (ring->cur + 1) % getTxQueueSize();
     IWX_WRITE(sc, IWX_HBUS_TARG_WRPTR, ring->qid << 16 | ring->cur);
     
+    if (control_port)
+        XYLog("EAPOL TX submit gen=%d queue=%d slot=%d flags=0x%x\n",
+            sc->sc_generation, ring->qid, idx, flags);
+
     /* Mark TX ring as full if we reach a certain threshold. */
     if (++ring->queued > ring->hi_mark) {
 //        XYLog("%s sc->qfullmsk is FULL qid=%d ring->cur=%d ring->queued=%d\n", __FUNCTION__, ring->qid, ring->cur, ring->queued);
@@ -14376,7 +14403,10 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
     const uint64_t deadline_us = iwx_uptime_us() + uint64_t(duration_tu) * IEEE80211_DUR_TU;
     int err;
     
-    if (sc->sc_mld_roc_canceling)
+    const auto &ic = sc->sc_ic;
+    if (sc->sc_mld_roc_canceling ||
+        (sc->sc_use_mld_api && (ic.ic_flags & IEEE80211_F_RSNON) &&
+         !ic.ic_bss->ni_port_valid))
         return EBUSY;
     if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running) {
         if (++sc->sc_p2p_wait > kP2pRocWaitLimit) {
@@ -14413,7 +14443,6 @@ iwx_p2p_roc(struct iwx_softc *sc, uint8_t chan, uint16_t duration_tu)
     if ((err = iwx_p2p_setup(sc, chan)) != 0)
         return err;
     // Setup may sleep while the station starts a scan or rejoins.
-    const auto &ic = sc->sc_ic;
     if (ic.ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN ||
         (sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN)) ||
         (sc->sc_use_mld_api && (ic.ic_flags & IEEE80211_F_RSNON) && !ic.ic_bss->ni_port_valid))
