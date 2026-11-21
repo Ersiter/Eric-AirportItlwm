@@ -11590,6 +11590,10 @@ iwx_awdl_set_low_latency(struct ieee80211com *ic, int active)
     const int generation = sc->sc_generation;
     sc->sc_awdl_low_latency = active != 0;
     int err = that->iwx_awdl_update_low_latency(sc);
+    if (!err && !active) {
+        sc->sc_awdl_peer_llw_error = 0;
+        sc->sc_awdl_peer_llw_requested = false;
+    }
     if (err) {
         sc->sc_awdl_low_latency = previous;
         if (generation != sc->sc_generation)
@@ -11905,7 +11909,7 @@ iwx_awdl_peer_task(void *arg)
 
     if (sc->sc_awdl_peer_added) {
         if (IEEE80211_ADDR_EQ(target, sc->sc_awdl_peer_addr))
-            goto done;
+            goto ensure_llw_queue;
         if (queuesPending()) {
             err = that->iwx_flush_sta_tids(sc, IWX_AWDL_PEER_STA_ID, 0xffff);
             if (generation != sc->sc_generation)
@@ -12082,23 +12086,31 @@ iwx_awdl_peer_task(void *arg)
         }
         sc->sc_awdl_peer_mgmt_qid = qid;
     }
-    if (sc->sc_ic.ic_awdl_llw_qos) {
-        if (!that->iwx_nic_lock(sc)) {
-            err = EBUSY;
-            goto failed;
+    sc->sc_awdl_peer_error = 0;
+
+ensure_llw_queue:
+    // A peer reached through AirDrop can already have working TID 0 and 15 queues.
+    if (sc->sc_awdl_peer_llw_requested && sc->sc_awdl_peer_llw_qid < 0 &&
+        IEEE80211_ADDR_EQ(target, sc->sc_awdl_peer_llw_target)) {
+        sc->sc_awdl_peer_llw_requested = false;
+        int qid = -EBUSY;
+        if (that->iwx_nic_lock(sc)) {
+            qid = that->iwx_tvqm_enable_txq(sc, 6, 0,
+                IWX_DEFAULT_QUEUE_SIZE, IWX_AWDL_PEER_STA_ID);
+            that->iwx_nic_unlock(sc);
         }
-        int qid = that->iwx_tvqm_enable_txq(sc, 6, 0,
-            IWX_DEFAULT_QUEUE_SIZE, IWX_AWDL_PEER_STA_ID);
-        that->iwx_nic_unlock(sc);
         if (generation != sc->sc_generation)
             return;
         if (qid < 0) {
-            err = -qid;
-            goto failed;
+            sc->sc_awdl_peer_llw_error = -qid;
+            // An ambiguous command reply can leave the firmware owning the queue.
+            if (qid == -EWOULDBLOCK || qid == -EINTR || qid == -EIO)
+                iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
+        } else {
+            sc->sc_awdl_peer_llw_qid = qid;
+            sc->sc_awdl_peer_llw_error = 0;
         }
-        sc->sc_awdl_peer_llw_qid = qid;
     }
-    sc->sc_awdl_peer_error = 0;
 
 done:
     if (sc->sc_awdl_ba_pending && sc->sc_awdl_peer_added &&
@@ -12209,6 +12221,20 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
                 }
                 iwx_awdl_record_uc(ic, chan, -1, frame, len, 3);
                 return peerError;
+            }
+            if (llwData) {
+                if (!IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_llw_target)) {
+                    IEEE80211_ADDR_COPY(sc->sc_awdl_peer_llw_target, peer);
+                    sc->sc_awdl_peer_llw_error = 0;
+                }
+                const int llwError = sc->sc_awdl_peer_llw_error;
+                if (llwError == EWOULDBLOCK)
+                    return ETIMEDOUT;
+                if (llwError && llwError != EBUSY)
+                    return llwError == ENOBUFS ? ENOSPC : llwError;
+                if (!sc->sc_awdl_peer_added || sc->sc_awdl_peer_llw_qid < 0 ||
+                    !IEEE80211_ADDR_EQ(peer, sc->sc_awdl_peer_addr))
+                    sc->sc_awdl_peer_llw_requested = true;
             }
             int peerQid = unicastData ?
                 (llwData ? sc->sc_awdl_peer_llw_qid : sc->sc_awdl_peer_qid) :
@@ -13869,7 +13895,8 @@ iwx_awdl_go_stop(struct iwx_softc *sc, bool restoreStation)
     sc->sc_listener_restore_pending = false;
     sc->sc_awdl_peer_added = sc->sc_awdl_peer_tlc_configured = 0;
     sc->sc_awdl_peer_tx_seq = sc->sc_awdl_peer_llw_tx_seq = 0;
-    sc->sc_awdl_peer_error = 0;
+    sc->sc_awdl_peer_error = sc->sc_awdl_peer_llw_error = 0;
+    sc->sc_awdl_peer_llw_requested = false;
     sc->sc_awdl_ba_pending = sc->sc_awdl_ba_reply_pending = 0;
     memset(sc->sc_awdl_peer_addr, 0, sizeof(sc->sc_awdl_peer_addr));
     memset(sc->sc_awdl_peer_target, 0, sizeof(sc->sc_awdl_peer_target));
@@ -17996,7 +18023,8 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_awdl_listener_data_qid = -1;
     sc->sc_awdl_mcast_qid = -1;
     sc->sc_awdl_encryption_type = 0;
-    sc->sc_awdl_peer_error = 0;
+    sc->sc_awdl_peer_error = sc->sc_awdl_peer_llw_error = 0;
+    sc->sc_awdl_peer_llw_requested = false;
     sc->sc_awdl_ba_pending = 0;
     sc->sc_awdl_ba_reply_pending = 0;
     sc->sc_awdl_ba_error = 0;

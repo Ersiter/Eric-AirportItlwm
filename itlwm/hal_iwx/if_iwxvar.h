@@ -967,6 +967,9 @@ struct iwx_softc {
 	uint8_t sc_awdl_peer_target[IEEE80211_ADDR_LEN];
 	int sc_awdl_peer_qid;       /* QoS unicast data, TID 0 */
 	int sc_awdl_peer_llw_qid;   /* low-latency unicast data, TID 6 */
+	int sc_awdl_peer_llw_error;
+	bool sc_awdl_peer_llw_requested;
+	uint8_t sc_awdl_peer_llw_target[IEEE80211_ADDR_LEN];
 	int sc_awdl_peer_mgmt_qid;  /* management/action frames, TID 15 */
 	int sc_awdl_listener_data_qid; /* group data, listener STA TID 0 */
 	int sc_awdl_mcast_qid; /* group data, multicast STA TID 0 */
