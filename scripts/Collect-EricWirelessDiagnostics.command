@@ -64,7 +64,7 @@ boot_build="$(/usr/bin/sw_vers -buildVersion)"
 os_version="$(/usr/bin/sw_vers -productVersion)"
 (
     ulimit -f 256
-    echo "Collector revision: 8"
+    echo "Collector revision: 9"
     echo "Report: $focus"
     stamp
     /usr/bin/sw_vers
@@ -204,6 +204,11 @@ bounded kernel_lines > "$work/kernel-after.txt" 2>&1
 
 patch_predicate='eventMessage CONTAINS[c] "[advsets]" OR eventMessage CONTAINS[c] "[rpa]" OR eventMessage CONTAINS[c] "[pagein]" OR eventMessage CONTAINS[c] "BlueToolFixup" OR eventMessage CONTAINS[c] "enableExtendedAdvertising" OR eventMessage CONTAINS[c] "support for extended scans"'
 bounded /usr/bin/log show --last boot --info --style compact --predicate "$patch_predicate" > "$work/patches.txt" 2>&1
+
+if [ "$focus" = wifi ] && ! /usr/bin/grep -qi "com.zxystd.AirportItlwm" "$work/environment.txt"; then
+    load_predicate='eventMessage CONTAINS[c] "AirportItlwm" OR eventMessage CONTAINS[c] "IO80211Family" OR eventMessage CONTAINS[c] "IOSkywalkFamily"'
+    bounded /usr/bin/log show --last boot --info --style compact --predicate "$load_predicate" > "$work/kext-load.txt" 2>&1
+fi
 
 if [ "$focus" = bluetooth ]; then
     /usr/bin/find /Library/Logs/DiagnosticReports -maxdepth 2 -type f -mtime -2 \
