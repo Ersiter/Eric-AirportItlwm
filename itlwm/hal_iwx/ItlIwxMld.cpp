@@ -2498,7 +2498,10 @@ iwx_mld_run_stop(struct iwx_softc *sc)
 #ifdef AIRPORT_WCL
     iwx_mld_emlsr_stop(sc);
 #endif
-    int err = iwx_flush_sta(sc, in);
+    int err = iwx_awdl_go_stop(sc, false);
+    if (err)
+        return err;
+    err = iwx_flush_sta(sc, in);
     if (err) {
         iwx_mld_log_failure(sc, "run-stop", "tx-flush", err,
             IWX_TXPATH_FLUSH, -1);

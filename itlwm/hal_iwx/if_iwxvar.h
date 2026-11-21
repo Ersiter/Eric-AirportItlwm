@@ -937,6 +937,8 @@ struct iwx_softc {
 	uint8_t sc_listener_up;  /* listener resources are allocated */
 	uint8_t sc_listener_setting_up;
 	uint8_t sc_listener_refitting;
+	bool sc_listener_go;
+	int sc_awdl_go_saved_roc_qid;
 	uint8_t sc_listener_candidate;
 	uint64_t sc_listener_candidate_us;
 	uint64_t sc_listener_retry_us;
