@@ -18010,9 +18010,6 @@ iwx_init(struct _ifnet *ifp)
 
 #ifdef AIRPORT_WCL
     if (ic->ic_event_handler) {
-        ic->ic_event_handler(ic, IEEE80211_EVT_DRIVER_READY, NULL);
-        sc->sc_driver_ready = 1;
-        /* A profile applied before this point could not be handed over yet. */
         if (sc->sc_mcc_notify_pending) {
             sc->sc_mcc_notify_pending = 0;
             /*
@@ -18024,8 +18021,9 @@ iwx_init(struct _ifnet *ifp)
              */
             ieee80211_channel_init(IC2IFP(ic));
             ieee80211_setmode(ic, static_cast<enum ieee80211_phymode>(ic->ic_curmode));
-            ic->ic_event_handler(ic, IEEE80211_EVT_COUNTRY_CODE_UPDATE, NULL);
         }
+        ic->ic_event_handler(ic, IEEE80211_EVT_DRIVER_READY, NULL);
+        sc->sc_driver_ready = 1;
     }
 #endif
     if (sc->sc_mcc_request_pending)

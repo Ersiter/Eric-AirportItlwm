@@ -1452,34 +1452,29 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             // An address application is requested by WCL itself, not a new
             // adapter reset. Replaying firmware-load events here rotates the
             // scan MAC again and recursively restarts the card.
-            bool consumedMacReconfig = AirportWCL::consumeMacReconfiguration(ic->ic_wcl_mac_reconfig, ready);
-            if (consumedMacReconfig) {
+            if (!AirportWCL::consumeMacReconfiguration(ic->ic_wcl_mac_reconfig, ready)) {
                 if (ready) {
-                    resumeWCLScan();
-                    resumeWCLJoin();
+                    uint32_t reset = 1; // Native resetInterfacesComplete, only after HAL success.
+                    instance->postMessage(this, AirportWCL::ResetInterface, &reset, sizeof(reset), true);
                 }
-                break;
+                AirportWCL::DriverAvailability event = {};
+                event.version = 3;
+                event.available = ready;
+                event.reason = ready ? 0xe0821803 : 0xe0821804;
+                instance->postMessage(this, AirportWCL::DriverAvailable, &event, sizeof(event), true);
+                /*
+                 * The same message over the interface path is what sets the
+                 * controller's own availability record: message 55 there branches
+                 * to IO80211ControllerMonitor::setDriverAvailable, which takes the
+                 * integer at payload offset 8 and requires the exact 0xf8 length
+                 * this struct already has. The WCL route above does not reach it, so
+                 * without this second posting the record stays down - and airportd
+                 * reads it when it asks the driver for the country code.
+                 */
+                instance->postMessage(this, AirportWCL::DriverAvailable, &event, sizeof(event), false);
             }
             if (ready) {
-                uint32_t reset = 1; // Native resetInterfacesComplete, only after HAL success.
-                instance->postMessage(this, AirportWCL::ResetInterface, &reset, sizeof(reset), true);
-            }
-            AirportWCL::DriverAvailability event = {};
-            event.version = 3;
-            event.available = ready;
-            event.reason = ready ? 0xe0821803 : 0xe0821804;
-            instance->postMessage(this, AirportWCL::DriverAvailable, &event, sizeof(event), true);
-            /*
-             * The same message over the interface path is what sets the
-             * controller's own availability record: message 55 there branches
-             * to IO80211ControllerMonitor::setDriverAvailable, which takes the
-             * integer at payload offset 8 and requires the exact 0xf8 length
-             * this struct already has. The WCL route above does not reach it, so
-             * without this second posting the record stays down - and airportd
-             * reads it when it asks the driver for the country code.
-             */
-            instance->postMessage(this, AirportWCL::DriverAvailable, &event, sizeof(event), false);
-            if (ready) {
+                deferWCLCountryUpdate();
                 resumeWCLScan();
                 resumeWCLJoin();
             }
