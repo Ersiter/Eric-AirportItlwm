@@ -15062,7 +15062,26 @@ iwx_awdl_stop(struct ieee80211com *ic)
             }, that, sc);
         return;
     }
-    that->iwx_awdl_listen_abort(sc);
+    const int generation = sc->sc_generation;
+    const int cancelError = that->iwx_awdl_listen_abort(sc);
+    if (generation != sc->sc_generation)
+        return;
+    if (sc->sc_use_mld_api && !sc->sc_listener_up && !cancelError) {
+        const int qid = sc->sc_aux_roc_qid;
+        if (sc->sc_p2p_queue && qid > 0 && sc->txq[qid].queued) {
+            sc->sc_mld_roc_canceling = 1;
+            const int flushError = that->iwx_flush_sta_tids(sc, IWX_AUX_STA_ID, 0xffff);
+            if (generation != sc->sc_generation)
+                return;
+            sc->sc_mld_roc_canceling = 0;
+            if (flushError)
+                XYLogE("%s: AWDL AUX flush failed (%d)\n", DEVNAME(sc), flushError);
+            sc->sc_p2p_roc_chan = 0;
+        }
+        // The normal throughput tick can select links again once AWDL has stopped.
+        sc->sc_mld_roc_last = 0;
+        ic->ic_awdl_listen_chan = 0;
+    }
     if (!sc->sc_use_mld_api) {
         memset(sc->sc_legacy_tx_ba_target, 0, sizeof(sc->sc_legacy_tx_ba_target));
         if (sc->sc_legacy_ba_peer_added && sc->sc_awdl_peer_qid >= 0) {

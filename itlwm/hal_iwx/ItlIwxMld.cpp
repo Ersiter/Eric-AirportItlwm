@@ -1067,7 +1067,7 @@ iwx_mld_tpt_task(void *arg)
         return;
 
     if ((sc->sc_mld_emlsr_blocked & IWX_MLD_EMLSR_BLOCKED_ROC) &&
-        now >= sc->sc_mld_roc_last + IWX_MLD_ROC_IDLE_SEC) {
+        (!sc->sc_mld_roc_last || now >= sc->sc_mld_roc_last + IWX_MLD_ROC_IDLE_SEC)) {
         sc->sc_mld_emlsr_blocked &= ~IWX_MLD_EMLSR_BLOCKED_ROC;
         unblocked = true;
     }
