@@ -7389,8 +7389,9 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
         if (target && txd->m && txd->in && target->getLength() == txd->in->in_ni.ni_esslen &&
             memcmp(target->getBytesNoCopy(), txd->in->in_ni.ni_essid, target->getLength()) == 0 &&
             sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210) {
-            uint8_t payload[128];
-            const unsigned size = MIN(mbuf_pkthdr_len(txd->m), sizeof(payload));
+            uint8_t payload[512];
+            const unsigned packetSize = mbuf_pkthdr_len(txd->m);
+            const unsigned size = MIN(packetSize, 128U);
             mbuf_copydata(txd->m, 0, size, payload);
             const bool eapol = size >= 8 && payload[0] == 0xaa && payload[1] == 0xaa &&
                 payload[6] == 0x88 && payload[7] == 0x8e;
@@ -7428,7 +7429,10 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                             value->release();
                         }
                     };
-                    bytes("PayloadPrefix", payload, size);
+                    const unsigned captureSize = dhcp ? MIN(packetSize, (unsigned)sizeof(payload)) : size;
+                    if (captureSize > size)
+                        mbuf_copydata(txd->m, size, captureSize - size, payload + size);
+                    bytes("PayloadPrefix", payload, captureSize);
                     bytes("TxCommand", tx, sizeof(*tx) + ieee80211_get_hdrlen(wh));
                     bytes("TxResponse", tx_resp, (unsigned)length);
                     updated->setObject(record);
