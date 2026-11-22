@@ -18074,6 +18074,14 @@ iwx_init_hw(struct iwx_softc *sc)
                 err = ENXIO;
                 goto err;
             }
+            if (oem && err == EOPNOTSUPP && !iwx_resolved_mcc(sc->sc_fw_mcc)) {
+                // Try the regular host MCC request after the OEM command is declined.
+                err = iwx_send_update_mcc_cmd(sc, overrideMcc, IWX_MCC_SOURCE_ME, true);
+                if (generation != sc->sc_generation) {
+                    err = ENXIO;
+                    goto err;
+                }
+            }
             if (err) {
                 XYLogE("%s: firmware did not accept itlwm_cc=%s (error %d)\n",
                     DEVNAME(sc), overrideMcc, err);
