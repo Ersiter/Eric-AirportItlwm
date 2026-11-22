@@ -1096,6 +1096,7 @@ startAWTimeline()
     fInAW = false;
     fAWRunning = true;
     fHuntStartUs = fHuntNextUs = fListenNextTxStartUs = fListenNextEndUs = fListenNextHuntGapUs = 0;
+    fInfraNextRocUs = 0;
     publishAWDLAddress();
     AWDL_LOG("seq %u slot %llu us", fRefSeq, slotUs());
     scheduleNextAW(now);
@@ -1105,7 +1106,15 @@ startAWTimeline()
 }
 
 void AirportItlwmAWDLInterface::
-stopAWTimeline()
+stopForPowerOff()
+{
+    fSyncEnabled = false;
+    setProperty("AWDLSyncEnabled", false);
+    stopAWTimeline(false);
+}
+
+void AirportItlwmAWDLInterface::
+stopAWTimeline(bool stopRadio)
 {
     if (!fAWRunning)
         return;
@@ -1125,7 +1134,7 @@ stopAWTimeline()
         if (ieee80211com *ic = fController->fHalService->get80211Controller()) {
             ic->ic_awdl_want_data = 0;
             memset(ic->ic_awdl_peer_channel_slots, 0, sizeof(ic->ic_awdl_peer_channel_slots));
-            if (ic->ic_awdl_stop)
+            if (stopRadio && ic->ic_awdl_stop)
                 ic->ic_awdl_stop(ic);
         }
     }
@@ -1926,6 +1935,15 @@ scheduleOwnListen(uint64_t afterUs)
     const uint64_t from = MAX(afterUs, now);
     const auto armListen = [&](uint8_t chan, uint32_t dwell, uint64_t start,
                                uint64_t txStart, uint64_t huntGapUs) {
+        if (protectOwnSlots && chan != home && start < fInfraNextRocUs) {
+            const uint64_t end = start + (uint64_t)dwell * 1024;
+            start = fInfraNextRocUs;
+            if (!huntGap) {
+                if (end <= start || end - start < kListenDwellMinTU * 1024)
+                    return false;
+                dwell = (uint32_t)((end - start) / 1024);
+            }
+        }
         fListenNextChan = chan;
         fListenNextDwellTU = dwell;
         fListenNextTxStartUs = txStart;
@@ -2043,15 +2061,12 @@ scheduleOwnListen(uint64_t afterUs)
         const uint32_t dwell = (uint32_t)((listenEnd - start) / 1024);
         if (protectOwnSlots && dwell < kListenDwellMinTU)
             continue;
-        return armListen(chan, MIN(dwell, fListenDwellTU), (uint64_t)start,
-            peerWindow ? 0 : (uint64_t)slotStart, 0);
+        if (armListen(chan, MIN(dwell, fListenDwellTU), (uint64_t)start,
+            peerWindow ? 0 : (uint64_t)slotStart, 0))
+            return true;
     }
-    if (huntChan) {
-        // A full beacon interval away from home can miss every beacon during repeated hunts.
-        const uint32_t dwell = protectOwnSlots && huntChan != home ?
-            MIN(kHuntDwellTU, MAX(kListenDwellMinTU, ic->ic_bss->ni_intval / 2)) : kHuntDwellTU;
-        return armListen(huntChan, dwell, huntStart, 0, huntGap);
-    }
+    if (huntChan)
+        return armListen(huntChan, kHuntDwellTU, huntStart, 0, huntGap);
     fListenNoSlot++;
     return false;
 }
@@ -2123,7 +2138,7 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *timer)
         }
         dwell = (uint32_t)MIN(dwell, remainingTU);
     }
-    const uint64_t dwellEnd = now + (uint64_t)dwell * 1024;
+    uint64_t nextListen = end ? end : now + (uint64_t)dwell * 1024;
     ieee80211com *ic = that->fController->fHalService->get80211Controller();
     if (ic && ic->ic_awdl_listen && ic->ic_state == IEEE80211_S_RUN && ic->ic_bss) {
         unsigned home = ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan);
@@ -2134,6 +2149,13 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *timer)
             // RX can run while the firmware command is waiting for its reply.
             // Only a hunt still waiting on its timer may be replaced by RX.
             that->fListenNextHuntGapUs = 0;
+            const bool offChannel = ic->ic_awdl_listen_home && !ic->ic_awdl_listener_chan &&
+                !ic->ic_awdl_home_chan && chan != home;
+            // Leave an uninterrupted home interval after each off-channel ROC.
+            const uint32_t homeTU = ic->ic_bss->ni_intval;
+            if (offChannel && homeTU)
+                dwell = MIN(dwell, MAX(kListenDwellMinTU, homeTU / 2));
+            const uint64_t dwellEnd = now + (uint64_t)dwell * 1024;
             const int err = that->startListen(chan, dwell, home, true);
             if (!that->fAWRunning || !that->fListenAlignedActive ||
                 that->fListenNextEndUs != end || that->fListenNextChan != chan ||
@@ -2146,6 +2168,10 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *timer)
                     that->fListenOwn++;
                 // A retry can shorten the dwell without moving the advertised AW.
                 that->scheduleTx(chan, txStart ? txStart : now + kListenLeadUs, dwellEnd);
+                if (offChannel && !ic->ic_awdl_listener_chan) {
+                    that->fInfraNextRocUs = dwellEnd + (uint64_t)homeTU * 1024;
+                    nextListen = MAX(nextListen, that->fInfraNextRocUs);
+                }
             } else if (end && !huntGap && (err == EBUSY || err == EAGAIN)) {
                 // A previous ROC can still be waiting for its END notification.
                 constexpr uint64_t retryDelayUs = 4 * 1024;
@@ -2160,7 +2186,7 @@ listenTimerFired(OSObject *owner, IOTimerEventSource *timer)
             }
         }
     }
-    that->scheduleAlignedListen(end ? end : dwellEnd);
+    that->scheduleAlignedListen(nextListen);
 }
 
 #pragma mark - stage 3 step 1: transmit (host side of the firmware PSF / MI engine)

@@ -1412,6 +1412,8 @@ setPOWER(OSObject *object,
     if (pd->num_radios > 0) {
         bool isRunning = (fHalService->get80211Controller()->ic_ac.ac_if.if_flags & IFF_RUNNING) != 0;
         if (pd->power_state[0] == 0) {
+            if (fAWDLIf)
+                fAWDLIf->stopForPowerOff();
             fHalService->get80211Controller()->ic_wcl_mac_reconfig = false;
             changePowerStateToPriv(kPowerStateOff);
             if (fHalService->get80211Controller()->ic_ac.ac_if.if_flags & (IFF_UP | IFF_RUNNING)) {

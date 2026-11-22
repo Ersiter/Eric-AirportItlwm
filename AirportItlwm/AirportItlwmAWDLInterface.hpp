@@ -193,6 +193,7 @@ public:
     void copyAddress(ether_addr &out) const { memcpy(&out, &fMac, sizeof(out)); }
     // Stop and remove the AW timer; call before the interface is stopped.
     void teardownAW();
+    void stopForPowerOff();
 
 private:
     // Host-side availability window timeline (what Broadcom firmware does with
@@ -200,7 +201,7 @@ private:
     // presence_mode AWs of aw_period TU each; times are host microseconds.
     static void awTimerFired(OSObject *owner, IOTimerEventSource *sender);
     void startAWTimeline();
-    void stopAWTimeline();
+    void stopAWTimeline(bool stopRadio = true);
     void scheduleNextAW(uint64_t nowUs);
     void syncFromFrame(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs);
     void postAWEvents();
@@ -283,7 +284,7 @@ private:
     bool fListenAlignedActive;      // the listen timer drives the listens
     uint8_t fListenNextChan;
     uint32_t fListenNextDwellTU;
-    uint64_t fListenNextTxStartUs, fListenNextEndUs;
+    uint64_t fListenNextTxStartUs, fListenNextEndUs, fInfraNextRocUs;
     uint64_t fListenAligned;
     uint64_t fListenNoSlot;
     uint64_t fListenHunt;
