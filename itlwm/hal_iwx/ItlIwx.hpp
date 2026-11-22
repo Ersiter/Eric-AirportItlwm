@@ -449,6 +449,9 @@ public:
     static int iwx_awdl_rx_ba(struct ieee80211com *, const uint8_t *, uint8_t, uint16_t, uint16_t, int, const uint8_t *, uint8_t);
     int iwx_awdl_ba_apply(struct iwx_softc *, uint8_t, uint16_t, uint16_t, int);
     void iwx_awdl_ba_reply(struct iwx_softc *);
+    void iwx_legacy_tx_ba_step(struct iwx_softc *);
+    void iwx_legacy_tx_ba_rx(struct iwx_softc *, const struct ieee80211_frame *, size_t, uint8_t);
+    void iwx_legacy_tx_ba_request(struct iwx_softc *);
     int    iwx_awdl_listen_v14(struct iwx_softc *, uint8_t, uint16_t);
     static void iwx_awdl_stop(struct ieee80211com *);
     int    iwx_awdl_listen_abort(struct iwx_softc *);
@@ -486,7 +489,7 @@ public:
     int    iwx_rs_rval2idx(uint8_t);
     uint16_t iwx_rs_ht_rates(struct iwx_softc *, struct ieee80211_node *, int);
     uint16_t iwx_rs_fw_get_config_flags(struct iwx_softc *sc, struct ieee80211_node *ni);
-    int    iwx_rs_init(struct iwx_softc *, struct iwx_node *, bool update);
+    int    iwx_rs_init(struct iwx_softc *, struct iwx_node *, bool update, bool awdlPeer = false);
     void iwx_rs_update(struct iwx_softc *sc, struct iwx_tlc_update_notif *notif);
     static void iwx_rs_reset_amsdu(struct iwx_node *);
     int    iwx_enable_mgmt_queue(struct iwx_softc *);

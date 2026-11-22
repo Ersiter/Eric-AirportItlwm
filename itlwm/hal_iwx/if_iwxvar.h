@@ -988,6 +988,13 @@ struct iwx_softc {
 	uint8_t sc_awdl_ba_reply[sizeof(struct ieee80211_frame) + 9];
 	uint8_t sc_awdl_ba_reply_pending;
 	uint8_t sc_awdl_ba_reply_chan;
+	enum class LegacyTxBa : uint8_t { Idle, Waiting, Enable, Active, Disable, Unavailable };
+	LegacyTxBa sc_legacy_tx_ba;
+	uint8_t sc_legacy_tx_ba_target[IEEE80211_ADDR_LEN];
+	uint8_t sc_legacy_tx_ba_token;
+	uint16_t sc_legacy_tx_ba_window;
+	uint64_t sc_legacy_tx_ba_retry_us;
+	uint32_t sc_legacy_tx_ba_aggregates;
 	uint8_t sc_awdl_rate_step;     /* data-frame rate ladder on the legacy listener, 0 = 54 Mbit/s OFDM */
 	uint16_t sc_awdl_rate_ok, sc_awdl_rate_fail;
 	uint8_t sc_listener_tries;

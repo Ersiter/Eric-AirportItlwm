@@ -113,6 +113,7 @@
 #include <HAL/ItlAWDLBootArg.hpp>
 #include <HAL/ItlAWDLRx.hpp>
 
+using LegacyTxBa = iwx_softc::LegacyTxBa;
 static bool iwx_awdl_legacy_ba_enabled();
 static bool iwx_awdl_client_enabled();
 static uint64_t iwx_uptime_us();
@@ -7088,6 +7089,8 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         ic->ic_awdl_rx_last_len[kind] = (uint8_t)keep;
     }
     
+    if (!sc->sc_use_mld_api && awdlUc && sc->sc_listener_up)
+        iwx_legacy_tx_ba_rx(sc, mtod(m, const struct ieee80211_frame *), mbuf_len(m), rxi.rxi_chan);
     if (iwx_rx_reorder(sc, m, chanidx, desc,
                        (phy_info & IWX_RX_MPDU_PHY_SHORT_PREAMBLE),
                        rate_n_flags, device_timestamp, &rxi, ml))
@@ -7185,6 +7188,8 @@ iwx_clear_oactive(struct iwx_softc *sc, struct iwx_tx_ring *ring)
 static bool
 iwx_awdl_peer_tx_queue(const struct iwx_softc *sc, int qid)
 {
+    if (!sc->sc_use_mld_api)
+        return sc->sc_legacy_ba_peer_added && qid == sc->sc_awdl_peer_qid;
     return sc->sc_awdl_peer_added && (qid == sc->sc_awdl_peer_qid ||
         qid == sc->sc_awdl_peer_llw_qid || qid == sc->sc_awdl_peer_mgmt_qid);
 }
@@ -7210,7 +7215,9 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
     if (length < sizeof(*ba_res) ||
         le16toh(ba_res->tfd_cnt) > (length - sizeof(*ba_res)) / sizeof(ba_res->tfd[0]))
         return;
-    if (!sc->sc_use_mld_api && ba_res->sta_id != IWX_STATION_ID)
+    const bool legacyPeer = !sc->sc_use_mld_api && sc->sc_legacy_ba_peer_added &&
+        ba_res->sta_id == IWX_AWDL_PEER_STA_ID;
+    if (!sc->sc_use_mld_api && ba_res->sta_id != IWX_STATION_ID && !legacyPeer)
         return;
     const bool infrastructure = ba_res->sta_id < 32 &&
         (sc->sc_mld_sta_mask & (1U << ba_res->sta_id));
@@ -7236,8 +7243,9 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         if (qid == IWX_DQA_CMD_QUEUE || qid >= nitems(sc->txq) || !sc->txq[qid].ring_count)
             continue;
         /* As in iwlmld, the TFD queue identifies entries to reclaim. */
-        const bool awdl = sc->sc_use_mld_api && iwx_awdl_tx_queue(sc, qid);
-        if (sc->sc_use_mld_api && !awdl && !infrastructure)
+        const bool awdl = sc->sc_use_mld_api ? iwx_awdl_tx_queue(sc, qid) : legacyPeer;
+        if ((legacyPeer && qid != sc->sc_awdl_peer_qid) ||
+            (sc->sc_use_mld_api && !awdl && !infrastructure))
             continue;
         ring = &sc->txq[qid];
 
@@ -7252,6 +7260,8 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
     }
     if (reclaimedAwdl) {
         const uint32_t txed = le16toh(ba_res->txed);
+        if (legacyPeer && txed > 1 && sc->sc_legacy_tx_ba_aggregates++ == 0)
+            XYLog("AWDL TX A-MPDU qid=%d sent=%u acked=%u\n", sc->sc_awdl_peer_qid, txed, done);
         sc->sc_ic.ic_awdl_tx_ok += done;
         if (txed > done)
             sc->sc_ic.ic_awdl_tx_fail += txed - done;
@@ -7279,6 +7289,9 @@ iwx_ampdu_txq_advance(struct iwx_softc *sc, struct iwx_tx_ring *ring, int idx)
         sc->sc_tx_timer[ring->qid] = ring->queued ? 15 : 0;
         sc->sc_tx_progress = 1;
         getMainCommandGate()->commandWakeup(&ring->queued);
+        if (!sc->sc_use_mld_api && !ring->queued && ring->qid == sc->sc_awdl_peer_qid &&
+            sc->sc_legacy_tx_ba == LegacyTxBa::Disable)
+            task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
         if (!ring->queued && !sc->sc_awdl_peer_busy &&
             (ring->qid == sc->sc_awdl_peer_qid || ring->qid == sc->sc_awdl_peer_llw_qid ||
              ring->qid == sc->sc_awdl_peer_mgmt_qid) &&
@@ -7449,7 +7462,8 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                 if (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid)
                     sc->sc_listener_last_data_us = iwx_uptime_us();
             }
-            if (!sc->sc_use_mld_api && (le16toh(tx_resp->frame_ctrl) & 0x0c) == 0x08) {
+            if (!sc->sc_use_mld_api && qid != sc->sc_awdl_peer_qid &&
+                (le16toh(tx_resp->frame_ctrl) & 0x0c) == 0x08) {
                 if (st == IWX_TX_STATUS_SUCCESS) {
                     if (++sc->sc_awdl_rate_ok >= 48) {
                         if (sc->sc_awdl_rate_step < 2)
@@ -8929,7 +8943,7 @@ iwx_flush_sta_tids(struct iwx_softc *sc, int sta_id, uint16_t tids)
 
         if (qid == IWX_DQA_CMD_QUEUE || qid >= nitems(sc->txq) || !sc->txq[qid].ring_count)
             continue;
-        if (sc->sc_use_mld_api && sta_id == IWX_AWDL_PEER_STA_ID) {
+        if (sta_id == IWX_AWDL_PEER_STA_ID) {
             if (!iwx_awdl_peer_tx_queue(sc, qid))
                 continue;
         } else if (sc->sc_use_mld_api && sta_id == IWX_AWDL_DISCOVERY_STA_ID) {
@@ -10833,8 +10847,8 @@ static bool iwx_awdl_listener_enabled()
  * to its address.
  */
 /*
- * -itlawdllegacyba (a single flag, not part of -itlawdl): the receive Block Ack session of AirportIntel's
- * listener for pre-MLD firmware. Nobody on the project has such a card, so it stays off until a tester asks.
+ * -itlawdllegacyba and -itlawdlcoexbatx enable legacy listener Block Ack.
+ * Transmit aggregation also requires the AX TVQM queue and compressed BA notification.
  */
 static bool iwx_awdl_legacy_ba_enabled()
 {
@@ -11426,6 +11440,8 @@ iwx_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer)
     if (IEEE80211_IS_MULTICAST(peer) || IEEE80211_ADDR_EQ(peer, zero))
         return;
     if (!sc->sc_use_mld_api) {
+        if (op == 2 && IEEE80211_ADDR_EQ(peer, sc->sc_legacy_tx_ba_target))
+            memset(sc->sc_legacy_tx_ba_target, 0, sizeof(sc->sc_legacy_tx_ba_target));
         if (op == 2 && sc->sc_legacy_ba_peer_added && IEEE80211_ADDR_EQ(peer, sc->sc_legacy_ba_peer)) {
             sc->sc_legacy_ba_remove = 1;
             if (sc->sc_listener_up)
@@ -11680,9 +11696,30 @@ int ItlIwx::
 iwx_legacy_ba_peer_remove(struct iwx_softc *sc)
 {
     struct iwx_rm_sta_cmd rm = {};
-    /* REMOVE_STA takes the sessions of the station with it. */
+    /* REMOVE_STA releases the peer's queue and receive sessions. */
+    const int generation = sc->sc_generation;
+    const int qid = sc->sc_awdl_peer_qid;
+    sc->sc_legacy_tx_ba = LegacyTxBa::Idle;
+    sc->sc_legacy_tx_ba_retry_us = 0;
+    memset(sc->sc_legacy_tx_ba_target, 0, sizeof(sc->sc_legacy_tx_ba_target));
+    if (qid >= 0 && sc->txq[qid].queued) {
+        const int err = iwx_flush_sta_tids(sc, IWX_AWDL_PEER_STA_ID, 1);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err || sc->txq[qid].queued) {
+            iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
+            return err ? err : EIO;
+        }
+    }
     rm.sta_id = IWX_AWDL_PEER_STA_ID;
-    return iwx_send_cmd_pdu(sc, IWX_REMOVE_STA, 0, sizeof(rm), &rm);
+    const int err = iwx_send_cmd_pdu(sc, IWX_REMOVE_STA, 0, sizeof(rm), &rm);
+    if (generation != sc->sc_generation)
+        return ENXIO;
+    if (!err && qid >= 0) {
+        iwx_free_tx_ring(sc, &sc->txq[qid]);
+        sc->sc_awdl_peer_qid = -1;
+    }
+    return err;
 }
 
 void ItlIwx::
@@ -11701,6 +11738,167 @@ iwx_legacy_ba_publish(struct iwx_softc *sc)
         text->release();
     }
 #endif
+}
+
+// ForbiddenItlwm: negotiate TID 0 on the listener before enabling its peer queue.
+static constexpr unsigned kLegacyTxBaWindow = 64;
+
+void ItlIwx::
+iwx_legacy_tx_ba_request(struct iwx_softc *sc)
+{
+    const uint64_t now = iwx_uptime_us();
+    if ((sc->sc_legacy_tx_ba != LegacyTxBa::Idle && sc->sc_legacy_tx_ba != LegacyTxBa::Waiting) ||
+        now < sc->sc_legacy_tx_ba_retry_us)
+        return;
+    auto *ic = &sc->sc_ic;
+    uint8_t frame[sizeof(ieee80211_frame) + 9] = {};
+    auto *wh = reinterpret_cast<ieee80211_frame *>(frame);
+    wh->i_fc[0] = IEEE80211_FC0_TYPE_MGT | IEEE80211_FC0_SUBTYPE_ACTION;
+    IEEE80211_ADDR_COPY(wh->i_addr1, sc->sc_legacy_ba_peer);
+    IEEE80211_ADDR_COPY(wh->i_addr2, ic->ic_awdl_addr);
+    IEEE80211_ADDR_COPY(wh->i_addr3, itlAWDLBssid(ic));
+    LE_WRITE_2(wh->i_seq, (ic->ic_awdl_ba_resp_seq++ & 0xfff) << 4);
+    auto *body = reinterpret_cast<uint8_t *>(wh + 1);
+    body[0] = IEEE80211_CATEG_BA;
+    body[1] = IEEE80211_ACTION_ADDBA_REQ;
+    body[2] = ++sc->sc_legacy_tx_ba_token;
+    LE_WRITE_2(body + 3, (kLegacyTxBaWindow << 6) | 2);
+    LE_WRITE_2(body + 7, sc->sc_awdl_peer_tx_seq << 4);
+    if (iwx_awdl_tx_frame(sc, frame, sizeof(frame), sc->sc_aux_roc_qid) == 0) {
+        sc->sc_legacy_tx_ba = LegacyTxBa::Waiting;
+        sc->sc_legacy_tx_ba_retry_us = now + 1000000;
+    }
+}
+
+void ItlIwx::
+iwx_legacy_tx_ba_rx(struct iwx_softc *sc, const struct ieee80211_frame *wh, size_t len, uint8_t chan)
+{
+    if (sc->sc_awdl_peer_qid < 0 || sc->sc_legacy_ba_remove ||
+        chan != sc->sc_listener_chan ||
+        (wh->i_fc[0] & (IEEE80211_FC0_TYPE_MASK | IEEE80211_FC0_SUBTYPE_MASK)) !=
+            (IEEE80211_FC0_TYPE_MGT | IEEE80211_FC0_SUBTYPE_ACTION) ||
+        (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) ||
+        !IEEE80211_ADDR_EQ(wh->i_addr2, sc->sc_legacy_ba_peer))
+        return;
+    const size_t hdr = ieee80211_get_hdrlen(wh);
+    if (len < hdr + 6)
+        return;
+    const auto *body = reinterpret_cast<const uint8_t *>(wh) + hdr;
+    if (body[0] != IEEE80211_CATEG_BA)
+        return;
+    if (body[1] == IEEE80211_ACTION_DELBA && !(LE_READ_2(body + 2) & 0xf800) &&
+        (sc->sc_legacy_tx_ba == LegacyTxBa::Active || sc->sc_legacy_tx_ba == LegacyTxBa::Enable)) {
+        sc->sc_legacy_tx_ba = LegacyTxBa::Disable;
+    } else if (body[1] == IEEE80211_ACTION_ADDBA_RESP && len >= hdr + 9 &&
+        sc->sc_legacy_tx_ba == LegacyTxBa::Waiting && body[2] == sc->sc_legacy_tx_ba_token &&
+        iwx_uptime_us() < sc->sc_legacy_tx_ba_retry_us) {
+        const unsigned params = LE_READ_2(body + 5);
+        if (params & 0x003c)
+            return;
+        if (LE_READ_2(body + 3) != IEEE80211_STATUS_SUCCESS || !(params & 2)) {
+            sc->sc_legacy_tx_ba = LegacyTxBa::Idle;
+            sc->sc_legacy_tx_ba_retry_us = iwx_uptime_us() + 20000000;
+            return;
+        }
+        const unsigned window = params >> 6;
+        sc->sc_legacy_tx_ba_window = window ? MIN(window, kLegacyTxBaWindow) : kLegacyTxBaWindow;
+        sc->sc_legacy_tx_ba = LegacyTxBa::Enable;
+    } else {
+        return;
+    }
+    task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
+}
+
+void ItlIwx::
+iwx_legacy_tx_ba_step(struct iwx_softc *sc)
+{
+    const int generation = sc->sc_generation;
+    const int qid = sc->sc_awdl_peer_qid;
+    const auto state = sc->sc_legacy_tx_ba;
+    if (!sc->sc_listener_up || sc->sc_awdl_peer_busy || sc->sc_legacy_ba_remove ||
+        sc->sc_legacy_ba_quarantine == generation ||
+        sc->ns_nstate != IEEE80211_S_RUN ||
+        (sc->sc_flags & (IWX_FLAG_SHUTDOWN | IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)))
+        return;
+    if (state == LegacyTxBa::Enable || state == LegacyTxBa::Disable) {
+        if (state == LegacyTxBa::Disable && sc->txq[qid].queued)
+            return;
+        struct iwx_add_sta_cmd cmd = {};
+        cmd.sta_id = IWX_AWDL_PEER_STA_ID;
+        cmd.mac_id_n_color = htole32(IWX_FW_CMD_ID_AND_COLOR(IWX_LISTENER_MAC_ID, 0));
+        cmd.add_modify = IWX_STA_MODE_MODIFY;
+        cmd.modify_mask = IWX_STA_MODIFY_TID_DISABLE_TX;
+        cmd.tid_disable_tx = htole16(state == LegacyTxBa::Enable ? 0xfffe : 0xffff);
+        uint32_t status = IWX_ADD_STA_SUCCESS;
+        sc->sc_awdl_peer_busy = true;
+        int err = iwx_send_cmd_pdu_status(sc, IWX_ADD_STA, sizeof(cmd), &cmd, &status);
+        if (generation != sc->sc_generation)
+            return;
+        sc->sc_awdl_peer_busy = false;
+        if (err || (status & IWX_ADD_STA_STATUS_MASK) != IWX_ADD_STA_SUCCESS) {
+            sc->sc_legacy_tx_ba = LegacyTxBa::Unavailable;
+            sc->sc_legacy_ba_remove = 1;
+        } else if (sc->sc_legacy_tx_ba == state) {
+            sc->sc_legacy_tx_ba = state == LegacyTxBa::Enable ? LegacyTxBa::Active : LegacyTxBa::Idle;
+            sc->sc_legacy_tx_ba_retry_us = 0;
+            XYLog("AWDL TX BA %s qid=%d window=%u\n", state == LegacyTxBa::Enable ? "agreed" : "stopped",
+                qid, sc->sc_legacy_tx_ba_window);
+        }
+        if (sc->sc_legacy_ba_remove || sc->sc_legacy_tx_ba == LegacyTxBa::Disable)
+            task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
+        return;
+    }
+
+    static const uint8_t zero[IEEE80211_ADDR_LEN] = {};
+    if (qid >= 0 || state == LegacyTxBa::Unavailable ||
+        IEEE80211_ADDR_EQ(sc->sc_legacy_tx_ba_target, zero))
+        return;
+    uint8_t peer[IEEE80211_ADDR_LEN];
+    IEEE80211_ADDR_COPY(peer, sc->sc_legacy_tx_ba_target);
+    if (sc->sc_legacy_ba_peer_added && !IEEE80211_ADDR_EQ(peer, sc->sc_legacy_ba_peer))
+        return;
+    sc->sc_awdl_peer_busy = true;
+    const auto prepare = [&]() -> int {
+        if (!sc->sc_legacy_ba_peer_added) {
+            int err = iwx_legacy_ba_peer_add(sc, peer);
+            if (generation != sc->sc_generation)
+                return ENXIO;
+            if (err)
+                return err;
+            sc->sc_legacy_ba_peer_added = 1;
+            IEEE80211_ADDR_COPY(sc->sc_legacy_ba_peer, peer);
+            iwx_awdl_listener_refit(sc);
+            if (generation != sc->sc_generation)
+                return ENXIO;
+            if (!IEEE80211_ADDR_EQ(peer, sc->sc_legacy_tx_ba_target)) {
+                sc->sc_legacy_ba_remove = 1;
+                return ECANCELED;
+            }
+        }
+        if (!iwx_nic_lock(sc))
+            return EBUSY;
+        const int queue = iwx_tvqm_enable_txq(sc, 0, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_AWDL_PEER_STA_ID);
+        iwx_nic_unlock(sc);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (queue < 0)
+            return -queue;
+        sc->sc_awdl_peer_qid = queue;
+        sc->sc_awdl_peer_tx_seq = sc->txq[queue].cur & 0xfff;
+        return iwx_rs_init(sc, reinterpret_cast<iwx_node *>(sc->sc_ic.ic_bss), true, true);
+    };
+    const int err = prepare();
+    if (generation != sc->sc_generation)
+        return;
+    sc->sc_awdl_peer_busy = false;
+    if (err) {
+        sc->sc_legacy_tx_ba = LegacyTxBa::Unavailable;
+        XYLog("AWDL TX BA setup failed: %d\n", err);
+        if (sc->sc_awdl_peer_qid < 0 && (err == ETIMEDOUT || err == EWOULDBLOCK || err == EIO))
+            iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
+    }
+    if (sc->sc_legacy_ba_remove || sc->sc_awdl_ba_pending)
+        task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
 }
 
 void ItlIwx::
@@ -11897,8 +12095,10 @@ iwx_awdl_peer_task(void *arg)
         return;
     }
     if (!sc->sc_use_mld_api) {
-        if (iwx_awdl_legacy_ba_enabled())
+        if (iwx_awdl_legacy_ba_enabled()) {
             that->iwx_legacy_ba_step(sc);
+            that->iwx_legacy_tx_ba_step(sc);
+        }
         return;
     }
     if (sc->sc_awdl_peer_busy || sc->sc_listener_refitting || !sc->sc_listener_up ||
@@ -12219,6 +12419,29 @@ iwx_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     }
     int qid = sc->sc_aux_roc_qid;
     const bool unicastData = isData && unicast;
+    if (!sc->sc_use_mld_api && sc->sc_listener_up && unicastData &&
+        (subtype == IEEE80211_FC0_SUBTYPE_DATA || qosData) && iwx_awdl_legacy_ba_enabled() &&
+        sc->sc_device_family >= IWX_DEVICE_FAMILY_22000 &&
+        sc->sc_capa_num_stations > IWX_AWDL_PEER_STA_ID &&
+        sc->sc_legacy_ba_quarantine != sc->sc_generation && !sc->sc_legacy_ba_remove &&
+        (!sc->sc_legacy_ba_peer_added || IEEE80211_ADDR_EQ(wh->i_addr1, sc->sc_legacy_ba_peer))) {
+        const auto ba = sc->sc_legacy_tx_ba;
+        const int peerQid = sc->sc_awdl_peer_qid;
+        if (ba == LegacyTxBa::Active && !sc->sc_awdl_peer_busy) {
+            if (sc->txq[peerQid].queued >= sc->sc_legacy_tx_ba_window)
+                return EAGAIN;
+            qid = peerQid;
+        } else if (ba == LegacyTxBa::Disable || (ba == LegacyTxBa::Active && sc->txq[peerQid].queued)) {
+            return EAGAIN;
+        } else if (ba != LegacyTxBa::Unavailable && !sc->sc_awdl_peer_busy) {
+            if (peerQid < 0) {
+                IEEE80211_ADDR_COPY(sc->sc_legacy_tx_ba_target, wh->i_addr1);
+                task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
+            } else {
+                that->iwx_legacy_tx_ba_request(sc);
+            }
+        }
+    }
     if (standing) {
         if (sc->sc_listener_go && !isData && !unicast) {
             if (!sc->sc_awdl_discovery_ready ||
@@ -12361,8 +12584,11 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
         IEEE80211_ADDR_EQ(frame + 4, sc->sc_awdl_peer_addr) &&
         (subtype == IEEE80211_FC0_SUBTYPE_QOS ||
          (subtype == IEEE80211_FC0_SUBTYPE_DATA && sc->sc_awdl_peer_tlc_configured));
-    const bool usePeerRate = qosPeerData && sc->sc_awdl_peer_tlc_configured;
-    const size_t qosExtra = qosPeerData && subtype == IEEE80211_FC0_SUBTYPE_DATA ? 2 : 0;
+    const bool legacyAggregate = dataFrame && !sc->sc_use_mld_api &&
+        sc->sc_legacy_tx_ba == LegacyTxBa::Active && qid == sc->sc_awdl_peer_qid;
+    const bool qosData = qosPeerData || legacyAggregate;
+    const bool usePeerRate = legacyAggregate || (qosPeerData && sc->sc_awdl_peer_tlc_configured);
+    const size_t qosExtra = qosData && subtype == IEEE80211_FC0_SUBTYPE_DATA ? 2 : 0;
     if (len > MCLBYTES - qosExtra)
         return EINVAL;
 
@@ -12376,7 +12602,7 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
     memcpy(mbuf_data(m), frame, len);
     uint16_t qosSequence = peerTid == 6 ? sc->sc_awdl_peer_llw_tx_seq :
         sc->sc_awdl_peer_tx_seq;
-    if (qosPeerData) {
+    if (qosData) {
         uint8_t *bytes = static_cast<uint8_t *>(mbuf_data(m));
         if (qosExtra) {
             memmove(bytes + hdrlen + 2, bytes + hdrlen, len - hdrlen);
@@ -12483,7 +12709,7 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
     ring->cur = (ring->cur + 1) % getTxQueueSize();
     IWX_WRITE(sc, IWX_HBUS_TARG_WRPTR, ring->qid << 16 | ring->cur);
     ring->queued++;
-    if (qosPeerData) {
+    if (qosData) {
         if (peerTid == 6)
             sc->sc_awdl_peer_llw_tx_seq = (qosSequence + 1) & 0x0fff;
         else
@@ -13978,6 +14204,13 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
         const uint8_t want = iwx_awdl_listener_pick(sc);
         const uint8_t width = want ? iwx_awdl_listener_width(sc, want) : 0;
         if (want && phy->channel && (want != sc->sc_listener_chan || width != sc->sc_listener_width) &&
+            sc->sc_awdl_peer_qid >= 0 &&
+            IEEE80211_IS_CHAN_2GHZ(phy->channel) == IEEE80211_IS_CHAN_2GHZ(&ic->ic_channels[want])) {
+            sc->sc_legacy_ba_remove = 1;
+            task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
+            return;
+        }
+        if (want && phy->channel && (want != sc->sc_listener_chan || width != sc->sc_listener_width) &&
             IEEE80211_IS_CHAN_2GHZ(phy->channel) == IEEE80211_IS_CHAN_2GHZ(&ic->ic_channels[want]) &&
             sc->sc_aux_roc_qid > 0 && !sc->txq[sc->sc_aux_roc_qid].queued) {
             struct ieee80211_channel *oldChan = phy->channel;
@@ -14653,6 +14886,13 @@ iwx_awdl_stop(struct ieee80211com *ic)
         return;
     }
     that->iwx_awdl_listen_abort(sc);
+    if (!sc->sc_use_mld_api) {
+        memset(sc->sc_legacy_tx_ba_target, 0, sizeof(sc->sc_legacy_tx_ba_target));
+        if (sc->sc_legacy_ba_peer_added && sc->sc_awdl_peer_qid >= 0) {
+            sc->sc_legacy_ba_remove = 1;
+            task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
+        }
+    }
     if (sc->sc_listener_go && that->iwx_awdl_go_stop(sc, ic->ic_state == IEEE80211_S_RUN) == EBUSY)
         iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
 }
@@ -15290,7 +15530,7 @@ iwx_note_tlc_request(struct iwx_softc *sc, uint8_t version, const void *cmd, siz
 }
 
 int ItlIwx::
-iwx_rs_init(struct iwx_softc *sc, struct iwx_node *in, bool update)
+iwx_rs_init(struct iwx_softc *sc, struct iwx_node *in, bool update, bool awdlPeer)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     struct ieee80211_node *ni = &in->in_ni;
@@ -15384,12 +15624,25 @@ iwx_rs_init(struct iwx_softc *sc, struct iwx_node *in, bool update)
         }
     }
 
+    if (awdlPeer) {
+        // The pre-MLD listener station has no net80211 node of its own.
+        const bool wide = sc->sc_listener_width == 80;
+        cfg_cmd = {};
+        cfg_cmd.sta_id = IWX_AWDL_PEER_STA_ID;
+        cfg_cmd.max_ch_width = wide ? IWX_TLC_MNG_CH_WIDTH_80MHZ : IWX_TLC_MNG_CH_WIDTH_20MHZ;
+        cfg_cmd.mode = wide ? IWX_TLC_MNG_MODE_VHT : IWX_TLC_MNG_MODE_HT;
+        cfg_cmd.chains = iwx_rs_fw_set_active_chains(iwx_fw_valid_tx_ant(sc));
+        cfg_cmd.non_ht_rates = htole16(sc->sc_listener_chan <= 14 ? 0xfff : 0xff0);
+        cfg_cmd.ht_rates[IWX_TLC_NSS_1][0] = htole16(wide ? 0x3f0 : 0xf0);
+        if (iwx_num_of_ant(iwx_fw_valid_tx_ant(sc)) >= 2)
+            cfg_cmd.ht_rates[IWX_TLC_NSS_2][0] = cfg_cmd.ht_rates[IWX_TLC_NSS_1][0];
+    }
     cmd_id = iwx_cmd_id(IWX_TLC_MNG_CONFIG_CMD, IWX_DATA_PATH_GROUP, 0);
     cmdver = iwx_lookup_cmd_ver(sc, IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD);
     XYLog("%s cmdver %d\n", __FUNCTION__, cmdver);
-    if ((ni->ni_flags & IEEE80211_NODE_EHT) && cmdver != 6 && cmdver != 4)
+    if (!awdlPeer && (ni->ni_flags & IEEE80211_NODE_EHT) && cmdver != 6 && cmdver != 4)
         return ENOTSUP;
-    if ((ni->ni_flags & IEEE80211_NODE_EHT) && cmdver == 4) {
+    if (!awdlPeer && (ni->ni_flags & IEEE80211_NODE_EHT) && cmdver == 4) {
         struct iwx_tlc_config_cmd_v6 rates = {};
         rates.max_ch_width = cfg_cmd.max_ch_width;
         if (!iwx_rs_fw_eht_set_enabled_rates(ic, ni, &rates))
@@ -15445,7 +15698,7 @@ iwx_rs_init(struct iwx_softc *sc, struct iwx_node *in, bool update)
             .max_ch_width = cfg_cmd.max_ch_width,
             .mode = cfg_cmd.mode,
             .chains = cfg_cmd.chains,
-            .amsdu = !!(ic->ic_caps & IEEE80211_C_TX_AMSDU),
+            .amsdu = !awdlPeer && !!(ic->ic_caps & IEEE80211_C_TX_AMSDU),
             .flags = cfg_cmd.flags,
             .non_ht_rates = cfg_cmd.non_ht_rates,
             .ht_rates[0][0] = cfg_cmd.ht_rates[0][0],
@@ -17992,8 +18245,12 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_p2p_bound = 0;
     sc->sc_p2p_sta = 0;
     sc->sc_p2p_queue = 0;
-    sc->sc_legacy_ba_peer_added = 0;
+    sc->sc_legacy_ba_peer_added = sc->sc_legacy_ba_remove = 0;
     sc->sc_legacy_ba_tids = 0;
+    sc->sc_legacy_tx_ba = LegacyTxBa::Idle;
+    memset(sc->sc_legacy_tx_ba_target, 0, sizeof(sc->sc_legacy_tx_ba_target));
+    sc->sc_legacy_tx_ba_retry_us = 0;
+    sc->sc_legacy_tx_ba_aggregates = 0;
     sc->sc_listener_up = 0;
     sc->sc_listener_go = 0;
     sc->sc_awdl_discovery_stage = 0;
