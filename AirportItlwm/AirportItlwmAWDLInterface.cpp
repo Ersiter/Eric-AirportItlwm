@@ -1938,7 +1938,7 @@ scheduleOwnListen(uint64_t afterUs)
         if (protectOwnSlots && chan != home && start < fInfraNextRocUs) {
             const uint64_t end = start + (uint64_t)dwell * 1024;
             start = fInfraNextRocUs;
-            if (!huntGap) {
+            if (!huntGapUs) {
                 if (end <= start || end - start < kListenDwellMinTU * 1024)
                     return false;
                 dwell = (uint32_t)((end - start) / 1024);
