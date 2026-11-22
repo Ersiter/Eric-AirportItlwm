@@ -33,7 +33,11 @@ public:
     IOReturn getWCL_WNM_OFFLOAD(apple80211_wcl_wnm_offload_t*) override { return kIOReturnUnsupported; }
     IOReturn getFW_CLOCK_INFO(apple80211_fw_clock_info*) override { return kIOReturnUnsupported; }
     IOReturn getTIMESYNC_STATS(apple80211_timesync_stats*) override { return kIOReturnUnsupported; }
+#ifdef ITL_SEQUOIA_24D_ABI
+    IOReturn getMDNS_OFFLOAD_CONFIG(apple80211_mdns_offload_config*) override { return kIOReturnUnsupported; }
+#else
     IOReturn getSYSTEM_SLEEP_CONFIG(apple80211_system_sleep_config*) override { return kIOReturnUnsupported; }
+#endif
 #if __IO80211_TARGET != __MAC_15_2
     IOReturn getSMARTCCA_OPMODE(apple80211_smartcca_opmode*) override { return kIOReturnUnsupported; }
     IOReturn getLQM_STATISTICS(apple80211_lqm_statistics*) override { return kIOReturnUnsupported; }
@@ -51,7 +55,9 @@ public:
     IOReturn setWCL_ARP_MODE(apple80211_wcl_arp_mode*) override { return kIOReturnSuccess; }
     IOReturn setWCL_QOS_PARAMS(apple80211_wcl_qos_params*) override { return kIOReturnUnsupported; }
     IOReturn setVOICE_IND_STATE(apple80211_voice_ind_state*) override { return kIOReturnUnsupported; }
+#ifndef ITL_SEQUOIA_24D_ABI
     IOReturn setMWS_ACCESSORY_POWER_LIMIT_WIFI_ENH(apple80211_mws_accessory_power_limit*) override { return kIOReturnUnsupported; }
+#endif
     IOReturn setPOWER_PROFILE(apple80211_power_profile*) override { return kIOReturnUnsupported; }
     IOReturn setHEARTBEAT(void*) override { return kIOReturnUnsupported; }
     IOReturn setINTERFACE_SETTING(apple80211_interface_setting*) override { return kIOReturnUnsupported; }
@@ -89,10 +95,16 @@ public:
     IOReturn setMWS_ASSOC_PROTECTION_BITMAP_WIFI_ENH(apple80211_mws_wifi_channel_bitmap*) override { return kIOReturnUnsupported; }
     IOReturn setMWS_SCAN_FREQ_WIFI_ENH(apple80211_mws_scan_freq*) override { return kIOReturnUnsupported; }
     IOReturn setMWS_SCAN_FREQ_MODE_WIFI_ENH(apple80211_mws_scan_freq_mode*) override { return kIOReturnUnsupported; }
+#ifdef ITL_SEQUOIA_24D_ABI
+    IOReturn setMWS_CONDITION_ID_BITMAP_WIFI_ENH(apple80211_mws_condition_id_bitmap*) override { return kIOReturnUnsupported; }
+#else
     IOReturn setMWS_CONDITION_ID_BITMAP_WIFI_ENH(apple80211_mws_condition_id_config*) override { return kIOReturnUnsupported; }
+#endif
     IOReturn setMWS_ANTENNA_SELECTION_WIFI_ENH(apple80211_mws_antenna_selection*) override { return kIOReturnUnsupported; }
     IOReturn setNDD_REQ(apple80211_ndd_data*) override { return kIOReturnUnsupported; }
+#ifndef ITL_SEQUOIA_24D_ABI
     IOReturn setDBRG_ENTROPY(apple80211_drbg_entropy*) override { return kIOReturnUnsupported; }
+#endif
     IOReturn setSDB_ENABLE(apple80211_sdb_enable*) override { return kIOReturnUnsupported; }
 #if __IO80211_TARGET != __MAC_15_2
     IOReturn setBTCOEX_EXT_PROFILE(apple80211_btcoex_ext_profile*) override { return kIOReturnUnsupported; }

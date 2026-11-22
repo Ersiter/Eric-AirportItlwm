@@ -116,5 +116,8 @@ public:
     virtual IOReturn setPSF_DWELL(apple80211_awdl_psf_dwell_params*) = 0;
     virtual IOReturn setAWDL_CONFIG(apple80211_awdl_config_request*) = 0;
     virtual IOReturn setAWDL_RTG_PEER_STATS_CONFIG(apple80211_rtg_peer_stats_cfg*) = 0;
+#ifdef ITL_SEQUOIA_24D_ABI
+    virtual IOReturn setP2P_STEERING_POLICY(struct apple80211_6g_steering_config*) = 0;
+#endif
 };
 static_assert(sizeof(IO80211AWDLProtocol)==0x120, "Sequoia AWDL protocol ABI");

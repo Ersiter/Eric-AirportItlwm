@@ -178,6 +178,9 @@ public:
     IOReturn setPSF_DWELL(apple80211_awdl_psf_dwell_params *) override;
     IOReturn setAWDL_CONFIG(apple80211_awdl_config_request *) override;
     IOReturn setAWDL_RTG_PEER_STATS_CONFIG(apple80211_rtg_peer_stats_cfg *) override;
+#ifdef ITL_SEQUOIA_24D_ABI
+    IOReturn setP2P_STEERING_POLICY(apple80211_6g_steering_config*) override { return kIOReturnUnsupported; }
+#endif
 
     // Hand a received AWDL action frame (802.11 header included) to IO80211's
     // AWDL peer manager, packaged like AppleBCMWLANProximityInterface does.

@@ -88,7 +88,9 @@ public:
     virtual IOReturn setHardwareAddress(ether_addr*) override;
     virtual IOReturn setPromiscuousModeEnable(bool, unsigned int) override;
     virtual void * createPeerManager();
+#ifndef ITL_SEQUOIA_24D_ABI
 private: virtual void _abi_0b10() __asm__("__ZN23IO80211SkywalkInterface10createPeerEPKhP18IO80211PeerManager"); public:
+#endif
     virtual void postMessage(unsigned int, void*, unsigned long, bool);
     virtual IOReturn reportDataPathEvents(unsigned int, void*, unsigned long, bool);
     virtual IOReturn recordOutputPackets(TxSubmissionDequeueStats*, TxSubmissionDequeueStats*);
@@ -108,7 +110,11 @@ private: virtual void _abi_0b10() __asm__("__ZN23IO80211SkywalkInterface10create
     virtual void setScanningState(unsigned int, bool, apple80211_scan_data*, int);
     virtual void setDataPathState(bool);
     virtual void * getScanManager();
+#ifdef ITL_SEQUOIA_24D_ABI
+    IO80211Controller * getController();
+#else
     virtual IO80211Controller * getController();
+#endif
     virtual void updateLinkParameters(apple80211_interface_availability*);
     virtual void updateInterfaceCoexRiskPct(unsigned long long);
     virtual void setLQM(unsigned long long);
@@ -126,11 +132,16 @@ private: virtual void _abi_0bf8() __asm__("__ZN23IO80211SkywalkInterface17remove
     virtual void setFrameStats(apple80211_stat_report*, apple80211_frame_counters*);
     virtual void setInfraSpecificFrameStats(apple80211_stat_report*, apple80211_infra_specific_stats*);
     virtual SInt64 getWmeTxCounters(unsigned long long*);
+#ifdef ITL_SEQUOIA_24D_ABI
+    virtual void willRoam(ether_addr*, unsigned int);
+#endif
     virtual void setPeerManagerLogFlag(unsigned int, unsigned int, unsigned int);
     virtual void setWoWEnabled(bool);
     virtual bool wowEnabled();
     virtual void printDataPath(userPrintCtx*);
+#ifndef ITL_SEQUOIA_24D_ABI
     virtual UInt32 getDataQueueDepth();
+#endif
 private: virtual void _abi_0c68() __asm__("__ZN23IO80211SkywalkInterface21findOrCreateFlowQueueE20IO80211FlowQueueHash"); public:
 private: virtual void _abi_0c70() __asm__("__ZN23IO80211SkywalkInterface30findOrCreateFlowQueueWithCacheE20IO80211FlowQueueHashPb"); public:
 private: virtual void _abi_0c78() __asm__("__ZN23IO80211SkywalkInterface21findExistingFlowQueueE20IO80211FlowQueueHash"); public:
@@ -178,7 +189,9 @@ private: virtual void _abi_0cd0() __asm__("__ZN23IO80211SkywalkInterface8findPee
     virtual int getEventPipeSize();
     virtual UInt64 createEventPipe(IO80211APIUserClient*);
     virtual void destroyEventPipe(IO80211APIUserClient*);
+#ifndef ITL_SEQUOIA_24D_ABI
 private: virtual void _abi_0dd0() __asm__("__ZN23IO80211SkywalkInterface17setUserBufferInfoEP18IOMemoryDescriptory"); public:
+#endif
     virtual void postMessageIOUC(char const*, unsigned int, void*, unsigned long);
     virtual bool isIOUCPipeOpened();
     virtual void * getRingMD(IO80211APIUserClient*, unsigned long long);
@@ -187,8 +200,13 @@ private: virtual void _abi_0df8() __asm__("__ZN23IO80211SkywalkInterface10detach
 private: virtual void _abi_0e00() __asm__("__ZN23IO80211SkywalkInterface21setDebugTrafficReportEb"); public:
 private: virtual void _abi_0e08() __asm__("__ZN23IO80211SkywalkInterface25getDataPathInterfaceStatsEP36apple80211_data_path_interface_stats"); public:
 private: virtual void _abi_0e10() __asm__("__ZN23IO80211SkywalkInterface20getDataPathPeerStatsEP31apple80211_data_path_peer_stats"); public:
+#ifdef ITL_SEQUOIA_24D_ABI
+    virtual UInt64 getDataPathUnicastTxCount();
+    virtual UInt64 getDataPathUnicastRxCount();
+#endif
 private: virtual void _abi_0e18() __asm__("__ZN23IO80211SkywalkInterface22getLastQueuePacketTimeEP10ether_addr"); public:
 private: virtual void _abi_0e20() __asm__("__ZN23IO80211SkywalkInterface32getLastRxUnicastLinkActivityTimeEP10ether_addr"); public:
+#ifndef ITL_SEQUOIA_24D_ABI
 private: virtual void _abi_0e28() __asm__("__ZN23IO80211SkywalkInterface24updateInterfaceDataStatsEP36apple80211_data_path_interface_stats"); public:
 private: virtual void _abi_0e30() __asm__("__ZN23IO80211SkywalkInterface19updatePeerDataStatsEP31apple80211_data_path_peer_stats"); public:
 private: virtual void _abi_0e38() __asm__("__ZN23IO80211SkywalkInterface12logTxLatencyEPhjy"); public:
@@ -196,6 +214,7 @@ private: virtual void _abi_0e40() __asm__("__ZN23IO80211SkywalkInterface12logRxL
 private: virtual void _abi_0e48() __asm__("__ZN23IO80211SkywalkInterface20getNClearTxRxLatencyEP25apple80211_latency_all_acS1_"); public:
 private: virtual void _abi_0e50() __asm__("__ZN23IO80211SkywalkInterface18getLastTxTimeStampERy"); public:
 private: virtual void _abi_0e58() __asm__("__ZN23IO80211SkywalkInterface18getLastRxTimeStampERy"); public:
+#endif
 private: uint8_t _layout[0x118 - sizeof(IOSkywalkEthernetInterface)];
 public:
     OSString *setInterfaceRole(unsigned int);

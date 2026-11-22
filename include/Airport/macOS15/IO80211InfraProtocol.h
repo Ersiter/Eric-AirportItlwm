@@ -270,6 +270,9 @@ public:
     virtual IOReturn getSLOW_WIFI_FEATURE_ENABLED(apple80211_slow_wifi_feature_enabled*) = 0;
     virtual IOReturn getTIMESYNC_INFO(apple80211_timesync_info*) = 0;
     virtual IOReturn getSENSING_DATA(apple80211_sensing_data_t*) = 0;
+#ifdef ITL_SEQUOIA_24D_ABI
+    virtual IOReturn getCOUNTRY_BAND_SUPPORT(apple80211_country_band_support*) = 0;
+#endif
     virtual IOReturn getWCL_FW_HOT_CHANNELS(apple80211_fw_hot_channels*) = 0;
     virtual IOReturn getWCL_LOW_LATENCY_INFO(apple80211_low_latency_info*) = 0;
     virtual IOReturn getWCL_BSS_INFO(apple80211_beacon_msg*) = 0;
@@ -287,7 +290,11 @@ public:
     virtual IOReturn getWIFI_NOISE_PER_ANT(apple80211_noise_per_ant_t*) = 0;
     virtual IOReturn getFW_CLOCK_INFO(apple80211_fw_clock_info*) = 0;
     virtual IOReturn getTIMESYNC_STATS(apple80211_timesync_stats*) = 0;
+#ifdef ITL_SEQUOIA_24D_ABI
+    virtual IOReturn getMDNS_OFFLOAD_CONFIG(struct apple80211_mdns_offload_config*) = 0;
+#else
     virtual IOReturn getSYSTEM_SLEEP_CONFIG(apple80211_system_sleep_config*) = 0;
+#endif
     virtual IOReturn setCIPHER_KEY(apple80211_key*) = 0;
     virtual IOReturn setCHANNEL(apple80211_channel_data*) = 0;
     virtual IOReturn setPOWERSAVE(apple80211_powersave_data*) = 0;
@@ -401,12 +408,20 @@ public:
     virtual IOReturn setMWS_ASSOC_PROTECTION_BITMAP_WIFI_ENH(apple80211_mws_wifi_channel_bitmap*) = 0;
     virtual IOReturn setMWS_SCAN_FREQ_WIFI_ENH(apple80211_mws_scan_freq*) = 0;
     virtual IOReturn setMWS_SCAN_FREQ_MODE_WIFI_ENH(apple80211_mws_scan_freq_mode*) = 0;
+#ifdef ITL_SEQUOIA_24D_ABI
+    virtual IOReturn setMWS_CONDITION_ID_BITMAP_WIFI_ENH(struct apple80211_mws_condition_id_bitmap*) = 0;
+#else
     virtual IOReturn setMWS_CONDITION_ID_BITMAP_WIFI_ENH(apple80211_mws_condition_id_config*) = 0;
+#endif
     virtual IOReturn setMWS_ANTENNA_SELECTION_WIFI_ENH(apple80211_mws_antenna_selection*) = 0;
     virtual IOReturn setNDD_REQ(apple80211_ndd_data*) = 0;
+#ifndef ITL_SEQUOIA_24D_ABI
     virtual IOReturn setDBRG_ENTROPY(apple80211_drbg_entropy*) = 0;
+#endif
     virtual IOReturn setSDB_ENABLE(apple80211_sdb_enable*) = 0;
+#ifndef ITL_SEQUOIA_24D_ABI
     virtual IOReturn setMWS_ACCESSORY_POWER_LIMIT_WIFI_ENH(apple80211_mws_accessory_power_limit*) = 0;
+#endif
 };
 static_assert(sizeof(IO80211InfraProtocol) == 0x120, "Sequoia ABI size");
 #endif

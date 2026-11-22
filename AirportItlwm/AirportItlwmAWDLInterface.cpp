@@ -85,7 +85,17 @@ nativeTableMismatch()
     const uintptr_t pure = reinterpret_cast<uintptr_t>(&awdlAnchorPureVirtual);
     const Anchor anchors[] = {
         {0, reinterpret_cast<uintptr_t>(&awdlAnchorProtocolD1)},
-#if __IO80211_TARGET == __MAC_15_2
+#if defined(ITL_SEQUOIA_24D_ABI)
+        {297, reinterpret_cast<uintptr_t>(&awdlAnchorWakeFlags)},
+        {379, reinterpret_cast<uintptr_t>(&awdlAnchorInterfaceCCA)},
+        {414, pure},
+        {419, reinterpret_cast<uintptr_t>(&awdlAnchorStatsDump)},
+        {453, reinterpret_cast<uintptr_t>(&awdlAnchorVirtualInit)},
+        {492, reinterpret_cast<uintptr_t>(&awdlAnchorReserved15)},
+        {493, pure},
+        {556, pure},
+        {557, 0},
+#elif __IO80211_TARGET == __MAC_15_2
         {299, reinterpret_cast<uintptr_t>(&awdlAnchorWakeFlags)},
         {380, reinterpret_cast<uintptr_t>(&awdlAnchorInterfaceCCA)},
         {415, pure},        // setMacAddress, pure in IO80211SkywalkInterface on macOS 15

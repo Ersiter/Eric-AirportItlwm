@@ -32,7 +32,9 @@ public:
     virtual SInt32 setInterfaceEnable(bool) override;
     virtual UInt getHardwareAssists() override;
     virtual bool bpfTap(unsigned int, unsigned int) override;
+#ifndef ITL_SEQUOIA_24D_ABI
     virtual void hwConfigNicProxyData(nicproxy_info_s*) override;
+#endif
     virtual void postMessage(unsigned int, void*, unsigned long, bool) override;
     virtual IOReturn recordOutputPackets(TxSubmissionDequeueStats*, TxSubmissionDequeueStats*) override;
     virtual void logTxPacket(IO80211NetworkPacket*, PacketSkywalkScratch*, apple80211_wme_ac, bool) override;
@@ -69,6 +71,9 @@ public:
     virtual void releaseLinkQualityMonitor(IO80211Peer*) override;
     virtual int getAssocState() override;
     virtual void * getLQMSummary(apple80211_lqm_summary*) override;
+#ifdef ITL_SEQUOIA_24D_ABI
+    virtual void willRoam(ether_addr*, unsigned int) override;
+#endif
     virtual bool setLinkState(IO80211LinkState, unsigned int, bool, unsigned int) override;
     virtual IOReturn setLinkStateInternal(IO80211LinkState, unsigned int, bool, unsigned int);
     virtual void setCurrentApAddress(ether_addr*);

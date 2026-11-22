@@ -37,6 +37,10 @@ public:
     virtual void * getInterfaceSubFamily() override;
     virtual UInt getInitialMedia() override;
     virtual const char * getBSDNamePrefix() override;
+#ifdef ITL_SEQUOIA_24D_ABI
+    // The early ABI also exposes this implementation in a separate slot.
+private: virtual void _abi_registerLogicalLink() __asm__("__ZN26IOSkywalkEthernetInterface39registerNetworkInterfaceWithLogicalLinkEPKNS_16RegistrationInfoEP20IOSkywalkLogicalLinkP25IOSkywalkPacketBufferPoolS6_j"); public:
+#endif
     virtual IOReturn getHardwareAddress(ether_addr*);
     virtual IOReturn setHardwareAddress(ether_addr*);
     virtual void setLinkLayerAddress(ether_addr*);

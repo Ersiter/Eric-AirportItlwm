@@ -289,10 +289,17 @@ bool AirportItlwm::start(IOService *provider)
     // The IO80211 / Skywalk vtables these builds subclass differ in every macOS generation (macOS 27 added five
     // IOSkywalkNetworkInterface virtuals at slot 323), so an unmatched kernel would dispatch to the wrong methods.
 #if __IO80211_TARGET == __MAC_15_2
-    if (version_major != 24 || version_minor < 2) {
-        XYLogE("this kext is for macOS 15.2 and later, not starting on Darwin %d.%d\n", version_major, version_minor);
+#ifdef ITL_SEQUOIA_24D_ABI
+    if (version_major != 24 || version_minor < 2 || version_minor > 3) {
+        XYLogE("macOS 15.2-15.3 ABI required; found Darwin %d.%d\n", version_major, version_minor);
         return false;
     }
+#else
+    if (version_major != 24 || version_minor < 4) {
+        XYLogE("macOS 15.4 or later within macOS 15 required; found Darwin %d.%d\n", version_major, version_minor);
+        return false;
+    }
+#endif
 #elif defined(ITL_MACOS27)
     if (version_major != 27) {
         XYLogE("this kext is for macOS 27, not starting on Darwin %d.%d\n", version_major, version_minor);

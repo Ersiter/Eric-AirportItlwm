@@ -186,14 +186,18 @@ private: virtual void _abi_0d00() __asm__("__ZN17IO80211Controller18getPLATFORM_
     virtual void * getDriverTextLog();
     virtual UInt32 selfDiagnosticsReport(int, char const*, unsigned int);
     virtual CommonFaultReporter * getFaultReporterFromDriver() = 0;
+#ifndef ITL_SEQUOIA_24D_ABI
 private: virtual void _abi_0d88() __asm__("__ZN17IO80211Controller25allocIO80211RecursiveLockEv"); public:
+#endif
     virtual UInt32 getDataQueueDepth(OSObject*);
     virtual bool wasDynSARInFailSafeMode();
     virtual void updateAdvisoryScoresIfNeed();
     virtual UInt64 getAVCAdvisoryInfo(IO80211InterfaceAVCAdvisory*);
 private: virtual void _abi_0db0() __asm__("__ZN17IO80211Controller26getActionFramePoolCapacityEv"); public:
+#ifndef ITL_SEQUOIA_24D_ABI
 private: virtual void _abi_0db8() __asm__("__ZN17IO80211Controller13getPostOfficeEv"); public:
 private: virtual void _abi_0dc0() __asm__("__ZN17IO80211Controller16CreatePostOfficeEv"); public:
+#endif
     virtual bool attachInterface(OSObject*, IOService*);
     virtual void detachInterface(OSObject*, bool);
     virtual IO80211VirtualInterface* createVirtualInterface(ether_addr*, unsigned int);

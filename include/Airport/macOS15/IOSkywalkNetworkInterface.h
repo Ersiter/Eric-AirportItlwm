@@ -34,8 +34,10 @@ public:
     virtual IOReturn setAggressiveness(unsigned long, unsigned long) override;
     virtual IOReturn enable(unsigned int) override;
     virtual IOReturn disable(unsigned int) override;
+#ifndef ITL_SEQUOIA_24D_ABI
     virtual IOReturn registerNetworkInterfaceWithLogicalLink(IOSkywalkNetworkInterface::RegistrationInfo const*, IOSkywalkLogicalLink*, IOSkywalkPacketBufferPool*, IOSkywalkPacketBufferPool*, unsigned int);
     virtual IOReturn deregisterLogicalLink();
+#endif
     virtual SInt32 initBSDInterfaceParameters(ifnet_init_eparams*, sockaddr_dl**) = 0;
     virtual IOReturn prepareBSDInterface(struct __ifnet*, unsigned int);
     virtual void finalizeBSDInterface(struct __ifnet*, unsigned int);
@@ -73,6 +75,10 @@ public:
     virtual const char * classNameOverride();
     virtual void deferBSDAttach(bool);
     virtual void reportDetailedLinkStatus(if_link_status const*);
+#ifdef ITL_SEQUOIA_24D_ABI
+    virtual IOReturn registerNetworkInterfaceWithLogicalLink(IOSkywalkNetworkInterface::RegistrationInfo const*, IOSkywalkLogicalLink*, IOSkywalkPacketBufferPool*, IOSkywalkPacketBufferPool*, unsigned int);
+    virtual IOReturn deregisterLogicalLink();
+#endif
     virtual UInt getTSOOptions(IOSkywalkNetworkInterface::IOSkywalkTSOOptions*);
     virtual void _RESERVEDIOSkywalkNetworkInterface0();
     virtual void _RESERVEDIOSkywalkNetworkInterface1();
