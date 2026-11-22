@@ -4756,8 +4756,11 @@ iwm_init(struct _ifnet *ifp)
         }
     } while (ic->ic_state != IEEE80211_S_SCAN);
 #ifdef AIRPORT_WCL
-    if (ic->ic_event_handler)
+    if (ic->ic_event_handler) {
         ic->ic_event_handler(ic, IEEE80211_EVT_DRIVER_READY, NULL);
+        // WCL needs the channel table again after each interface reset.
+        ic->ic_event_handler(ic, IEEE80211_EVT_COUNTRY_CODE_UPDATE, NULL);
+    }
 #endif
     
     return 0;
