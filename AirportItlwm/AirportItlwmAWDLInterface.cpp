@@ -1984,8 +1984,12 @@ scheduleOwnListen(uint64_t afterUs)
         return armListen(chan, MIN(dwell, fListenDwellTU), (uint64_t)start,
             peerWindow ? 0 : (uint64_t)slotStart, 0);
     }
-    if (huntChan)
-        return armListen(huntChan, kHuntDwellTU, huntStart, 0, huntGap);
+    if (huntChan) {
+        // A full beacon interval away from home can miss every beacon during repeated hunts.
+        const uint32_t dwell = protectOwnSlots && huntChan != home ?
+            MIN(kHuntDwellTU, MAX(kListenDwellMinTU, ic->ic_bss->ni_intval / 2)) : kHuntDwellTU;
+        return armListen(huntChan, dwell, huntStart, 0, huntGap);
+    }
     fListenNoSlot++;
     return false;
 }

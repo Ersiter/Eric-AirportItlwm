@@ -11080,26 +11080,93 @@ iwx_awdl_record_peer(struct ieee80211com *ic, uint8_t event, const uint8_t *addr
 }
 
 static uint8_t iwx_awdl_listener_pick(struct iwx_softc *sc, uint8_t only = 0);
-static constexpr uint8_t kAwdlGoChannel = 44;
 static constexpr uint16_t kAwdlGoBeaconInterval = 100;
 static constexpr unsigned kSmartFifoOffload = 68; // IWL_UCODE_TLV_API_SMART_FIFO_OFFLOAD
 
-static bool iwx_awdl_go_on_home(struct iwx_softc *sc)
+static uint8_t iwx_awdl_go_home_channel(struct iwx_softc *sc)
 {
     auto &ic = sc->sc_ic;
-    return sc->sc_mld_primary_link == 0 && ic.ic_bss && ic.ic_bss->ni_chan &&
-        ic.ic_bss->ni_chan != IEEE80211_CHAN_ANYC &&
-        IEEE80211_IS_CHAN_5GHZ(ic.ic_bss->ni_chan) &&
-        ieee80211_chan2ieee(&ic, ic.ic_bss->ni_chan) == kAwdlGoChannel;
+    const auto *ni = ic.ic_bss;
+    if (sc->sc_mld_primary_link != 0 || !ni || !ni->ni_chan ||
+        ni->ni_chan == IEEE80211_CHAN_ANYC || !IEEE80211_IS_CHAN_5GHZ(ni->ni_chan))
+        return 0;
+    const uint8_t primary = ieee80211_chan2ieee(&ic, ni->ni_chan);
+    return primary == 44 || primary == 149 ? primary : 0;
+}
+
+/* A GO can use the home primary or a contiguous block inside the station PHY. */
+static void iwx_awdl_go_width(struct iwx_softc *sc, uint8_t &width, uint16_t &center)
+{
+    const auto *in = reinterpret_cast<const struct iwx_node *>(sc->sc_ic.ic_bss);
+    const auto *home = in->in_phyctxt;
+    const struct ieee80211_channel *primary = in->in_ni.ni_chan;
+    width = IEEE80211_CHAN_WIDTH_20;
+    center = primary->ic_freq;
+    if (!home || home->channel != primary || !home->mld_config_valid)
+        return;
+    int homeWidth;
+    switch (home->mld_width) {
+    case IEEE80211_CHAN_WIDTH_160: homeWidth = 160; break;
+    case IEEE80211_CHAN_WIDTH_80: homeWidth = 80; break;
+    case IEEE80211_CHAN_WIDTH_40: homeWidth = 40; break;
+    default: return;
+    }
+    const int homeCenter = home->mld_center_freq ? home->mld_center_freq : primary->ic_center_freq1;
+    const int first = homeCenter - homeWidth / 2 + 10;
+    const int offset = primary->ic_freq - first;
+    if (offset < 0 || offset >= homeWidth || offset % 20)
+        return;
+    static constexpr struct { int mhz; uint8_t width; uint8_t prohibited; } candidates[] = {
+        {160, IEEE80211_CHAN_WIDTH_160, IEEE80211_CHAN_NO_160MHZ},
+        {80, IEEE80211_CHAN_WIDTH_80, IEEE80211_CHAN_NO_80MHZ},
+        {40, IEEE80211_CHAN_WIDTH_40, IEEE80211_CHAN_NO_40MHZ},
+    };
+    auto &ic = sc->sc_ic;
+    for (const auto &candidate : candidates) {
+        if (candidate.mhz > homeWidth ||
+            (candidate.mhz == 160 && !(ic.ic_vhtcaps & IEEE80211_VHTCAP_SUPP_CHAN_WIDTH_MASK)))
+            continue;
+        const int start = first + (offset / candidate.mhz) * candidate.mhz;
+        const unsigned mask = ((1U << (candidate.mhz / 20)) - 1) << ((start - first) / 20);
+        if (in->in_ni.ni_eht_puncture & mask)
+            continue;
+        bool usable = true;
+        for (int freq = start; freq < start + candidate.mhz; freq += 20) {
+            const unsigned number = ieee80211_mhz2ieee(freq, IEEE80211_CHAN_5GHZ);
+            const unsigned index = ieee80211_ieee2chanidx(&ic, number, IEEE80211_CHAN_5GHZ);
+            if (!index || !isset(ic.ic_chan_active, index) ||
+                (ic.ic_channels[index].ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_NOADHOC)) ||
+                (ic.ic_channels[index].ic_reg_flags & candidate.prohibited)) {
+                usable = false;
+                break;
+            }
+        }
+        if (usable) {
+            width = candidate.width;
+            center = start + candidate.mhz / 2 - 10;
+            return;
+        }
+    }
+}
+
+static bool iwx_awdl_go_matches_home(struct iwx_softc *sc, uint8_t chan)
+{
+    if (!chan || chan != sc->sc_listener_chan)
+        return false;
+    uint8_t width;
+    uint16_t center;
+    iwx_awdl_go_width(sc, width, center);
+    return width == sc->sc_listener_phy.mld_width && center == sc->sc_listener_phy.mld_center_freq;
 }
 
 uint8_t ItlIwx::
 iwx_awdl_standing_channel(struct iwx_softc *sc)
 {
-    if ((!sc->sc_listener_up || sc->sc_listener_go) && iwx_awdl_go_on_home(sc) &&
-        iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_BEACON_TEMPLATE_CMD) == 13 &&
-        iwx_awdl_listener_pick(sc, kAwdlGoChannel))
-        return kAwdlGoChannel;
+    const uint8_t home = iwx_awdl_go_home_channel(sc);
+    if (home && !(sc->sc_ic.ic_channels[home].ic_flags & IEEE80211_CHAN_PASSIVE) &&
+        (!sc->sc_listener_up || sc->sc_listener_go) && iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_BEACON_TEMPLATE_CMD) == 13 &&
+        iwx_awdl_listener_pick(sc, home))
+        return home;
     return 0;
 }
 
@@ -11152,7 +11219,7 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
         return EINVAL;
     int err;
     const bool standing = sc->sc_use_mld_api ?
-        itlAWDLStandingFlag() && (sc->sc_listener_up || iwx_awdl_go_on_home(sc)) :
+        itlAWDLStandingFlag() && (sc->sc_listener_up || iwx_awdl_go_home_channel(sc)) :
         iwx_awdl_listener_enabled();
     if (sc->sc_use_mld_api && !standing) {
         memset(ic->ic_awdl_listener_why, 0x40, sizeof(ic->ic_awdl_listener_why));
@@ -11206,12 +11273,12 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
                 const uint8_t target = that->iwx_awdl_standing_channel(sc);
                 if (sc->sc_listener_candidate != target)
                     sc->sc_listener_candidate = 0;
-                if ((sc->sc_listener_retry_us || target != sc->sc_listener_chan) &&
+                if ((sc->sc_listener_retry_us || !iwx_awdl_go_matches_home(sc, target)) &&
                     iwx_uptime_us() >= sc->sc_listener_retry_us)
                     task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
             }
             if (sc->sc_listener_refitting || sc->sc_listener_retry_us || chan != sc->sc_listener_chan ||
-                (sc->sc_listener_go && !iwx_awdl_go_on_home(sc))) {
+                (sc->sc_listener_go && !iwx_awdl_go_matches_home(sc, iwx_awdl_go_home_channel(sc)))) {
                 iwx_awdl_record_listen(ic, chan, 4, EBUSY, sc->sc_listener_chan);
                 return EBUSY;
             }
@@ -11471,6 +11538,11 @@ iwx_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer,
         if (ampduParam >= 0) {
             IEEE80211_ADDR_COPY(sc->sc_awdl_peer_ampdu_addr, peer);
             sc->sc_awdl_peer_ampdu_param = (uint8_t)ampduParam;
+            // WCL peer cache: the VHT IE follows the HT IE and VHT-present byte.
+            const auto *vht = reinterpret_cast<const struct ieee80211_ie_vhtcap *>(peer + 38);
+            sc->sc_awdl_peer_vht = {};
+            if (peer[37] && vht->ie == IEEE80211_ELEMID_VHT_CAP && vht->len == sizeof(*vht) - 2)
+                sc->sc_awdl_peer_vht = *vht;
         }
         if (!IEEE80211_ADDR_EQ(sc->sc_awdl_peer_target, peer))
             IEEE80211_ADDR_COPY(sc->sc_awdl_peer_target, peer);
@@ -12236,8 +12308,11 @@ iwx_awdl_peer_task(void *arg)
         IEEE80211_ADDR_COPY(cmd.peer_link_address, target);
         if (IEEE80211_ADDR_EQ(sc->sc_awdl_peer_ampdu_addr, target)) {
             const uint8_t ampdu = sc->sc_awdl_peer_ampdu_param;
+            const auto &vht = sc->sc_awdl_peer_vht;
             cmd.tx_ampdu_spacing = htole32((ampdu & IEEE80211_AMPDU_PARAM_SS) >> 2);
-            cmd.tx_ampdu_max_size = htole32(ampdu & IEEE80211_AMPDU_PARAM_LE);
+            cmd.tx_ampdu_max_size = htole32(vht.ie ?
+                (le32toh(vht.vht_cap_info) & IEEE80211_VHTCAP_MAX_A_MPDU_LENGTH_EXPONENT_MASK) >>
+                    IEEE80211_VHTCAP_MAX_A_MPDU_LENGTH_EXPONENT_SHIFT : ampdu & IEEE80211_AMPDU_PARAM_LE);
         }
         err = that->iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
             IWX_MLD_STA_CONFIG_CMD), 0, size, &cmd);
@@ -12254,21 +12329,46 @@ iwx_awdl_peer_task(void *arg)
             struct iwx_tlc_config_cmd_v4 tlc = {};
             tlc.sta_id = IWX_AWDL_PEER_STA_ID;
             const uint8_t tx_ant = that->iwx_fw_valid_tx_ant(sc);
-            const bool wide = sc->sc_listener_phy.mld_width == IEEE80211_CHAN_WIDTH_80;
-            tlc.max_ch_width = wide ? IWX_TLC_MNG_CH_WIDTH_80MHZ : IWX_TLC_MNG_CH_WIDTH_20MHZ;
-            tlc.mode = wide ? IWX_TLC_MNG_MODE_VHT : IWX_TLC_MNG_MODE_HT;
+            const auto &vht = sc->sc_awdl_peer_vht;
+            const bool peerVht = IEEE80211_ADDR_EQ(sc->sc_awdl_peer_ampdu_addr, target) && vht.ie;
+            const uint32_t caps = peerVht ? le32toh(vht.vht_cap_info) : 0;
+            const auto phyWidth = sc->sc_listener_phy.mld_width;
+            const auto peerWidth = caps & IEEE80211_VHTCAP_SUPP_CHAN_WIDTH_MASK;
+            uint8_t width = IWX_TLC_MNG_CH_WIDTH_20MHZ;
+            if (peerVht && (phyWidth == IEEE80211_CHAN_WIDTH_80 || phyWidth == IEEE80211_CHAN_WIDTH_160)) {
+                width = IWX_TLC_MNG_CH_WIDTH_80MHZ;
+                if (phyWidth == IEEE80211_CHAN_WIDTH_160 &&
+                    (peerWidth == IEEE80211_VHTCAP_SUPP_CHAN_WIDTH_160MHZ ||
+                     peerWidth == IEEE80211_VHTCAP_SUPP_CHAN_WIDTH_160_80P80MHZ))
+                    width = IWX_TLC_MNG_CH_WIDTH_160MHZ;
+            } else if (peerVht && phyWidth == IEEE80211_CHAN_WIDTH_40) {
+                width = IWX_TLC_MNG_CH_WIDTH_40MHZ;
+            }
+            tlc.max_ch_width = width;
+            tlc.mode = peerVht ? IWX_TLC_MNG_MODE_VHT : IWX_TLC_MNG_MODE_HT;
             tlc.chains = ((tx_ant & IWX_ANT_A) ? IWX_TLC_MNG_CHAIN_A_MSK : 0) |
                 ((tx_ant & IWX_ANT_B) ? IWX_TLC_MNG_CHAIN_B_MSK : 0);
-            if (wide)
-                tlc.sgi_ch_width_supp = (1 << IWX_TLC_MNG_CH_WIDTH_20MHZ) |
-                    (1 << IWX_TLC_MNG_CH_WIDTH_40MHZ) |
-                    (1 << IWX_TLC_MNG_CH_WIDTH_80MHZ);
+            if (caps & IEEE80211_VHTCAP_SHORT_GI_80)
+                tlc.sgi_ch_width_supp |= 1 << IWX_TLC_MNG_CH_WIDTH_80MHZ;
+            if (caps & IEEE80211_VHTCAP_SHORT_GI_160)
+                tlc.sgi_ch_width_supp |= 1 << IWX_TLC_MNG_CH_WIDTH_160MHZ;
             tlc.non_ht_rates = htole16(IEEE80211_IS_CHAN_2GHZ(
                 sc->sc_listener_phy.channel) ? 0x0fff : 0x0ff0);
-            const uint16_t mcs = wide ? 0x03ff : 0x00ff;
-            tlc.ht_rates[IWX_TLC_NSS_1][IWX_TLC_MCS_PER_BW_80] = htole16(mcs);
-            if ((tx_ant & IWX_ANT_A) && (tx_ant & IWX_ANT_B))
-                tlc.ht_rates[IWX_TLC_NSS_2][IWX_TLC_MCS_PER_BW_80] = htole16(mcs);
+            const unsigned streams = MIN((unsigned)iwx_num_of_ant(tx_ant), (unsigned)IWX_TLC_NSS_MAX);
+            const uint16_t rxMcs = peerVht ? le16toh(vht.supp_mcs.rx_mcs_map) : 0;
+            const uint16_t txMcs = le16toh(sc->sc_ic.ic_vht_tx_mcs_map);
+            for (unsigned nss = 0; nss < streams; nss++) {
+                const unsigned rx = (rxMcs >> (2 * nss)) & 3;
+                const unsigned tx = (txMcs >> (2 * nss)) & 3;
+                if (peerVht && MAX(rx, tx) == IEEE80211_VHT_MCS_NOT_SUPPORTED)
+                    continue;
+                const unsigned mcs = peerVht ? MIN(rx, tx) : 0;
+                const auto rates = htole16((1U << (8 + mcs)) - 1);
+                tlc.ht_rates[nss][IWX_TLC_MCS_PER_BW_80] = width == IWX_TLC_MNG_CH_WIDTH_20MHZ ?
+                    htole16(le16toh(rates) & 0x01ff) : rates;
+                if (width == IWX_TLC_MNG_CH_WIDTH_160MHZ)
+                    tlc.ht_rates[nss][IWX_TLC_MCS_PER_BW_160] = rates;
+            }
             tlc.max_mpdu_len = htole16(3839);
             // Peer TX can rely on TLC only after the firmware accepts it.
             int tlc_err;
@@ -13415,16 +13515,19 @@ iwx_awdl_go_beacon(struct iwx_softc *sc)
         0, 0, 1, 8, 0x8c, 0x12, 0x98, 0x24, 0xb0, 0x48, 0x60, 0x6c,
         5, 4, 0, 1, 0, 0,
     };
+    auto &ic = sc->sc_ic;
+    const auto &phy = sc->sc_listener_phy;
+    constexpr unsigned htOpLen = 22;
     struct {
         uint16_t length, flags;
         uint32_t short_ssid, reserved, link_id, tim_offset, tim_length;
         uint32_t ecsa_offset, csa_offset;
-        uint8_t frame[36 + sizeof(ies)];
+        uint8_t frame[36 + sizeof(ies) + sizeof(struct ieee80211_ie_htcap) + 2 + htOpLen +
+            sizeof(struct ieee80211_ie_vhtcap) + sizeof(struct ieee80211_ie_vht_operation)];
     } __packed cmd = {};
     static_assert(offsetof(decltype(cmd), frame) == 32, "Beacon Template v13 ABI");
-    cmd.length = htole16(sizeof(cmd.frame));
     cmd.link_id = htole32(IWX_LISTENER_LINK_ID);
-    cmd.tim_offset = htole32(sizeof(cmd.frame) - 6);
+    cmd.tim_offset = htole32(36 + sizeof(ies) - 6);
     cmd.tim_length = htole32(4);
     auto *wh = reinterpret_cast<struct ieee80211_frame *>(cmd.frame);
     wh->i_fc[0] = IEEE80211_FC0_TYPE_MGT | IEEE80211_FC0_SUBTYPE_BEACON;
@@ -13434,7 +13537,36 @@ iwx_awdl_go_beacon(struct iwx_softc *sc)
     cmd.frame[32] = kAwdlGoBeaconInterval;
     cmd.frame[34] = IEEE80211_CAPINFO_ESS;
     memcpy(cmd.frame + 36, ies, sizeof(ies));
-    return iwx_send_cmd_pdu(sc, IWX_BEACON_TEMPLATE_CMD, 0, sizeof(cmd), &cmd);
+    uint8_t *end = cmd.frame + 36 + sizeof(ies);
+    if (phy.mld_width != IEEE80211_CHAN_WIDTH_20) {
+        end = ieee80211_add_htcaps(end, &ic);
+        *end++ = IEEE80211_ELEMID_HTOP;
+        *end++ = htOpLen;
+        *end++ = ieee80211_chan2number(&ic, phy.channel);
+        const int first = phy.mld_center_freq - (phy.mld_width == IEEE80211_CHAN_WIDTH_160 ? 70 :
+            phy.mld_width == IEEE80211_CHAN_WIDTH_80 ? 30 : 10);
+        const int pos = (phy.channel->ic_freq - first) / 20;
+        *end++ = IEEE80211_HTOP0_CHW | (pos & 1 ? IEEE80211_HTOP0_SCO_SCB : IEEE80211_HTOP0_SCO_SCA);
+        end += htOpLen - 2;
+        if (phy.mld_width != IEEE80211_CHAN_WIDTH_40) {
+            end = ieee80211_add_vhtcaps(end, &ic);
+            auto *op = reinterpret_cast<struct ieee80211_ie_vht_operation *>(end);
+            op->ie = IEEE80211_ELEMID_VHT_OPMODE;
+            op->len = sizeof(*op) - 2;
+            op->chan_width = IEEE80211_VHT_CHANWIDTH_80MHZ;
+            const auto center = ieee80211_mhz2ieee(phy.mld_center_freq, IEEE80211_CHAN_5GHZ);
+            op->center_freq_seg1_idx = center;
+            if (phy.mld_width == IEEE80211_CHAN_WIDTH_160) {
+                op->center_freq_seg1_idx = pos < 4 ? center - 8 : center + 8;
+                op->center_freq_seg2_idx = center;
+            }
+            op->basic_mcs_set = htole16(0xfffc);
+            end += sizeof(*op);
+        }
+    }
+    const auto length = end - cmd.frame;
+    cmd.length = htole16(length);
+    return iwx_send_cmd_pdu(sc, IWX_BEACON_TEMPLATE_CMD, 0, offsetof(decltype(cmd), frame) + length, &cmd);
 }
 
 /*
@@ -13528,7 +13660,7 @@ iwx_awdl_listener_pick(struct iwx_softc *sc, uint8_t only)
 /*
  * The listener's width on pre-MLD firmware: VHT80 on 149 (centre 155) when 149, 153, 157 and 161 may all be used,
  * where AirDrop peers meet at 80 MHz (AirportIntel, kaixi2004, GPL-2.0, does the same). Anything else stays at
- * 20 MHz, as do MLD listeners.
+ * 20 MHz here. MLD GO width follows the home channel definition separately.
  */
 static uint8_t
 iwx_awdl_listener_width(struct iwx_softc *sc, uint8_t chan)
@@ -13573,7 +13705,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     bool link_active = false, sta_added = false, mac_associated = false, bcast_added = false;
     bool queue_added = false, data_queue_added = false;
     bool mcast_added = false, mcast_queue_added = false, sf_held = false;
-    const bool go = chan == kAwdlGoChannel && iwx_awdl_go_on_home(sc);
+    const bool go = chan == iwx_awdl_go_home_channel(sc);
     const bool client = !go && iwx_awdl_client_enabled();
     const bool dedicatedGroup = go || client;
     const int mgmtSta = dedicatedGroup ? IWX_AWDL_BCAST_STA_ID : IWX_LISTENER_STA_ID;
@@ -13680,6 +13812,8 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     sc->sc_listener_phy.channel = &ic->ic_channels[chan];
     sc->sc_listener_phy.mld_config_valid = 1;
     sc->sc_listener_phy.mld_width = IEEE80211_CHAN_WIDTH_20;
+    if (go)
+        iwx_awdl_go_width(sc, sc->sc_listener_phy.mld_width, sc->sc_listener_phy.mld_center_freq);
     phy_incomplete = true;
     if ((err = iwx_phy_ctxt_cmd(sc, &sc->sc_listener_phy, 1, 1, IWX_FW_CTXT_ACTION_ADD, 0)) != 0)
         goto fail;
@@ -13894,6 +14028,9 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     sc->sc_aux_roc_qid = queue;
     sc->sc_awdl_listener_data_qid = dataQueue;
     sc->sc_awdl_mcast_qid = mcastQueue;
+    if (go)
+        XYLog("AWDL GO primary=%u center=%u mode=%u\n", chan,
+            sc->sc_listener_phy.mld_center_freq, iwx_phy_context_width(ic, &sc->sc_listener_phy));
     ic->ic_awdl_roc_qid = queue;
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
@@ -14269,7 +14406,7 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
     if (sc->sc_listener_refitting || sc->sc_awdl_peer_busy)
         return;
     chan = iwx_awdl_standing_channel(sc);
-    if (sc->sc_listener_go && !chan) {
+    if (sc->sc_listener_go && !iwx_awdl_go_matches_home(sc, chan)) {
         iwx_awdl_go_stop(sc, true);
         return;
     }
