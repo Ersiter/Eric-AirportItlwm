@@ -18059,7 +18059,8 @@ iwx_init_hw(struct iwx_softc *sc)
                 XYLogE("%s: firmware did not accept itlwm_cc=%s (error %d)\n",
                     DEVNAME(sc), overrideMcc, err);
             }
-        } else if (!hasOverride && restoreLastMcc) {
+        }
+        if (restoreLastMcc && (!hasOverride || !iwx_resolved_mcc(sc->sc_fw_mcc))) {
             err = iwx_send_update_mcc_cmd(sc, lastMcc, lastSource);
             if (err) {
                 XYLogE("%s: could not restore LAR MCC (error %d)\n",
