@@ -449,7 +449,7 @@ iwm_send_soc_conf(struct iwm_softc *sc)
 }
 
 int ItlIwm::
-iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2)
+iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2, bool manual)
 {
     XYLog("%s\n", __FUNCTION__);
     struct iwm_mcc_update_cmd mcc_cmd;
@@ -460,6 +460,10 @@ iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2)
         .data = { &mcc_cmd },
     };
     struct iwm_rx_packet *pkt;
+    uint32_t status, count;
+    uint16_t mcc;
+    uint8_t cap;
+    const uint8_t *profile;
     size_t resp_len;
     int err;
     int resp_v3 = isset(sc->sc_enabled_capa,
@@ -467,14 +471,14 @@ iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2)
     
     if (sc->sc_device_family == IWM_DEVICE_FAMILY_8000 &&
         !sc->sc_nvm.lar_enabled) {
-        return 0;
+        return manual ? EOPNOTSUPP : 0;
     }
     
     memset(&mcc_cmd, 0, sizeof(mcc_cmd));
     mcc_cmd.mcc = htole16(alpha2[0] << 8 | alpha2[1]);
     if (isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_WIFI_MCC_UPDATE) ||
         isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_LAR_MULTI_MCC))
-        mcc_cmd.source_id = IWM_MCC_SOURCE_GET_CURRENT;
+        mcc_cmd.source_id = manual ? IWM_MCC_SOURCE_ME : IWM_MCC_SOURCE_GET_CURRENT;
     else
         mcc_cmd.source_id = IWM_MCC_SOURCE_OLD_FW;
     
@@ -494,35 +498,94 @@ iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2)
         goto out;
     }
     
+    resp_len = iwm_rx_packet_payload_len(pkt);
     if (resp_v3) {
-        struct iwm_mcc_update_resp_v3 *resp;
-        resp_len = iwm_rx_packet_payload_len(pkt);
+        const auto *resp = reinterpret_cast<const struct iwm_mcc_update_resp_v3 *>(pkt->data);
         if (resp_len < sizeof(*resp)) {
             err = EIO;
             goto out;
         }
-        
-        resp = (struct iwm_mcc_update_resp_v3 *)pkt->data;
-        if (resp_len != sizeof(*resp) +
-            resp->n_channels * sizeof(resp->channels[0])) {
-            err = EIO;
-            goto out;
-        }
+        count = le32toh(resp->n_channels);
+        status = le32toh(resp->status);
+        mcc = le16toh(resp->mcc);
+        cap = resp->cap;
+        profile = pkt->data + sizeof(*resp);
+        resp_len -= sizeof(*resp);
     } else {
-        struct iwm_mcc_update_resp_v1 *resp_v1;
-        resp_len = iwm_rx_packet_payload_len(pkt);
-        if (resp_len < sizeof(*resp_v1)) {
+        const auto *resp = reinterpret_cast<const struct iwm_mcc_update_resp_v1 *>(pkt->data);
+        if (resp_len < sizeof(*resp)) {
             err = EIO;
             goto out;
         }
-        
-        resp_v1 = (struct iwm_mcc_update_resp_v1 *)pkt->data;
-        if (resp_len != sizeof(*resp_v1) +
-            resp_v1->n_channels * sizeof(resp_v1->channels[0])) {
-            err = EIO;
-            goto out;
-        }
+        count = le32toh(resp->n_channels);
+        status = le32toh(resp->status);
+        mcc = le16toh(resp->mcc);
+        cap = resp->cap;
+        profile = pkt->data + sizeof(*resp);
+        resp_len -= sizeof(*resp);
     }
+    if (resp_len % sizeof(uint32_t) || count != resp_len / sizeof(uint32_t)) {
+        err = EIO;
+        goto out;
+    }
+
+    if (manual) {
+        if (mcc == 0)
+            mcc = 0x3030;
+        if (mcc == 0x3030 || mcc == 0x5a5a) {
+            sc->sc_fw_mcc_int = htole16(mcc);
+            snprintf(sc->sc_fw_mcc, sizeof(sc->sc_fw_mcc), "%c%c", mcc >> 8, mcc & 0xff);
+        }
+        if ((status != IWM_MCC_RESP_NEW_CHAN_PROFILE &&
+             status != IWM_MCC_RESP_SAME_CHAN_PROFILE) ||
+            mcc != le16toh(mcc_cmd.mcc) || count == 0) {
+            err = EOPNOTSUPP;
+            goto out;
+        }
+
+        struct ieee80211com *ic = &sc->sc_ic;
+        const bool legacyChannels = sc->sc_device_family == IWM_DEVICE_FAMILY_7000;
+        const uint8_t *channels = legacyChannels ? iwm_nvm_channels : iwm_nvm_channels_8000;
+        const size_t channelCount = legacyChannels ? nitems(iwm_nvm_channels) : nitems(iwm_nvm_channels_8000);
+        uint16_t flags[IWM_MAX_MCC_CHANNELS] = {};
+        bool haveChannel = false;
+        for (size_t i = 0; i < MIN(count, channelCount); i++) {
+            uint32_t fw;
+            memcpy(&fw, profile + i * sizeof(fw), sizeof(fw));
+            const uint16_t nvmFlags = le16toh(sc->sc_nvm.channel_flags[i]);
+            const uint16_t fwFlags = le32toh(fw);
+            uint16_t allowed = nvmFlags & fwFlags;
+            allowed |= (nvmFlags | fwFlags) & (IWM_NVM_CHANNEL_DFS | IWM_NVM_CHANNEL_RADAR);
+            if (allowed & IWM_NVM_CHANNEL_RADAR)
+                allowed |= IWM_NVM_CHANNEL_DFS;
+            if (i >= IWM_NUM_2GHZ_CHANNELS) {
+                // GEO_CHANNEL_CAPABILITIES_API_S_VER_1.
+                if (cap & (1U << 7))
+                    allowed &= ~IWM_NVM_CHANNEL_40MHZ;
+                if (!(cap & (1U << 3)))
+                    allowed &= ~IWM_NVM_CHANNEL_80MHZ;
+                if (!(cap & (1U << 2)))
+                    allowed &= ~IWM_NVM_CHANNEL_160MHZ;
+            }
+            flags[i] = htole16(allowed);
+            haveChannel |= (allowed & IWM_NVM_CHANNEL_VALID) &&
+                (i < IWM_NUM_2GHZ_CHANNELS || sc->sc_nvm.sku_cap_band_52GHz_enable);
+        }
+        if (!haveChannel) {
+            err = EOPNOTSUPP;
+            goto out;
+        }
+
+        for (size_t i = 0; i < channelCount; i++)
+            ic->ic_channels[channels[i]] = {};
+        iwm_init_channel_map(sc, flags, channels, channelCount);
+        ieee80211_channel_init(IC2IFP(ic));
+        ieee80211_setmode(ic, IEEE80211_MODE_AUTO);
+        sc->sc_mcc_fixed = true;
+        sc->sc_fw_mcc_int = htole16(mcc);
+        memcpy(sc->sc_fw_mcc, alpha2, sizeof(sc->sc_fw_mcc));
+    }
+
 out:
     iwm_free_resp(sc, &hcmd);
     return err;

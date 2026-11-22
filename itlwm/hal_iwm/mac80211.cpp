@@ -121,6 +121,7 @@
 
 #include "ItlIwm.hpp"
 #include <HAL/ItlAWDLBootArg.hpp>
+#include <HAL/ItlCountryBootArg.hpp>
 #include <HAL/ItlAWDLRx.hpp>
 #include <net/ethernet.h>
 #include <IOKit/IOCommandGate.h>
@@ -4509,6 +4510,7 @@ iwm_init_hw(struct iwm_softc *sc)
 {
     XYLog("%s\n", __FUNCTION__);
     struct ieee80211com *ic = &sc->sc_ic;
+    const int generation = sc->sc_generation;
     int err, i, ac, qid;
     
     err = iwm_preinit(sc);
@@ -4633,12 +4635,36 @@ iwm_init_hw(struct iwm_softc *sc)
         goto err;
     }
     
+    if (sc->sc_mcc_fixed) {
+        const bool legacyChannels = sc->sc_device_family == IWM_DEVICE_FAMILY_7000;
+        iwm_init_channel_map(sc, sc->sc_nvm.channel_flags,
+            legacyChannels ? iwm_nvm_channels : iwm_nvm_channels_8000,
+            legacyChannels ? nitems(iwm_nvm_channels) : nitems(iwm_nvm_channels_8000));
+        ieee80211_channel_init(IC2IFP(ic));
+        ieee80211_setmode(ic, IEEE80211_MODE_AUTO);
+        memcpy(sc->sc_fw_mcc, "ZZ", sizeof(sc->sc_fw_mcc));
+        sc->sc_fw_mcc_int = htole16(0x5a5a);
+        sc->sc_mcc_fixed = false;
+    }
+
     if (isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_LAR_SUPPORT)) {
         err = iwm_send_update_mcc_cmd(sc, "ZZ");
         if (err) {
             XYLogE("%s: could not init LAR (error %d)\n",
                   DEVNAME(sc), err);
             goto err;
+        }
+        char overrideMcc[3];
+        if (itlReadCountryOverride(overrideMcc)) {
+            err = iwm_send_update_mcc_cmd(sc, overrideMcc, true);
+            if (generation != sc->sc_generation) {
+                err = ENXIO;
+                goto err;
+            }
+            if (err) {
+                XYLogE("%s: firmware did not accept itlwm_cc=%s (error %d)\n",
+                    DEVNAME(sc), overrideMcc, err);
+            }
         }
     }
     
@@ -4688,7 +4714,8 @@ iwm_init_hw(struct iwm_softc *sc)
     }
     
 err:
-    iwm_nic_unlock(sc);
+    if (generation == sc->sc_generation)
+        iwm_nic_unlock(sc);
     return err;
 }
 

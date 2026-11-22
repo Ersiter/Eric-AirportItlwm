@@ -111,6 +111,7 @@
 #endif
 #include "ItlIwx.hpp"
 #include <HAL/ItlAWDLBootArg.hpp>
+#include <HAL/ItlCountryBootArg.hpp>
 #include <HAL/ItlAWDLRx.hpp>
 
 using LegacyTxBa = iwx_softc::LegacyTxBa;
@@ -499,6 +500,10 @@ setCountryCode(const char *countryCode)
         return false;
 
     int s = splnet();
+    if (com.sc_mcc_fixed) {
+        splx(s);
+        return true;
+    }
     memcpy(com.sc_mcc_request, countryCode, 2);
     com.sc_mcc_request[2] = '\0';
     com.sc_mcc_source = IWX_MCC_SOURCE_ME;
@@ -10366,7 +10371,7 @@ iwx_mcc_update(struct iwx_softc *sc, struct iwx_mcc_chub_notif *notif)
     snprintf(sc->sc_fw_mcc, sizeof(sc->sc_fw_mcc), "%c%c",
              (le16toh(notif->mcc) & 0xff00) >> 8, le16toh(notif->mcc) & 0xff);
     sc->sc_fw_mcc_int = notif->mcc;
-    if (iwx_resolved_mcc(sc->sc_fw_mcc)) {
+    if (!sc->sc_mcc_fixed && iwx_resolved_mcc(sc->sc_fw_mcc)) {
         memcpy(sc->sc_mcc_last, sc->sc_fw_mcc, sizeof(sc->sc_mcc_last));
         sc->sc_mcc_last_source = notif->source_id;
         sc->sc_mcc_last_valid = 1;
@@ -17438,17 +17443,18 @@ iwx_apply_mcc_update_response(const struct iwx_rx_packet *pkt,
 
 int ItlIwx::
 iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
-                        uint8_t sourceId)
+                        uint8_t sourceId, bool manual)
 {
     if (!getMainWorkLoop()->inGate())
         return getMainCommandGate()->runAction(
             [](OSObject *, void *arg0, void *arg1, void *arg2, void *arg3) -> IOReturn {
+                const auto request = reinterpret_cast<uintptr_t>(arg3);
                 return static_cast<ItlIwx *>(arg0)->iwx_send_update_mcc_cmd(
                     static_cast<struct iwx_softc *>(arg1),
                     static_cast<const char *>(arg2),
-                    static_cast<uint8_t>(reinterpret_cast<uintptr_t>(arg3)));
+                    static_cast<uint8_t>(request), (request >> 8) != 0);
             }, this, sc, const_cast<char *>(alpha2),
-            reinterpret_cast<void *>(uintptr_t(sourceId)));
+            reinterpret_cast<void *>(uintptr_t(sourceId) | (uintptr_t(manual) << 8)));
 
     if (sc->sc_flags & IWX_FLAG_SHUTDOWN)
         return ENXIO;
@@ -17524,6 +17530,10 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
         err = EIO;
         goto out;
     }
+
+    if (manual)
+        sc->sc_mcc_fixed = response.status != IWX_MCC_RESP_ILLEGAL &&
+            memcmp(effectiveMcc, alpha2, 2) == 0;
 
     profileChanged = iwx_mcc_profile_changed(response.status);
     applyProfile = iwx_mcc_profile_needs_apply(response.status,
@@ -17621,8 +17631,8 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
     
 out:
     iwx_free_resp(sc, &hcmd);
-    
-    return err;
+
+    return !err && manual && !sc->sc_mcc_fixed ? EOPNOTSUPP : err;
 }
 
 int ItlIwx::
@@ -17644,10 +17654,9 @@ iwx_process_mcc_request(struct iwx_softc *sc, const char *alpha2,
     if (!(sc->sc_ic.ic_if.if_flags & IFF_RUNNING))
         return EBUSY;
 
-    if (iwx_resolved_mcc(sc->sc_mcc_override)) {
-        alpha2 = sc->sc_mcc_override;
-        sourceId = IWX_MCC_SOURCE_ME;
-    } else if (!iwx_resolved_mcc(alpha2) && sc->sc_mcc_last_valid) {
+    if (sc->sc_mcc_fixed)
+        return 0;
+    if (!iwx_resolved_mcc(alpha2) && sc->sc_mcc_last_valid) {
         alpha2 = sc->sc_mcc_last;
         sourceId = sc->sc_mcc_last_source;
     }
@@ -17716,6 +17725,7 @@ iwx_init_hw(struct iwx_softc *sc)
     XYLog("%s\n", __FUNCTION__);
     struct ieee80211com *ic = &sc->sc_ic;
     int err, i, generation = sc->sc_generation;
+    sc->sc_mcc_fixed = false;
     sc->sc_mcc_profile_synced = 0;
     sc->sc_mcc_echo_valid = 0;
 
@@ -17821,19 +17831,14 @@ iwx_init_hw(struct iwx_softc *sc)
     if (sc->sc_nvm.lar_enabled) {
         char lastMcc[3] = {};
         uint8_t lastSource = IWX_MCC_SOURCE_OLD_FW;
-        bool restoreLastMcc = sc->sc_mcc_last_valid != 0;
+        const bool restoreLastMcc = sc->sc_mcc_last_valid;
         if (restoreLastMcc) {
             memcpy(lastMcc, sc->sc_mcc_last, sizeof(lastMcc));
             lastSource = sc->sc_mcc_last_source;
         }
 
-        char overrideMcc[3] = {};
-        PE_parse_boot_argn("itlwm_cc", overrideMcc, sizeof(overrideMcc));
-        const bool hasOverride = iwx_resolved_mcc(overrideMcc);
-        if (hasOverride) {
-            memcpy(sc->sc_mcc_override, overrideMcc,
-                sizeof(sc->sc_mcc_override));
-        }
+        char overrideMcc[3];
+        const bool hasOverride = itlReadCountryOverride(overrideMcc);
 
         /*
          * Two steps on every firmware init, in upstream's order: the world
@@ -17853,18 +17858,18 @@ iwx_init_hw(struct iwx_softc *sc)
             goto err;
         }
 
-        if (hasOverride || restoreLastMcc) {
-            char requestedMcc[3];
-            uint8_t sourceId;
-
-            if (hasOverride) {
-                memcpy(requestedMcc, overrideMcc, sizeof(requestedMcc));
-                sourceId = IWX_MCC_SOURCE_ME;
-            } else {
-                memcpy(requestedMcc, lastMcc, sizeof(requestedMcc));
-                sourceId = lastSource;
+        if (hasOverride) {
+            err = iwx_send_update_mcc_cmd(sc, overrideMcc, IWX_MCC_SOURCE_ME, true);
+            if (generation != sc->sc_generation) {
+                err = ENXIO;
+                goto err;
             }
-            err = iwx_send_update_mcc_cmd(sc, requestedMcc, sourceId);
+            if (err) {
+                XYLogE("%s: firmware did not accept itlwm_cc=%s (error %d)\n",
+                    DEVNAME(sc), overrideMcc, err);
+            }
+        } else if (restoreLastMcc) {
+            err = iwx_send_update_mcc_cmd(sc, lastMcc, lastSource);
             if (err) {
                 XYLogE("%s: could not restore LAR MCC (error %d)\n",
                        DEVNAME(sc), err);
@@ -19242,7 +19247,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                 
             case IWX_MCC_CHUB_UPDATE_CMD: {
                 struct iwx_mcc_chub_notif *notif;
-                if (!IWX_NOTIF_FITS(pkt, struct iwx_mcc_chub_notif))
+                if (sc->sc_mcc_fixed || !IWX_NOTIF_FITS(pkt, struct iwx_mcc_chub_notif))
                     break;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_mcc_chub_notif *);
                 uint16_t mcc = le16toh(notif->mcc);

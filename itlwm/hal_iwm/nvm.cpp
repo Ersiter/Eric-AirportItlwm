@@ -307,18 +307,21 @@ iwm_parse_nvm_data(struct iwm_softc *sc, const uint16_t *nvm_hw,
     } else
         iwm_set_hw_address_8000(sc, data, mac_override, nvm_hw);
     
-    if (sc->sc_device_family == IWM_DEVICE_FAMILY_7000) {
-        if (sc->nvm_type == IWM_NVM_SDP) {
-            iwm_init_channel_map(sc, regulatory, iwm_nvm_channels,
-                                 MIN(n_regulatory, nitems(iwm_nvm_channels)));
-        } else {
-            iwm_init_channel_map(sc, &nvm_sw[IWM_NVM_CHANNELS],
-                                 iwm_nvm_channels, nitems(iwm_nvm_channels));
-        }
-    } else
-        iwm_init_channel_map(sc, &regulatory[IWM_NVM_CHANNELS_8000],
-                             iwm_nvm_channels_8000,
-                             MIN(n_regulatory, nitems(iwm_nvm_channels_8000)));
+    const bool legacyChannels = sc->sc_device_family == IWM_DEVICE_FAMILY_7000;
+    const uint8_t *channels = legacyChannels ? iwm_nvm_channels : iwm_nvm_channels_8000;
+    int count = legacyChannels ? nitems(iwm_nvm_channels) : nitems(iwm_nvm_channels_8000);
+    const uint16_t *channelFlags;
+    if (legacyChannels && sc->nvm_type != IWM_NVM_SDP) {
+        channelFlags = &nvm_sw[IWM_NVM_CHANNELS];
+    } else {
+        channelFlags = &regulatory[legacyChannels ? 0 : IWM_NVM_CHANNELS_8000];
+        count = MIN(n_regulatory / static_cast<int>(sizeof(*channelFlags)), count);
+    }
+    static_assert(nitems(iwm_nvm_channels_8000) <= IWM_MAX_MCC_CHANNELS,
+        "IWM NVM channel capacity");
+    memset(data->channel_flags, 0, sizeof(data->channel_flags));
+    memcpy(data->channel_flags, channelFlags, count * sizeof(*channelFlags));
+    iwm_init_channel_map(sc, data->channel_flags, channels, count);
     
     data->calib_version = 255;   /* TODO:
                                   this value will prevent some checks from

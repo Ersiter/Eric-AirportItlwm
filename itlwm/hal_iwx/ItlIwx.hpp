@@ -568,7 +568,7 @@ public:
     int    iwx_sf_config(struct iwx_softc *, int);
     int    iwx_send_bt_init_conf(struct iwx_softc *);
     int    iwx_send_soc_conf(struct iwx_softc *);
-    int    iwx_send_update_mcc_cmd(struct iwx_softc *, const char *, uint8_t);
+    int    iwx_send_update_mcc_cmd(struct iwx_softc *, const char *, uint8_t, bool manual = false);
     int    iwx_process_mcc_request(struct iwx_softc *, const char *, uint8_t);
     int    iwx_send_temp_report_ths_cmd(struct iwx_softc *);
     int    iwx_init_hw(struct iwx_softc *);

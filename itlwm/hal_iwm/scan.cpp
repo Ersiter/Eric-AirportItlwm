@@ -840,6 +840,9 @@ iwm_umac_scan(struct iwm_softc *sc, int bgscan)
 void ItlIwm::
 iwm_mcc_update(struct iwm_softc *sc, struct iwm_mcc_chub_notif *notif)
 {
+    if (sc->sc_mcc_fixed)
+        return;
+
     struct ieee80211com *ic = &sc->sc_ic;
     struct _ifnet *ifp = IC2IFP(ic);
     

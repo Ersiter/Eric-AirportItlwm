@@ -233,6 +233,8 @@ struct iwm_nvm_data {
     uint8_t max_tx_pwr_half_dbm;
 
     int lar_enabled;
+#define IWM_MAX_MCC_CHANNELS 51
+    uint16_t channel_flags[IWM_MAX_MCC_CHANNELS];
 };
 
 /* max bufs per tfd the driver will use */
@@ -630,6 +632,7 @@ struct iwm_softc {
     int n_cmd_versions;
 	char sc_fw_mcc[3];
     uint16_t sc_fw_mcc_int;
+    bool sc_mcc_fixed;
 
 	int sc_intmask;
 	int sc_flags;
