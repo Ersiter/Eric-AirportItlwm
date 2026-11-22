@@ -10371,7 +10371,8 @@ iwx_mcc_update(struct iwx_softc *sc, struct iwx_mcc_chub_notif *notif)
     snprintf(sc->sc_fw_mcc, sizeof(sc->sc_fw_mcc), "%c%c",
              (le16toh(notif->mcc) & 0xff00) >> 8, le16toh(notif->mcc) & 0xff);
     sc->sc_fw_mcc_int = notif->mcc;
-    if (!sc->sc_mcc_fixed && iwx_resolved_mcc(sc->sc_fw_mcc)) {
+    if (!sc->sc_mcc_fixed && notif->source_id != IWX_MCC_SOURCE_MCC_API &&
+        iwx_resolved_mcc(sc->sc_fw_mcc)) {
         memcpy(sc->sc_mcc_last, sc->sc_fw_mcc, sizeof(sc->sc_mcc_last));
         sc->sc_mcc_last_source = notif->source_id;
         sc->sc_mcc_last_valid = 1;
@@ -17550,7 +17551,7 @@ static bool
 iwx_mcc_profile_changed(uint32_t status)
 {
     return status == IWX_MCC_RESP_NEW_CHAN_PROFILE ||
-        status == IWX_MCC_RESP_ILLEGAL;
+        status == IWX_MCC_RESP_ILLEGAL || status == IWX_MCC_RESP_TEST_MODE_ACTIVE;
 }
 
 static bool
@@ -17560,14 +17561,8 @@ iwx_mcc_profile_needs_apply(uint32_t status, bool profileSynced)
 }
 
 static int
-iwx_apply_mcc_update_response(const struct iwx_rx_packet *pkt,
-                              uint8_t response_version, bool v4_supported,
-                              struct iwx_mcc_response_view *view)
+iwx_validate_mcc_profile(const struct iwx_mcc_response_view *view)
 {
-    int err = iwx_parse_mcc_update_response(pkt, response_version,
-                                             v4_supported, view);
-    if (err)
-        return err;
     if (!view->n_channels || view->n_channels > IWX_NUM_CHANNELS)
         return EIO;
     bool hasValidChannel = false;
@@ -17618,6 +17613,7 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
     bool applyProfile = false;
     char effectiveMcc[3] = {};
     const bool profileWasSynced = sc->sc_mcc_profile_synced;
+    const bool oem = manual && sourceId == IWX_MCC_SOURCE_MCC_API;
     int err;
 
     response_version = iwx_lookup_notif_ver(sc, IWX_LONG_GROUP,
@@ -17630,6 +17626,13 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
         (isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_WIFI_MCC_UPDATE) ||
          isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_LAR_MULTI_MCC)) ?
             sourceId : IWX_MCC_SOURCE_OLD_FW;
+    if (oem) {
+        if (mcc_cmd.source_id != IWX_MCC_SOURCE_MCC_API)
+            return EOPNOTSUPP;
+        // Intel Netwtw18 larForceMccApi uses this test key in MCC_UPDATE.
+        mcc_cmd.key = htole32(0xdeadbee1);
+        sc->sc_mcc_oem_attempted = true;
+    }
     
     hcmd.len[0] = sizeof(struct iwx_mcc_update_cmd);
     hcmd.resp_pkt_len = IWX_CMD_RESP_MAX;
@@ -17645,7 +17648,7 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
         goto out;
     }
     
-    err = iwx_apply_mcc_update_response(
+    err = iwx_parse_mcc_update_response(
         pkt, parse_version,
         isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_MCC_UPDATE_11AX_SUPPORT),
         &response);
@@ -17663,13 +17666,31 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
 
     if (response.status != IWX_MCC_RESP_NEW_CHAN_PROFILE &&
         response.status != IWX_MCC_RESP_SAME_CHAN_PROFILE &&
-        response.status != IWX_MCC_RESP_ILLEGAL) {
-        err = EIO;
+        response.status != IWX_MCC_RESP_ILLEGAL &&
+        response.status != IWX_MCC_RESP_TEST_MODE_ACTIVE) {
+        err = manual ? EOPNOTSUPP : EIO;
         goto out;
     }
 
-    if (manual)
+    if (oem && (response.status != IWX_MCC_RESP_TEST_MODE_ACTIVE ||
+        memcmp(effectiveMcc, alpha2, 2) != 0)) {
+        err = EOPNOTSUPP;
+        goto out;
+    }
+
+    err = iwx_validate_mcc_profile(&response);
+    if (err) {
+        // Test status can be returned without a channel table. Read it back separately.
+        if (oem)
+            err = 0;
+        else if (manual && memcmp(effectiveMcc, alpha2, 2) != 0)
+            err = EOPNOTSUPP;
+        goto out;
+    }
+
+    if (manual && !oem)
         sc->sc_mcc_fixed = response.status != IWX_MCC_RESP_ILLEGAL &&
+            response.status != IWX_MCC_RESP_TEST_MODE_ACTIVE &&
             memcmp(effectiveMcc, alpha2, 2) == 0;
 
     profileChanged = iwx_mcc_profile_changed(response.status);
@@ -17737,7 +17758,8 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
         memcpy(sc->sc_beacon_hint_mcc, effectiveMcc, 2);
     }
     notif.mcc = htole16(response.mcc);
-    notif.source_id = response.source_id;
+    notif.source_id = oem || response.status == IWX_MCC_RESP_TEST_MODE_ACTIVE ?
+        IWX_MCC_SOURCE_MCC_API : response.source_id;
     iwx_mcc_update(sc, &notif);
     /*
      * Hand the initial domain to the framework as well. Upstream does the same
@@ -17769,7 +17791,7 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
 out:
     iwx_free_resp(sc, &hcmd);
 
-    return !err && manual && !sc->sc_mcc_fixed ? EOPNOTSUPP : err;
+    return !err && manual && !oem && !sc->sc_mcc_fixed ? EOPNOTSUPP : err;
 }
 
 int ItlIwx::
@@ -17793,6 +17815,8 @@ iwx_process_mcc_request(struct iwx_softc *sc, const char *alpha2,
 
     if (sc->sc_mcc_fixed)
         return 0;
+    if (sourceId == IWX_MCC_SOURCE_MCC_API)
+        return iwx_send_update_mcc_cmd(sc, "ZZ", IWX_MCC_SOURCE_GET_CURRENT);
     if (!iwx_resolved_mcc(alpha2) && sc->sc_mcc_last_valid) {
         alpha2 = sc->sc_mcc_last;
         sourceId = sc->sc_mcc_last_source;
@@ -17995,8 +18019,17 @@ iwx_init_hw(struct iwx_softc *sc)
             goto err;
         }
 
-        if (hasOverride) {
+        if (hasOverride && !sc->sc_mcc_oem_attempted) {
             err = iwx_send_update_mcc_cmd(sc, overrideMcc, IWX_MCC_SOURCE_ME, true);
+            if (err == EOPNOTSUPP && generation == sc->sc_generation &&
+                sc->sc_device_family == IWX_DEVICE_FAMILY_BZ) {
+                err = iwx_send_update_mcc_cmd(sc, overrideMcc, IWX_MCC_SOURCE_MCC_API, true);
+                if (!err && generation == sc->sc_generation) {
+                    err = iwx_send_update_mcc_cmd(sc, "ZZ", IWX_MCC_SOURCE_GET_CURRENT);
+                    if (!err && memcmp(sc->sc_fw_mcc, overrideMcc, 2) != 0)
+                        err = EOPNOTSUPP;
+                }
+            }
             if (generation != sc->sc_generation) {
                 err = ENXIO;
                 goto err;
@@ -18005,7 +18038,7 @@ iwx_init_hw(struct iwx_softc *sc)
                 XYLogE("%s: firmware did not accept itlwm_cc=%s (error %d)\n",
                     DEVNAME(sc), overrideMcc, err);
             }
-        } else if (restoreLastMcc) {
+        } else if (!hasOverride && restoreLastMcc) {
             err = iwx_send_update_mcc_cmd(sc, lastMcc, lastSource);
             if (err) {
                 XYLogE("%s: could not restore LAR MCC (error %d)\n",
