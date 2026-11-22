@@ -49,9 +49,11 @@ macOS 14 Sonoma 至 27 Golden Gate · WPA3 · 6 GHz · 802.11be · BE200 / BE201
 
 1. 在 [Releases](https://github.com/Ersiter/Eric-AirportItlwm/releases) 下载对应系统的包：macOS 26 用
    `macOS26-Tahoe`，macOS 15.2 及以上用 `macOS15-Sequoia`，macOS 14 用 `macOS14-Sonoma`，macOS 27 用 `macOS27-GoldenGate`，一次发布提供四个系统。日常用 **Release**；**Debug** 保留反馈问题所需的诊断日志。
-2. 放进 `EFI/OC/Kexts/`，在 `Kernel → Add` 里添加，只保留一个 Intel 无线驱动。一份配置同时引导多个系统时，
-   各版本各自限定：Tahoe Darwin `25.0.0`–`25.99.99`，Sequoia `24.2.0`–`24.99.99`，Sonoma `23.0.0`–`23.99.99`，
+2. 放进 `EFI/OC/Kexts/`，在 `Kernel → Add` 里添加，每次启动只加载一份 Intel 无线驱动，可用 `uname -r` 查看版本。一份配置同时引导多个系统时，
+   各版本各自限定：Tahoe Darwin `25.4.0`–`25.6.99` (`Tahoe`)、 `25.0.0`–`25.3.99` (`Tahoe-25.0-25.3`)，Sequoia `24.2.0`–`24.99.99`，Sonoma `23.0.0`–`23.99.99`，
    Golden Gate `27.0.0`–`27.99.99`。
+   `Tahoe-25.0-25.3` 已对照 macOS 26.3.2（`25D2140`）验证二进制布局。Darwin 25.0–25.2 采用这套布局，待验证。
+   常规版已有 Darwin 25.4 和 25.6 的验证记录，25.5 纳入测试范围。
 3. 不要与 OpenCore Legacy Patcher 的「Modern Wireless」根补丁或任何 IO80211 / Skywalk 替换混用：本驱动用的
    就是系统自带的无线栈。
 4. 保留一份能启动的 EFI，先用 U 盘测试。

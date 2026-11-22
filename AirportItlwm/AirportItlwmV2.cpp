@@ -310,10 +310,17 @@ bool AirportItlwm::start(IOService *provider)
         return false;
     }
 #elif __IO80211_TARGET == __MAC_26_0
-    if (version_major != 25) {
-        XYLogE("this kext is for macOS 26, not starting on Darwin %d.%d\n", version_major, version_minor);
+#ifdef ITL_TAHOE_25D2140
+    if (version_major != 25 || version_minor > 3) {
+        XYLogE("Tahoe 25.0-25.3 ABI required; found Darwin %d.%d\n", version_major, version_minor);
         return false;
     }
+#else
+    if (version_major != 25 || version_minor < 4 || version_minor > 6) {
+        XYLogE("Tahoe 25.4-25.6 ABI required; found Darwin %d.%d\n", version_major, version_minor);
+        return false;
+    }
+#endif
 #endif
     XYLog("%s\n", __PRETTY_FUNCTION__);
     struct IOSkywalkEthernetInterface::RegistrationInfo registInfo;
