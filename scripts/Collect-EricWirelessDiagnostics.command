@@ -64,7 +64,7 @@ boot_build="$(/usr/bin/sw_vers -buildVersion)"
 os_version="$(/usr/bin/sw_vers -productVersion)"
 (
     ulimit -f 256
-    echo "Collector revision: 9"
+    echo "Collector revision: 10"
     echo "Report: $focus"
     stamp
     /usr/bin/sw_vers
@@ -201,6 +201,12 @@ stop_recording
 printf 'End: %s\n' "$(stamp)" >> "$work/attempt.txt"
 bounded snapshot > "$work/after.txt" 2>&1
 bounded kernel_lines > "$work/kernel-after.txt" 2>&1
+
+if [ "$focus" = continuity ]; then
+    # ioreg renders each firmware trace as one long line.
+    /usr/sbin/ioreg -p IOService -l -w 0 2>/dev/null |
+        /usr/bin/grep -aE '"AirportItlwm-Hotspot(Tx|Rx149)"[[:space:]]*=' > "$work/hotspot-frames.txt"
+fi
 
 patch_predicate='eventMessage CONTAINS[c] "[advsets]" OR eventMessage CONTAINS[c] "[rpa]" OR eventMessage CONTAINS[c] "[pagein]" OR eventMessage CONTAINS[c] "BlueToolFixup" OR eventMessage CONTAINS[c] "enableExtendedAdvertising" OR eventMessage CONTAINS[c] "support for extended scans"'
 bounded /usr/bin/log show --last boot --info --style compact --predicate "$patch_predicate" > "$work/patches.txt" 2>&1
