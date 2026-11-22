@@ -49,10 +49,10 @@ jobs:
           mkdir -p logs artifacts
           xcodebuild -version > logs/toolchain.txt
           git rev-parse HEAD > logs/source-commit.txt
-          for variant in Tahoe-25.0-25.3 Tahoe Sequoia; do
+          for variant in Tahoe-26.0-26.3 Tahoe-26.4-and-later Sequoia; do
             platform="${variant%%-*}"
             flags=()
-            if [[ "$variant" == Tahoe-25.0-25.3 ]]; then
+            if [[ "$variant" == Tahoe-26.0-26.3 ]]; then
               flags+=('OTHER_CPLUSPLUSFLAGS=$(inherited) -DITL_TAHOE_25D2140')
             fi
             xcodebuild -project itlwm.xcodeproj -target "AirportItlwm-$platform" \

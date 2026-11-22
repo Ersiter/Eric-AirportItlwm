@@ -312,12 +312,12 @@ bool AirportItlwm::start(IOService *provider)
 #elif __IO80211_TARGET == __MAC_26_0
 #ifdef ITL_TAHOE_25D2140
     if (version_major != 25 || version_minor > 3) {
-        XYLogE("Tahoe 25.0-25.3 ABI required; found Darwin %d.%d\n", version_major, version_minor);
+        XYLogE("macOS 26.0-26.3 ABI required; found Darwin %d.%d\n", version_major, version_minor);
         return false;
     }
 #else
-    if (version_major != 25 || version_minor < 4 || version_minor > 6) {
-        XYLogE("Tahoe 25.4-25.6 ABI required; found Darwin %d.%d\n", version_major, version_minor);
+    if (version_major != 25 || version_minor < 4) {
+        XYLogE("macOS 26.4 or later within macOS 26 required; found Darwin %d.%d\n", version_major, version_minor);
         return false;
     }
 #endif

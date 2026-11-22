@@ -57,15 +57,15 @@ firmware and the highest adapted API is tried first. Not supported yet: the Wi-F
 ## Install
 
 1. Download the package for your macOS from [Releases](https://github.com/Ersiter/Eric-AirportItlwm/releases):
-   `macOS26-Tahoe` for macOS 26, `macOS15-Sequoia` for macOS 15.2 or later, `macOS14-Sonoma` for macOS 14 and
+   `Tahoe-26.0-26.3` / `Tahoe-26.4-and-later` for macOS 26, `macOS15-Sequoia` for macOS 15.2 or later, `macOS14-Sonoma` for macOS 14 and
    `macOS27-GoldenGate` for macOS 27; a release carries all four. **Release** for daily use;
    **Debug** keeps the diagnostic logs a report needs.
-2. Put the kext in `EFI/OC/Kexts/` and add it to `Kernel → Add`. Enable only one Intel Wi-Fi kext per boot. Evaluate the ranges below against `uname -r`.
-   If one config boots several systems, limit each kext to its own: Tahoe Darwin `25.4.0`–`25.6.99` (`Tahoe`), `25.0.0`–`25.3.99` (`Tahoe-25.0-25.3`), Sequoia
+2. Put the kext in `EFI/OC/Kexts/` and add it to `Kernel → Add`. Enable only one Intel Wi-Fi kext per boot. Check your macOS version with `sw_vers -productVersion`.
+   If one config boots several systems, limit each kext to its own: Tahoe 26.0–26.3.x (`25.0.0`–`25.3.99`), Tahoe 26.4 and later within 26.x (`25.4.0`–`25.99.99`), Sequoia
    `24.2.0`–`24.99.99`, Sonoma `23.0.0`–`23.99.99`, Golden Gate `27.0.0`–`27.99.99`.
-   The `Tahoe-25.0-25.3` build is verified against macOS 26.3.2 (`25D2140`);
-   Darwin 25.0–25.2 use this layout and await validation. The standard build has evidence on
-   Darwin 25.4 and 25.6; Darwin 25.5 is included for testing.
+   The `Tahoe-26.0-26.3` build is verified against macOS 26.3.2 (`25D2140`);
+   macOS 26.0–26.2 use this layout and await validation. The `Tahoe-26.4-and-later` layout has evidence on
+   macOS 26.4 and 26.7; other point releases await validation.
 3. Do not combine it with OpenCore Legacy Patcher's "Modern Wireless" root patches or any IO80211 /
    Skywalk replacement: this driver uses the system's own Wi-Fi stack.
 4. Keep a bootable copy of your EFI and test from a USB stick first.
