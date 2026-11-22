@@ -5812,7 +5812,6 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
     sc->sc_ic.ic_awdl_stop = sc->sc_use_mld_api ? iwx_awdl_stop : NULL;
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
     sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_peer_cache : NULL;
-    sc->sc_ic.ic_awdl_tx_qos = sc->sc_use_mld_api ? 1 : 0;
 #ifdef AIRPORT_VTD
     sc->sc_ic.ic_defer_eapol_key_input = sc->sc_use_mld_api ?
         iwx_defer_eapol_key_input : NULL;
@@ -11253,7 +11252,7 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             uint8_t target = 0;
             if (sc->sc_use_mld_api) {
                 if (!(sc->sc_flags & IWX_FLAG_STA_ACTIVE) || !ic->ic_bss->ni_port_valid ||
-                    sc->sc_mld_link_updates ||
+                    !ic->ic_awdl_addr_gen || sc->sc_mld_link_updates ||
                     __builtin_popcount((unsigned)sc->sc_mld_active_links) > 1)
                     return EAGAIN;
                 target = that->iwx_awdl_standing_channel(sc);
@@ -14062,7 +14061,8 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
     sc->sc_listener_up = 1;
-    // Only unicast on the standing link needs the peer's TID 6 queue.
+    // The dedicated peer has a TID 0 queue and can allocate TID 6 for LLW.
+    ic->ic_awdl_tx_qos = 1;
     ic->ic_awdl_llw_qos = itlAWDLLlwFlag();
     setupStage(0);
     sc->sc_listener_restore_pending = sc->sc_listener_tries == 1;
@@ -14303,6 +14303,7 @@ iwx_awdl_go_stop(struct iwx_softc *sc, bool restoreStation)
     sc->sc_aux_roc_qid = sc->sc_awdl_go_saved_roc_qid;
     sc->sc_p2p_queue = sc->sc_aux_roc_qid >= 0;
     sc->sc_ic.ic_awdl_roc_qid = sc->sc_aux_roc_qid;
+    sc->sc_ic.ic_awdl_tx_qos = 0;
     sc->sc_ic.ic_awdl_llw_qos = 0;
     sc->sc_listener_chan = sc->sc_listener_up = sc->sc_listener_refitting = 0;
     sc->sc_listener_candidate = 0;
@@ -18497,6 +18498,7 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_awdl_discovery_qid = -1;
     sc->sc_listener_setting_up = 0;
     sc->sc_mld_link_updates = 0;
+    sc->sc_ic.ic_awdl_tx_qos = 0;
     sc->sc_ic.ic_awdl_llw_qos = 0;
     sc->sc_listener_refitting = sc->sc_listener_candidate = 0;
     sc->sc_listener_retry_us = sc->sc_listener_last_data_us = 0;
