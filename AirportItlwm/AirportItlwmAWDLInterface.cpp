@@ -1791,15 +1791,19 @@ updatePeerChannels(ieee80211com *ic, uint64_t now) const
     const auto *peer = preferredPeerSchedule(now);
     auto &slots = ic->ic_awdl_peer_channel_slots;
     memset(slots, 0, sizeof(slots));
-    if (!peer)
-        return;
-    for (const uint8_t channel : peer->channels) {
+    const auto count = [&](uint8_t channel) {
         if (channel == 149)
             slots[0]++;
         else if (channel == 44)
             slots[1]++;
         else if (channel == 6)
             slots[2]++;
+    };
+    if (peer) {
+        for (const uint8_t channel : peer->channels)
+            count(channel);
+    } else {
+        count(observedPeerChannel(now));
     }
 }
 

@@ -11155,25 +11155,52 @@ static void iwx_awdl_go_width(struct iwx_softc *sc, uint8_t &width, uint16_t &ce
     }
 }
 
-static bool iwx_awdl_go_matches_home(struct iwx_softc *sc, uint8_t chan)
+static bool iwx_awdl_go_matches_channel(struct iwx_softc *sc, uint8_t chan)
 {
     if (!chan || chan != sc->sc_listener_chan)
         return false;
+    const bool privateDiscovery = sc->sc_awdl_discovery_phy == sc->sc_listener_phy.id;
+    if (chan != iwx_awdl_go_home_channel(sc))
+        return privateDiscovery;
     uint8_t width;
     uint16_t center;
     iwx_awdl_go_width(sc, width, center);
-    return width == sc->sc_listener_phy.mld_width && center == sc->sc_listener_phy.mld_center_freq;
+    return !privateDiscovery && width == sc->sc_listener_phy.mld_width &&
+        center == sc->sc_listener_phy.mld_center_freq;
 }
 
 uint8_t ItlIwx::
 iwx_awdl_standing_channel(struct iwx_softc *sc)
 {
+    auto &ic = sc->sc_ic;
+    if (iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_BEACON_TEMPLATE_CMD) != 13 ||
+        (sc->sc_listener_up && !sc->sc_listener_go))
+        return 0;
     const uint8_t home = iwx_awdl_go_home_channel(sc);
-    if (home && !(sc->sc_ic.ic_channels[home].ic_flags & IEEE80211_CHAN_PASSIVE) &&
-        (!sc->sc_listener_up || sc->sc_listener_go) && iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_BEACON_TEMPLATE_CMD) == 13 &&
-        iwx_awdl_listener_pick(sc, home))
-        return home;
-    return 0;
+    static constexpr uint8_t social[] = {149, 44, 6};
+    uint8_t best = 0, bestSlots = 0;
+    uint8_t usableHome = 0;
+    for (unsigned i = 0; i < nitems(social); i++) {
+        const uint8_t chan = social[i];
+        const auto &c = ic.ic_channels[chan];
+        if (!c.ic_flags || !isset(ic.ic_chan_active, chan) ||
+            (c.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_NOADHOC)))
+            continue;
+        const uint8_t slots = ic.ic_awdl_peer_channel_slots[i];
+        if (slots && chan == sc->sc_listener_chan)
+            return chan;
+        if (chan == home) {
+            usableHome = chan;
+            if (slots) {
+                best = chan;
+                bestSlots = UINT8_MAX;
+            }
+        } else if (slots > bestSlots) {
+            best = chan;
+            bestSlots = slots;
+        }
+    }
+    return best ? best : usableHome;
 }
 
 /* The AWDL TX queues as the driver sees them (index, queued, whether the TX watchdog is armed) and the listener's flags. */
@@ -11235,7 +11262,7 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
     }
     int err;
     const bool standing = sc->sc_use_mld_api ?
-        itlAWDLStandingFlag() && (sc->sc_listener_up || iwx_awdl_go_home_channel(sc)) :
+        itlAWDLStandingFlag() :
         iwx_awdl_listener_enabled();
     if (sc->sc_use_mld_api && !standing) {
         memset(ic->ic_awdl_listener_why, 0x40, sizeof(ic->ic_awdl_listener_why));
@@ -11251,16 +11278,35 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             ic->ic_bss && ic->ic_bss->ni_chan != IEEE80211_CHAN_ANYC) {
             uint8_t target = 0;
             if (sc->sc_use_mld_api) {
+                target = that->iwx_awdl_standing_channel(sc);
+                const bool offHome = target != iwx_awdl_go_home_channel(sc);
+                if (!target || (offHome && chan != target))
+                    goto roc;
                 if (!(sc->sc_flags & IWX_FLAG_STA_ACTIVE) || !ic->ic_bss->ni_port_valid ||
-                    !ic->ic_awdl_addr_gen || sc->sc_mld_link_updates ||
+                    !ic->ic_awdl_addr_gen || sc->sc_mld_link_updates)
+                    return EAGAIN;
+                if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running) {
+                    err = that->iwx_awdl_listen_abort(sc);
+                    return err ? err : EAGAIN;
+                }
+                if (offHome) {
+                    // iwlmld blocks EMLSR before assigning a second channel context to P2P.
+                    const int generation = sc->sc_generation;
+                    that->iwx_mld_roc_block_emlsr(sc);
+                    if (generation != sc->sc_generation)
+                        return ENXIO;
+                }
+                if (sc->sc_mld_emlsr_active || sc->sc_mld_link_updates ||
                     __builtin_popcount((unsigned)sc->sc_mld_active_links) > 1)
                     return EAGAIN;
-                target = that->iwx_awdl_standing_channel(sc);
-                if (!target)
-                    goto roc;
-                if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running) {
-                    that->iwx_awdl_listen_abort(sc);
-                    return EAGAIN;
+                const int qid = sc->sc_aux_roc_qid;
+                if (offHome && qid > 0 && sc->txq[qid].queued) {
+                    const int generation = sc->sc_generation;
+                    err = that->iwx_flush_sta_tids(sc, IWX_AUX_STA_ID, 0xffff);
+                    if (generation != sc->sc_generation)
+                        return ENXIO;
+                    if (err || sc->txq[qid].queued)
+                        return err ? err : EAGAIN;
                 }
             }
             sc->sc_listener_restore_pending = false;
@@ -11285,16 +11331,16 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
         if (sc->sc_listener_up) {
             if (ic->ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN)
                 return EBUSY;
+            const uint8_t target = sc->sc_use_mld_api ? that->iwx_awdl_standing_channel(sc) : 0;
             if (sc->sc_use_mld_api && !sc->sc_listener_refitting) {
-                const uint8_t target = that->iwx_awdl_standing_channel(sc);
                 if (sc->sc_listener_candidate != target)
                     sc->sc_listener_candidate = 0;
-                if ((sc->sc_listener_retry_us || !iwx_awdl_go_matches_home(sc, target)) &&
+                if ((sc->sc_listener_retry_us || !iwx_awdl_go_matches_channel(sc, target)) &&
                     iwx_uptime_us() >= sc->sc_listener_retry_us)
                     task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
             }
             if (sc->sc_listener_refitting || sc->sc_listener_retry_us || chan != sc->sc_listener_chan ||
-                (sc->sc_listener_go && !iwx_awdl_go_matches_home(sc, iwx_awdl_go_home_channel(sc)))) {
+                (sc->sc_listener_go && !iwx_awdl_go_matches_channel(sc, target))) {
                 iwx_awdl_record_listen(ic, chan, 4, EBUSY, sc->sc_listener_chan);
                 return EBUSY;
             }
@@ -11491,7 +11537,11 @@ static int
 iwx_awdl_tx_ready(struct ieee80211com *ic, uint8_t chan)
 {
     const auto *sc = (const struct iwx_softc *)IC2IFP(ic)->if_softc;
+    const bool offHome = sc->sc_listener_go &&
+        sc->sc_awdl_discovery_phy == sc->sc_listener_phy.id;
     return chan && sc->sc_p2p_queue && sc->sc_aux_roc_running &&
+        (!offHome || (sc->sc_awdl_discovery_ready &&
+            iwx_uptime_us() < sc->sc_awdl_discovery_deadline_us)) &&
         ic->ic_awdl_listen_chan == chan && ic->ic_state == IEEE80211_S_RUN &&
         sc->ns_nstate == IEEE80211_S_RUN &&
         !(sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN | IWX_FLAG_SHUTDOWN |
@@ -13336,7 +13386,9 @@ iwx_awdl_discovery_setup(struct iwx_softc *sc)
     auto *node = reinterpret_cast<struct iwx_node *>(sc->sc_ic.ic_bss);
     if (!node || !node->in_phyctxt)
         return EAGAIN;
-    const uint32_t phy = node->in_phyctxt->id;
+    const uint8_t chan = ieee80211_chan2ieee(&sc->sc_ic, sc->sc_listener_phy.channel);
+    const uint32_t phy = chan == iwx_awdl_go_home_channel(sc) ?
+        node->in_phyctxt->id : sc->sc_listener_phy.id;
     sc->sc_awdl_discovery_phy = phy;
     const int generation = sc->sc_generation;
     int err;
@@ -13712,12 +13764,9 @@ iwx_awdl_listener_width(struct iwx_softc *sc, uint8_t chan)
  * MAC_CONFIG (LISTENER, promiscuous, awdl0's address), LINK_CONFIG ADD, PHY_CONTEXT ADD, LINK_CONFIG
  * MODIFY (PHY + rates, then active), STA_CONFIG (BCAST_MGMT, the monitor station), and a TX queue
  * for it. ForbiddenItlwm (AX211, legacy API) does the same with a second MAC + PHY + binding +
- * station and gets AWDL broadcasts and ACKed unicast; the firmware shares the radio between the
- * station and this link. The listener goes on the OTHER band than the station: on hardware the
- * link came up and heard peers on channel 6 while the station was on 5 GHz (PeerUpdates 1 -> 14), and
- * the firmware crashed (NMI_INTERRUPT_LMAC_FATAL, 26 times in 3 minutes) every time it was activated
- * on 149 beside a station on 44/157, the same band on a different channel. Linux iwl-mld likewise only
- * runs links on different bands together. Failure stage: 1 MAC, 2 link add, 3 PHY, 4 link rates, 5 link
+ * station and gets AWDL broadcasts and ACKed unicast. Earlier BE tests with the LISTENER role
+ * asserted when activating on 149 beside infrastructure on 44/157. Standing data uses GO with its
+ * own PHY and peer queues. Failure stage: 1 MAC, 2 link add, 3 PHY, 4 link rates, 5 link
  * active, 6 station, 8 association, 11 broadcast station, 7 management queue, 9 data queue,
  * 10 initial latency settings. A failure leaves the ROC listens as before.
  */
@@ -13731,7 +13780,8 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     bool link_active = false, sta_added = false, mac_associated = false, bcast_added = false;
     bool queue_added = false, data_queue_added = false;
     bool mcast_added = false, mcast_queue_added = false, sf_held = false;
-    const bool go = chan == iwx_awdl_go_home_channel(sc);
+    const bool go = itlAWDLStandingFlag();
+    const bool offHome = go && chan != iwx_awdl_go_home_channel(sc);
     const bool client = !go && iwx_awdl_client_enabled();
     const bool dedicatedGroup = go || client;
     const int mgmtSta = dedicatedGroup ? IWX_AWDL_BCAST_STA_ID : IWX_LISTENER_STA_ID;
@@ -13838,8 +13888,10 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     sc->sc_listener_phy.channel = &ic->ic_channels[chan];
     sc->sc_listener_phy.mld_config_valid = 1;
     sc->sc_listener_phy.mld_width = IEEE80211_CHAN_WIDTH_20;
-    if (go)
+    if (go && !offHome)
         iwx_awdl_go_width(sc, sc->sc_listener_phy.mld_width, sc->sc_listener_phy.mld_center_freq);
+    else
+        sc->sc_listener_phy.mld_center_freq = sc->sc_listener_phy.channel->ic_freq;
     phy_incomplete = true;
     if ((err = iwx_phy_ctxt_cmd(sc, &sc->sc_listener_phy, 1, 1, IWX_FW_CTXT_ACTION_ADD, 0)) != 0)
         goto fail;
@@ -13850,7 +13902,8 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         err = ENXIO;
         goto fail;
     }
-    if ((err = iwx_mld_listener_link(sc, IWX_FW_CTXT_ACTION_MODIFY, go ? 0 :
+    if ((err = iwx_mld_listener_link(sc, IWX_FW_CTXT_ACTION_MODIFY, go ?
+        (offHome ? IWX_MLD_LINK_CONTEXT_MODIFY_RATES_INFO : 0) :
         IWX_MLD_LINK_CONTEXT_MODIFY_RATES_INFO | IWX_MLD_LINK_CONTEXT_MODIFY_QOS_PARAMS |
         (client ? IWX_MLD_LINK_CONTEXT_MODIFY_BEACON_TIMING : 0), 0)) != 0)
         goto fail;
@@ -13859,8 +13912,15 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         err = ENXIO;
         goto fail;
     }
+    if (offHome && (ic->ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN ||
+        (sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN | IWX_FLAG_SHUTDOWN |
+            IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)) || sc->sc_mld_link_updates ||
+        (sc->sc_mld_active_links & (sc->sc_mld_active_links - 1)))) {
+        err = EAGAIN;
+        goto fail;
+    }
     if ((err = iwx_mld_listener_link(sc, IWX_FW_CTXT_ACTION_MODIFY,
-        IWX_MLD_LINK_CONTEXT_MODIFY_ACTIVE | (go ? IWX_MLD_LINK_CONTEXT_MODIFY_RATES_INFO : 0), 1)) != 0)
+        IWX_MLD_LINK_CONTEXT_MODIFY_ACTIVE | (go && !offHome ? IWX_MLD_LINK_CONTEXT_MODIFY_RATES_INFO : 0), 1)) != 0)
         goto fail;
     link_active = true;
     if (go) {
@@ -14434,7 +14494,7 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
     if (sc->sc_listener_refitting || sc->sc_awdl_peer_busy)
         return;
     chan = iwx_awdl_standing_channel(sc);
-    if (sc->sc_listener_go && !iwx_awdl_go_matches_home(sc, chan)) {
+    if (sc->sc_listener_go && !iwx_awdl_go_matches_channel(sc, chan)) {
         iwx_awdl_go_stop(sc, true);
         return;
     }
@@ -19726,6 +19786,8 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                             if (le32toh(notif->start) == 1) {
                                 sc->sc_awdl_discovery_ready = le32toh(notif->status) == 1 &&
                                     !sc->sc_listener_refitting;
+                                if (sc->sc_awdl_discovery_ready && sc->sc_awdl_ba_reply_pending)
+                                    iwx_awdl_ba_reply(sc);
                             } else {
                                 sc->sc_awdl_discovery_requested = false;
                                 sc->sc_awdl_discovery_ready = false;
