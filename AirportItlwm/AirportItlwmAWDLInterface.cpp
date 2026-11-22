@@ -3574,8 +3574,16 @@ setPEER_CACHE_CONTROL(apple80211_peer_cache_control *d)
         _fCommandGate->runAction([](OSObject *, void *owner, void *data, void *operation, void *) -> IOReturn {
             auto that = static_cast<AirportItlwmAWDLInterface *>(owner);
             ieee80211com *ic = that->fController->fHalService->get80211Controller();
-            if (ic && ic->ic_awdl_peer_cache)
-                ic->ic_awdl_peer_cache(ic, (uint32_t)(uintptr_t)operation, (const uint8_t *)data);
+            if (ic && ic->ic_awdl_peer_cache) {
+                const auto *peer = static_cast<const uint8_t *>(data);
+                int ampduParam = -1;
+                if ((uintptr_t)operation != 2) {
+                    const auto *ht = reinterpret_cast<const ieee80211_ie_htcap *>(peer + 8);
+                    if (ht->hc_id == IEEE80211_ELEMID_HTCAPS && ht->hc_len == sizeof(*ht) - 2)
+                        ampduParam = ht->hc_param;
+                }
+                ic->ic_awdl_peer_cache(ic, (uint32_t)(uintptr_t)operation, peer, ampduParam);
+            }
             // Answer it, after this handler has returned and the caller is asleep (see the member comment).
             if (that->fPeerCacheTimer) {
                 if (that->fPeerCacheDoneCount < kPeerCacheQueueDepth) {

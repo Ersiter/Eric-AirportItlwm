@@ -327,7 +327,7 @@ public:
     static int    iwm_awdl_crypto(struct ieee80211com *, mbuf_t *, int);
     static int    iwm_awdl_set_encryption(struct ieee80211com *, uint32_t);
     static int    iwm_awdl_set_low_latency(struct ieee80211com *, int);
-    static void    iwm_awdl_peer_cache(struct ieee80211com *, uint32_t, const uint8_t *);
+    static void    iwm_awdl_peer_cache(struct ieee80211com *, uint32_t, const uint8_t *, int);
     static int    iwm_awdl_rx_ba(struct ieee80211com *, const uint8_t *, uint8_t,
                                  uint16_t, uint16_t, int, const uint8_t *, uint8_t);
     int    iwm_awdl_peer_apply(struct iwm_softc *, const uint8_t *, int);

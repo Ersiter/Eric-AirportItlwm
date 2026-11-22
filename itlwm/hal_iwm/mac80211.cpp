@@ -2716,7 +2716,7 @@ restore_active:
 }
 
 void ItlIwm::
-iwm_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer)
+iwm_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer, int)
 {
     struct iwm_softc *sc = (struct iwm_softc *)IC2IFP(ic)->if_softc;
     ItlIwm *that = container_of(sc, ItlIwm, com);

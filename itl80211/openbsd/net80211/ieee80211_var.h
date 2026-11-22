@@ -634,7 +634,7 @@ struct ieee80211com {
     uint8_t         ic_awdl_tx_qos;    /* backend has a peer TID 0 aggregation queue */
     uint8_t         ic_awdl_llw_qos;    /* the firmware uses a dedicated LLW TID */
     void            (*ic_awdl_peer_cache)(struct ieee80211com *, uint32_t,
-                        const uint8_t *);
+                        const uint8_t *, int);
 #define IEEE80211_AWDL_KEY_GROUP 0x01
 #define IEEE80211_AWDL_KEY_TX    0x02
 #define IEEE80211_AWDL_KEY_RX    0x04

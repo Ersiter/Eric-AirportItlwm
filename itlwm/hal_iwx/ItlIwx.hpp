@@ -432,7 +432,7 @@ public:
     static int    iwx_bgscan(struct ieee80211com *);
     static int    iwx_awdl_listen(struct ieee80211com *, uint8_t, uint16_t);
     static int    iwx_awdl_tx(struct ieee80211com *, uint8_t, const uint8_t *, size_t);
-    static void   iwx_awdl_peer_cache(struct ieee80211com *, uint32_t, const uint8_t *);
+    static void   iwx_awdl_peer_cache(struct ieee80211com *, uint32_t, const uint8_t *, int);
     static int    iwx_awdl_key(struct ieee80211com *, const uint8_t *, uint8_t,
                         const uint8_t *, uint8_t, uint32_t, uint64_t, int);
     static int    iwx_awdl_crypto(struct ieee80211com *, mbuf_t *, int);

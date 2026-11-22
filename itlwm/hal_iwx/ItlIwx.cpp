@@ -11433,7 +11433,8 @@ iwx_awdl_ba_reply(struct iwx_softc *sc)
 }
 
 void ItlIwx::
-iwx_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer)
+iwx_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer,
+    int ampduParam)
 {
     struct iwx_softc *sc = (struct iwx_softc *)IC2IFP(ic)->if_softc;
     static const uint8_t zero[IEEE80211_ADDR_LEN] = {};
@@ -11450,6 +11451,8 @@ iwx_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer)
         return;
     }
     if (op == 2) {
+        if (IEEE80211_ADDR_EQ(sc->sc_awdl_peer_ampdu_addr, peer))
+            memset(sc->sc_awdl_peer_ampdu_addr, 0, IEEE80211_ADDR_LEN);
         if (IEEE80211_ADDR_EQ(sc->sc_awdl_peer_target, peer))
             memset(sc->sc_awdl_peer_target, 0, IEEE80211_ADDR_LEN);
         if (IEEE80211_ADDR_EQ(sc->sc_awdl_ba_peer, peer)) {
@@ -11460,6 +11463,10 @@ iwx_awdl_peer_cache(struct ieee80211com *ic, uint32_t op, const uint8_t *peer)
             (sc->sc_awdl_peer_added && IEEE80211_ADDR_EQ(sc->sc_awdl_peer_addr, peer))))
             task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
     } else if (op == 0 || op == 6) {
+        if (ampduParam >= 0) {
+            IEEE80211_ADDR_COPY(sc->sc_awdl_peer_ampdu_addr, peer);
+            sc->sc_awdl_peer_ampdu_param = (uint8_t)ampduParam;
+        }
         if (!IEEE80211_ADDR_EQ(sc->sc_awdl_peer_target, peer))
             IEEE80211_ADDR_COPY(sc->sc_awdl_peer_target, peer);
         sc->sc_awdl_peer_error = 0;
@@ -12222,6 +12229,11 @@ iwx_awdl_peer_task(void *arg)
         cmd.link_id = htole32(IWX_LISTENER_LINK_ID);
         IEEE80211_ADDR_COPY(cmd.peer_mld_address, target);
         IEEE80211_ADDR_COPY(cmd.peer_link_address, target);
+        if (IEEE80211_ADDR_EQ(sc->sc_awdl_peer_ampdu_addr, target)) {
+            const uint8_t ampdu = sc->sc_awdl_peer_ampdu_param;
+            cmd.tx_ampdu_spacing = htole32((ampdu & IEEE80211_AMPDU_PARAM_SS) >> 2);
+            cmd.tx_ampdu_max_size = htole32(ampdu & IEEE80211_AMPDU_PARAM_LE);
+        }
         err = that->iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
             IWX_MLD_STA_CONFIG_CMD), 0, size, &cmd);
         if (generation != sc->sc_generation)

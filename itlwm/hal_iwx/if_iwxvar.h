@@ -964,6 +964,8 @@ struct iwx_softc {
 	uint8_t sc_awdl_low_latency;
 	uint8_t sc_awdl_peer_addr[IEEE80211_ADDR_LEN];
 	uint8_t sc_awdl_peer_target[IEEE80211_ADDR_LEN];
+	uint8_t sc_awdl_peer_ampdu_addr[IEEE80211_ADDR_LEN];
+	uint8_t sc_awdl_peer_ampdu_param;
 	int sc_awdl_peer_qid;       /* QoS unicast data, TID 0 */
 	int sc_awdl_peer_llw_qid;   /* low-latency unicast data, TID 6 */
 	int sc_awdl_peer_llw_error;
