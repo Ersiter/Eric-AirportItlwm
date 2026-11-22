@@ -17631,6 +17631,7 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2,
             return EOPNOTSUPP;
         // Intel Netwtw18 larForceMccApi uses this test key in MCC_UPDATE.
         mcc_cmd.key = htole32(0xdeadbee1);
+        sc->sc_mcc_oem_attempted = true;
     }
     
     hcmd.len[0] = sizeof(struct iwx_mcc_update_cmd);
@@ -18018,8 +18019,8 @@ iwx_init_hw(struct iwx_softc *sc)
             goto err;
         }
 
-        if (hasOverride) {
-            const bool oem = sc->sc_device_family == IWX_DEVICE_FAMILY_BZ;
+        const bool oem = sc->sc_device_family == IWX_DEVICE_FAMILY_BZ;
+        if (hasOverride && (!oem || !sc->sc_mcc_oem_attempted)) {
             const uint8_t source = oem ? IWX_MCC_SOURCE_MCC_API : IWX_MCC_SOURCE_ME;
             err = iwx_send_update_mcc_cmd(sc, overrideMcc, source, true);
             if (oem && !err && generation == sc->sc_generation) {
@@ -18035,7 +18036,7 @@ iwx_init_hw(struct iwx_softc *sc)
                 XYLogE("%s: firmware did not accept itlwm_cc=%s (error %d)\n",
                     DEVNAME(sc), overrideMcc, err);
             }
-        } else if (restoreLastMcc) {
+        } else if (!hasOverride && restoreLastMcc) {
             err = iwx_send_update_mcc_cmd(sc, lastMcc, lastSource);
             if (err) {
                 XYLogE("%s: could not restore LAR MCC (error %d)\n",
