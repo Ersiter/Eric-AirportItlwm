@@ -14747,7 +14747,7 @@ iwx_mld_roc_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu,
     int err = iwx_send_cmd(sc, &cmd);
     if (err)
         return err;
-    if (!cmd.resp_pkt)
+    if (!cmd.resp_pkt || (cmd.resp_pkt->hdr.group_id & IWX_CMD_FAILED_MSK))
         err = EIO;
     iwx_free_resp(sc, &cmd);
     return err;

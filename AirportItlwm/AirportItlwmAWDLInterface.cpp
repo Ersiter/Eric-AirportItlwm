@@ -1958,6 +1958,16 @@ scheduleOwnListen(uint64_t afterUs)
             fListenHunt++;
         return true;
     };
+    uint8_t observedTrafficChannel = 0;
+    if (protectOwnSlots && !peer) {
+        for (const auto &request : fPendingUnicastMI) {
+            if (request.expiresUs > now &&
+                (observedTrafficChannel = observedPeerChannel(now, request.peer)))
+                break;
+        }
+        if (!observedTrafficChannel && fTxPeerUs && now - fTxPeerUs <= kPeerReplaceUs)
+            observedTrafficChannel = observedPeerChannel(now, reinterpret_cast<const uint8_t *>(&fTxPeer));
+    }
     uint8_t huntChan = 0;
     uint64_t huntStart = 0;
     uint64_t huntGap = 0;
@@ -2026,7 +2036,11 @@ scheduleOwnListen(uint64_t afterUs)
         const int64_t slotStart = fRefUs + k * slot;
         int64_t listenStart = slotStart, listenEnd = slotStart + slot;
         const bool peerWindow = usePeer && (homeOnly || !chan || (chan == home && !allowHome));
-        if (peerWindow) {
+        const bool observedWindow = !chan && observedTrafficChannel;
+        if (observedWindow) {
+            // ADDBA can reveal the peer's channel before we have its AW sequence.
+            chan = observedTrafficChannel;
+        } else if (peerWindow) {
             // A peer slot can begin anywhere in our slot. Use the overlap with
             // its actual channel rather than listening on the midpoint's channel early.
             chan = 0;
@@ -2049,7 +2063,7 @@ scheduleOwnListen(uint64_t afterUs)
             continue;
         if (peerWindow) {
             fListenPeerSlots++;
-        } else {
+        } else if (!observedWindow) {
             unsigned run = 1;
             while (run < 16 && ownChannelAt((uint16_t)(seq + run * pm)) == chan)
                 run++;
@@ -2062,7 +2076,7 @@ scheduleOwnListen(uint64_t afterUs)
         if (protectOwnSlots && dwell < kListenDwellMinTU)
             continue;
         if (armListen(chan, MIN(dwell, fListenDwellTU), (uint64_t)start,
-            peerWindow ? 0 : (uint64_t)slotStart, 0))
+            (peerWindow || observedWindow) ? 0 : (uint64_t)slotStart, 0))
             return true;
     }
     if (huntChan)
