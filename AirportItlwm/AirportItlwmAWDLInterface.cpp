@@ -1615,7 +1615,8 @@ static int64_t floorDiv(int64_t a, int64_t b)
 // Channel sequence as in a TLV 18 value (seemoo-lab/owl rx.c): count - 1,
 // encoding, duplicate count, step count, fill channel (2), then the entries.
 bool AirportItlwmAWDLInterface::
-parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len, ieee80211com *ic)
+parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len, ieee80211com *ic,
+    uint8_t observedPrimary)
 {
     if (len < 6 || v[0] + 1 != 16)
         return false;
@@ -1623,14 +1624,28 @@ parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len, ieee80211com 
     if (!size || len < 6 + 16 * size)
         return false;
     const size_t at = v[1] == 1 ? 1 : 0;
+    const bool observedSix = ic && observedPrimary &&
+        IEEE80211_IS_CHAN_6GHZ(&ic->ic_channels[observedPrimary]);
+    const unsigned primary = observedSix ?
+        ieee80211_chan2number(ic, &ic->ic_channels[observedPrimary]) : 0;
     for (unsigned i = 0; i < 16; i++) {
         const uint8_t *entry = v + 6 + i * size;
         const uint8_t chan = entry[at];
-        // Class 131 carries a primary channel; wider classes carry a center channel.
-        const bool sixGHz = v[1] == 3 && entry[1] >= 131 && entry[1] <= 137;
-        peer.channels[i] = sixGHz ? (entry[1] == 131 ?
-            awdlChannelIndex(ic, chan, IEEE80211_CHAN_6GHZ) : 0) :
-            awdlChannelIndex(ic, chan, 0);
+        const uint8_t opClass = v[1] == 3 ? entry[1] : 0;
+        if (opClass == 131) {
+            peer.channels[i] = awdlChannelIndex(ic, chan, IEEE80211_CHAN_6GHZ);
+        } else if (opClass >= 132 && opClass <= 134) {
+            // Wide classes carry the block center; ROC still uses the observed primary at 20 MHz.
+            const unsigned span = 4U << (opClass - 131);
+            const unsigned firstCenter = span / 2 - 1;
+            const bool validCenter = chan >= firstCenter && chan + firstCenter - 1 <= 233 &&
+                (chan - firstCenter) % span == 0;
+            peer.channels[i] = validCenter && primary &&
+                chan == ((primary - 1) / span) * span + firstCenter ?
+                awdlChannelIndex(ic, primary, IEEE80211_CHAN_6GHZ) : 0;
+        } else {
+            peer.channels[i] = opClass >= 135 && opClass <= 137 ? 0 : awdlChannelIndex(ic, chan, 0);
+        }
     }
     peer.hasChannels = true;
     return true;
@@ -1781,6 +1796,14 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
     const bool known = samePeer && old.seenUs;
     auto *ic = fController->fHalService->get80211Controller();
     PeerSchedule peer = samePeer ? old : PeerSchedule{};
+    const uint64_t now = hostUs();
+    const bool onSix = ic && rxChan && IEEE80211_IS_CHAN_6GHZ(&ic->ic_channels[rxChan]);
+    if (onSix) {
+        peer.observedChannel = (uint8_t)rxChan;
+        peer.observedUs = now;
+    }
+    const uint8_t observedPrimary = peer.observedUs && now - peer.observedUs <= kPeerStaleUs ?
+        peer.observedChannel : 0;
     size_t off = kAWDLFixedHeaderLen;
     bool sync = false;
     while (off + 3 <= len) {
@@ -1808,9 +1831,9 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
                 sync = true;
             }
             if (tlen > 33)
-                parsePeerChanSeq(peer, v + 33, tlen - 33, ic);
+                parsePeerChanSeq(peer, v + 33, tlen - 33, ic, observedPrimary);
         } else if (type == kAWDLChanSeqTLV) {
-            parsePeerChanSeq(peer, v, tlen, ic);
+            parsePeerChanSeq(peer, v, tlen, ic, observedPrimary);
         }
         off += 3 + tlen;
     }
@@ -1824,7 +1847,6 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
                 fPeerPredMiss++;
         }
     }
-    const uint64_t now = hostUs();
     const bool hadPreferred = preferredPeerSchedule(now) != nullptr;
     const bool hadReference = peerScheduleFresh(fPeers[fListenPeer], now);
     IEEE80211_ADDR_COPY(&peer.mac, src);
