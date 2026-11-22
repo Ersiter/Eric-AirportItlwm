@@ -18041,7 +18041,8 @@ iwx_init_hw(struct iwx_softc *sc)
             goto err;
         }
 
-        const bool oem = sc->sc_device_family == IWX_DEVICE_FAMILY_BZ;
+        const bool oem = isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_WIFI_MCC_UPDATE) ||
+            isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_LAR_MULTI_MCC);
         if (hasOverride && (!oem || !sc->sc_mcc_oem_attempted)) {
             const uint8_t source = oem ? IWX_MCC_SOURCE_MCC_API : IWX_MCC_SOURCE_ME;
             err = iwx_send_update_mcc_cmd(sc, overrideMcc, source, true);

@@ -413,7 +413,8 @@ public:
     void    iwm_fill_sf_command(struct iwm_softc *, struct iwm_sf_cfg_cmd *,
                                 struct ieee80211_node *);
     int    iwm_sf_config(struct iwm_softc *, int);
-    int    iwm_send_update_mcc_cmd(struct iwm_softc *, const char *, bool manual = false);
+    int    iwm_send_update_mcc_cmd(struct iwm_softc *, const char *, bool manual = false,
+                                   bool readback = false);
     int    iwm_send_soc_conf(struct iwm_softc *);
     int    iwm_send_temp_report_ths_cmd(struct iwm_softc *);
     void    iwm_tt_tx_backoff(struct iwm_softc *, uint32_t);

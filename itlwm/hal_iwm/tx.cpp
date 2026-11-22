@@ -449,7 +449,7 @@ iwm_send_soc_conf(struct iwm_softc *sc)
 }
 
 int ItlIwm::
-iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2, bool manual)
+iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2, bool manual, bool readback)
 {
     XYLog("%s\n", __FUNCTION__);
     struct iwm_mcc_update_cmd mcc_cmd;
@@ -468,6 +468,10 @@ iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2, bool manual)
     int err;
     int resp_v3 = isset(sc->sc_enabled_capa,
                         IWM_UCODE_TLV_CAPA_LAR_SUPPORT_V3);
+    const bool multiMcc = isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_WIFI_MCC_UPDATE) ||
+        isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_LAR_MULTI_MCC);
+    const bool oem = manual && resp_v3 && multiMcc;
+    const uint16_t requestedMcc = alpha2[0] << 8 | alpha2[1];
     
     if (sc->sc_device_family == IWM_DEVICE_FAMILY_8000 &&
         !sc->sc_nvm.lar_enabled) {
@@ -475,12 +479,20 @@ iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2, bool manual)
     }
     
     memset(&mcc_cmd, 0, sizeof(mcc_cmd));
-    mcc_cmd.mcc = htole16(alpha2[0] << 8 | alpha2[1]);
-    if (isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_WIFI_MCC_UPDATE) ||
-        isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_LAR_MULTI_MCC))
+    mcc_cmd.mcc = htole16(readback ? 0x5a5a : requestedMcc);
+    if (readback) {
+        mcc_cmd.source_id = IWM_MCC_SOURCE_GET_CURRENT;
+    } else if (oem) {
+        if (sc->sc_mcc_oem_attempted)
+            return 0;
+        mcc_cmd.source_id = IWM_MCC_SOURCE_MCC_API;
+        mcc_cmd.key = htole32(0xdeadbee1);
+        sc->sc_mcc_oem_attempted = true;
+    } else if (multiMcc) {
         mcc_cmd.source_id = manual ? IWM_MCC_SOURCE_ME : IWM_MCC_SOURCE_GET_CURRENT;
-    else
+    } else {
         mcc_cmd.source_id = IWM_MCC_SOURCE_OLD_FW;
+    }
     
     if (resp_v3) { /* same size as resp_v2 */
         hcmd.len[0] = sizeof(struct iwm_mcc_update_cmd);
@@ -536,9 +548,20 @@ iwm_send_update_mcc_cmd(struct iwm_softc *sc, const char *alpha2, bool manual)
             sc->sc_fw_mcc_int = htole16(mcc);
             snprintf(sc->sc_fw_mcc, sizeof(sc->sc_fw_mcc), "%c%c", mcc >> 8, mcc & 0xff);
         }
+        if (oem && !readback) {
+            if (status != IWM_MCC_RESP_TEST_MODE_ACTIVE || mcc != requestedMcc) {
+                err = EOPNOTSUPP;
+                goto out;
+            }
+            if (count == 0) {
+                iwm_free_resp(sc, &hcmd);
+                return iwm_send_update_mcc_cmd(sc, alpha2, true, true);
+            }
+        }
         if ((status != IWM_MCC_RESP_NEW_CHAN_PROFILE &&
-             status != IWM_MCC_RESP_SAME_CHAN_PROFILE) ||
-            mcc != le16toh(mcc_cmd.mcc) || count == 0) {
+             status != IWM_MCC_RESP_SAME_CHAN_PROFILE &&
+             !(oem && status == IWM_MCC_RESP_TEST_MODE_ACTIVE)) ||
+            mcc != requestedMcc || count == 0) {
             err = EOPNOTSUPP;
             goto out;
         }

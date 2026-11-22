@@ -633,6 +633,7 @@ struct iwm_softc {
 	char sc_fw_mcc[3];
     uint16_t sc_fw_mcc_int;
     bool sc_mcc_fixed;
+    bool sc_mcc_oem_attempted;
 
 	int sc_intmask;
 	int sc_flags;
