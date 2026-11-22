@@ -187,6 +187,14 @@ private: virtual void _abi_0c60() __asm__("__ZN17IO80211Controller14debugStateIn
     virtual IOReturn setCOUNTRY_CODE(IO80211SkywalkInterface*, apple80211_country_code_data*) = 0;
     virtual IOReturn setGET_DEBUG_INFO(IO80211SkywalkInterface*, apple80211_debug_command*) = 0;
 private: virtual void _abi_0d00() __asm__("__ZN17IO80211Controller18getPLATFORM_CONFIGEP23IO80211SkywalkInterfaceP26apple80211_platform_config"); public:
+#ifdef ITL_TAHOE_25D2140
+    // The 25D2140 controller puts these five methods before the interface hooks.
+    virtual IOReturn getDEVICE_ORIENTATION(IO80211SkywalkInterface*, struct apple80211_device_orientation*);
+    virtual IOReturn setDEVICE_ORIENTATION(IO80211SkywalkInterface*, struct apple80211_device_orientation*);
+    virtual IOReturn getACCESSORY_STATE(IO80211SkywalkInterface*, struct apple80211_device_accessory_info*);
+    virtual IOReturn setACCESSORY_STATE(IO80211SkywalkInterface*, struct apple80211_device_accessory_info*);
+    virtual IOReturn getPOWERTABLE_VERSION(IO80211SkywalkInterface*, struct apple80211_powertable_version_data*);
+#endif
     virtual SInt32 enableVirtualInterface(IO80211VirtualInterface*);
     virtual SInt32 disableVirtualInterface(IO80211VirtualInterface*);
     virtual bool requiresExplicitMBufRelease();

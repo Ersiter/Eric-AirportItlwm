@@ -111,8 +111,10 @@ private: virtual void _abi_0cd0() __asm__("__ZN23IO80211VirtualInterface8findPee
     virtual IOReturn freeMulticastPacket(IO80211NetworkPacket*);
     virtual IOReturn triggerAWDLMulticastTx(unsigned int, unsigned char);
     virtual IOReturn p2pMulticastTx(IO80211NetworkPacket**, unsigned int);
+#ifndef ITL_TAHOE_25D2140
     virtual IOReturn p2pMulticastTx(unsigned int, bool);
     virtual IOReturn signalMulticastPackets(unsigned int, unsigned int);
+#endif
 #ifdef ITL_MACOS27
     virtual UInt64 getTotalUnicastInputPacketCount();
     virtual UInt64 getTotalUnicastOutputPacketCount();
