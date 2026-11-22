@@ -805,7 +805,6 @@ struct iwx_softc {
     uint8_t sc_mcc_source;
     int sc_mcc_request_pending;
     bool sc_mcc_fixed;
-    bool sc_mcc_oem_attempted;
 #define IWX_IML_MAX_LEN 2048*10
     uint32_t sc_iml_len;
     uint8_t sc_iml[IWX_IML_MAX_LEN];
