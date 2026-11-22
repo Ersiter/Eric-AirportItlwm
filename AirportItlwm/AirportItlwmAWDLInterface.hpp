@@ -235,7 +235,7 @@ private:
     static void listenTimerFired(OSObject *owner, IOTimerEventSource *sender);
     void trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsigned rxChan);
     struct PeerSchedule;
-    static bool parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len);
+    static bool parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len, ieee80211com *ic);
     static unsigned peerChannelAt(const PeerSchedule &peer, uint64_t us);
     static bool peerScheduleFresh(const PeerSchedule &peer, uint64_t us);
     PeerSchedule &peerRecord(const uint8_t *address);

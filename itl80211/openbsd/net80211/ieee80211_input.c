@@ -660,13 +660,16 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
         IEEE80211_ADDR_COPY(ic->ic_awdl_rx_uc_last_src, wh->i_addr2);
         ic->ic_awdl_rx_uc_last_chan = rxi ? (uint8_t)rxi->rxi_chan : 0;
         const int six_ghz = rxi && rxi->rxi_band == IEEE80211_CHAN_6GHZ;
-        const uint8_t awdl_chan = six_ghz ? 0 : ic->ic_awdl_rx_uc_last_chan;
+        const uint8_t awdl_chan = six_ghz ? (ic->ic_awdl_listen_home ?
+            ieee80211_ieee2chanidx(ic, rxi->rxi_chan, IEEE80211_CHAN_6GHZ) : 0) :
+            ic->ic_awdl_rx_uc_last_chan;
         ic->ic_awdl_rx_uc_by_chan[awdl_chan == 6 ? 0 : awdl_chan == 44 ? 1 :
             awdl_chan == 149 ? 2 : 3]++;
-        if (six_ghz && type == IEEE80211_FC0_TYPE_MGT && subtype == IEEE80211_FC0_SUBTYPE_ACTION &&
-            mbuf_len(m) > sizeof(struct ieee80211_frame) &&
+        if (six_ghz && (!awdl_chan || awdl_chan != ic->ic_awdl_listen_chan) &&
+            type == IEEE80211_FC0_TYPE_MGT &&
+            subtype == IEEE80211_FC0_SUBTYPE_ACTION && mbuf_len(m) > sizeof(struct ieee80211_frame) &&
             ((const uint8_t *)&wh[1])[0] == IEEE80211_CATEG_BA)
-            goto out; /* AWDL TX has no way to address a 6 GHz channel. */
+            goto out;
         if (type == IEEE80211_FC0_TYPE_MGT && subtype == IEEE80211_FC0_SUBTYPE_ACTION &&
             mbuf_len(m) >= sizeof(struct ieee80211_frame) + 6 &&
             ic->ic_awdl_rx_ba) {
@@ -725,7 +728,7 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
                     int ba_result = (*ic->ic_awdl_rx_ba)(ic, wh->i_addr2,
                         (params >> 2) & 0xf,
                         (body[7] | ((uint16_t)body[8] << 8)) >> 4, winsize, 1,
-                        rsp, (uint8_t)rxi->rxi_chan);
+                        rsp, awdl_chan);
                     if (ba_result == EAGAIN)
                         goto out;
                     if (ba_result) {
@@ -734,7 +737,7 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
                     }
                 }
                 ic->ic_awdl_ba_req++;
-                if ((*ic->ic_awdl_tx)(ic, (uint8_t)rxi->rxi_chan, rsp, sizeof(rsp)) == 0)
+                if (awdl_chan && (*ic->ic_awdl_tx)(ic, awdl_chan, rsp, sizeof(rsp)) == 0)
                     ic->ic_awdl_ba_resp_sent++;
                 else
                     ic->ic_awdl_ba_resp_err++;

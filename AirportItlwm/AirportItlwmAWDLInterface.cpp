@@ -32,6 +32,27 @@ void awdlSetCompanionLowLatencySkywalkInterface(IO80211VirtualInterface *, IO802
     __asm__("__ZN23IO80211VirtualInterface38setCompanionLowLatencySkywalkInterfaceEP23IO80211SkywalkInterface");
 }
 
+// The internal channel index keeps 5 GHz channel numbers distinct from 6 GHz.
+static uint8_t awdlChannelIndex(ieee80211com *ic, unsigned number, unsigned band)
+{
+    if (band != IEEE80211_CHAN_6GHZ) {
+        if (!number || number >= IEEE80211_CHAN_MAX ||
+            (ic && IEEE80211_IS_CHAN_6GHZ(&ic->ic_channels[number])))
+            return 0;
+        return (uint8_t)number;
+    }
+    if (!ic || !ic->ic_awdl_listen_home)
+        return 0;
+    const unsigned index = ieee80211_ieee2chanidx(ic, number, band);
+    if (!index || !isset(ic->ic_chan_active, index))
+        return 0;
+    const auto &channel = ic->ic_channels[index];
+    if ((channel.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_NOADHOC)) ||
+        (channel.ic_reg_flags & IEEE80211_CHAN_NO_HE))
+        return 0;
+    return (uint8_t)index;
+}
+
 #pragma mark - native table check
 
 /*
@@ -470,10 +491,10 @@ inputAWDLData(mbuf_t m, AirportItlwmAWDLInterface *awdl, ieee80211com *ic,
     const struct ieee80211_frame *wh = (const struct ieee80211_frame *)p;
     size_t hdr = sizeof(*wh);
     const auto notePeer = [&](const uint8_t *source) {
-        if (ic && ic->ic_awdl_listen_home && rxi && rxi->rxi_chan > 0 &&
-            rxi->rxi_chan <= UINT8_MAX && rxi->rxi_band != IEEE80211_CHAN_6GHZ &&
-            !(ic->ic_channels[rxi->rxi_chan].ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)))
-            awdl->notePeerChannel(source, (uint8_t)rxi->rxi_chan);
+        const uint8_t channel = ic && ic->ic_awdl_listen_home && rxi ?
+            awdlChannelIndex(ic, rxi->rxi_chan, rxi->rxi_band) : 0;
+        if (channel && !(ic->ic_channels[channel].ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)))
+            awdl->notePeerChannel(source, channel);
     };
     static const uint8_t kSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x17, 0xf2 };
     static const uint8_t kLlwSnap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
@@ -850,6 +871,8 @@ noteRxGap(const uint8_t *src, uint64_t nowUs)
 int AirportItlwmAWDLInterface::
 inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
 {
+    auto *ic = fController->fHalService->get80211Controller();
+    const uint8_t channel = awdlChannelIndex(ic, rxi->rxi_chan, rxi->rxi_band);
     if (len < sizeof(struct ieee80211_frame))
         return 0;
     const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(frame);
@@ -860,9 +883,8 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     if (len >= hdr + 9 && af[0] == IEEE80211_CATEG_BA &&
         af[1] == IEEE80211_ACTION_ADDBA_REQ) {
         // A directed ADDBA can be the first frame we hear from this peer.
-        if (rxi->rxi_chan > 0 && rxi->rxi_chan <= IEEE80211_CHAN_MAX &&
-            rxi->rxi_band != IEEE80211_CHAN_6GHZ)
-            notePeerChannel(wh->i_addr2, (uint8_t)rxi->rxi_chan);
+        if (channel)
+            notePeerChannel(wh->i_addr2, channel);
         return 0;
     }
     if (len < hdr + kAWDLFixedHeaderLen)
@@ -877,7 +899,7 @@ inputActionFrame(const uint8_t *frame, size_t len, const ieee80211_rxinfo *rxi)
     syncFromFrame(af, payload, wh->i_addr2, rxUs);
     const bool receivedOn6GHz = rxi->rxi_band == IEEE80211_CHAN_6GHZ;
     const unsigned listenChannel = receivedOn6GHz ? 0 : rxi->rxi_chan;
-    trackPeer(af, payload, wh->i_addr2, rxUs, listenChannel);
+    trackPeer(af, payload, wh->i_addr2, rxUs, channel);
 
     fRxAF++;
     noteRxGap(wh->i_addr2, hostUs());
@@ -1593,7 +1615,7 @@ static int64_t floorDiv(int64_t a, int64_t b)
 // Channel sequence as in a TLV 18 value (seemoo-lab/owl rx.c): count - 1,
 // encoding, duplicate count, step count, fill channel (2), then the entries.
 bool AirportItlwmAWDLInterface::
-parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len)
+parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len, ieee80211com *ic)
 {
     if (len < 6 || v[0] + 1 != 16)
         return false;
@@ -1604,9 +1626,11 @@ parsePeerChanSeq(PeerSchedule &peer, const uint8_t *v, size_t len)
     for (unsigned i = 0; i < 16; i++) {
         const uint8_t *entry = v + 6 + i * size;
         const uint8_t chan = entry[at];
-        // The AWDL scheduler can tune 2.4/5 GHz channels only.
+        // Class 131 carries a primary channel; wider classes carry a center channel.
         const bool sixGHz = v[1] == 3 && entry[1] >= 131 && entry[1] <= 137;
-        peer.channels[i] = (sixGHz || chan == 0xff) ? 0 : chan;
+        peer.channels[i] = sixGHz ? (entry[1] == 131 ?
+            awdlChannelIndex(ic, chan, IEEE80211_CHAN_6GHZ) : 0) :
+            awdlChannelIndex(ic, chan, 0);
     }
     peer.hasChannels = true;
     return true;
@@ -1755,6 +1779,7 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
     const unsigned index = (unsigned)(&old - fPeers);
     const bool samePeer = IEEE80211_ADDR_EQ(&old.mac, src);
     const bool known = samePeer && old.seenUs;
+    auto *ic = fController->fHalService->get80211Controller();
     PeerSchedule peer = samePeer ? old : PeerSchedule{};
     size_t off = kAWDLFixedHeaderLen;
     bool sync = false;
@@ -1783,9 +1808,9 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
                 sync = true;
             }
             if (tlen > 33)
-                parsePeerChanSeq(peer, v + 33, tlen - 33);
+                parsePeerChanSeq(peer, v + 33, tlen - 33, ic);
         } else if (type == kAWDLChanSeqTLV) {
-            parsePeerChanSeq(peer, v, tlen);
+            parsePeerChanSeq(peer, v, tlen, ic);
         }
         off += 3 + tlen;
     }
@@ -1829,9 +1854,14 @@ ownChannelAt(uint16_t seq) const
         return 0;
     const auto *channels = reinterpret_cast<const apple80211_channel *>(fChanSeq + kChanSeqEntries);
     const auto *c = &channels[channelSequenceIndex(seq)];
-    if (c->flags & APPLE80211_C_FLAG_6GHZ)
-        return 0;
-    const ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
+    auto *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
+    if (c->flags & APPLE80211_C_FLAG_6GHZ) {
+        const uint32_t wide = APPLE80211_C_FLAG_40MHZ | APPLE80211_C_FLAG_80MHZ |
+            APPLE80211_C_FLAG_160MHZ | APPLE80211_C_FLAG_320MHZ;
+        if (!ic || ic->ic_awdl_listener_chan || ic->ic_awdl_home_chan || (c->flags & wide))
+            return 0;
+        return awdlChannelIndex(ic, c->channel, IEEE80211_CHAN_6GHZ);
+    }
     // A standing link cannot follow the system's hopping sequence. Keep idle slots.
     if (c->channel && ic && ic->ic_awdl_listener_chan)
         return ic->ic_awdl_listener_chan;
@@ -2256,7 +2286,7 @@ buildAWDLFrame(uint8_t *buf, size_t cap, bool mi, uint64_t nowUs,
     else
         memset(wh->i_addr1, 0xff, 6);
     memcpy(wh->i_addr2, &fMac, 6);
-    const ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
+    auto *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
     memcpy(wh->i_addr3, ic && ic->ic_awdl_bssid_valid ? ic->ic_awdl_bssid : kAWDLBssid, 6);
     uint16_t sc = (uint16_t)(fTxSeq++ << 4);
     wh->i_seq[0] = sc & 0xff;
@@ -2298,7 +2328,13 @@ buildAWDLFrame(uint8_t *buf, size_t cap, bool mi, uint64_t nowUs,
     uint8_t *p = af + kAWDLFixedHeaderLen;
     auto put16 = [](uint8_t *q, uint16_t v) { q[0] = v & 0xff; q[1] = v >> 8; };
     // Global operating class of a 20 MHz channel (IEEE 802.11 Annex E).
-    auto opClass = [](uint8_t c) -> uint8_t {
+    auto channelNumber = [ic](uint8_t channel) -> uint8_t {
+        if (ic && channel && IEEE80211_IS_CHAN_6GHZ(&ic->ic_channels[channel]))
+            return ieee80211_chan2number(ic, &ic->ic_channels[channel]);
+        return channel;
+    };
+    auto opClass = [ic](uint8_t c) -> uint8_t {
+        if (ic && c && IEEE80211_IS_CHAN_6GHZ(&ic->ic_channels[c])) return 131;
         if (!c) return 0;
         if (c <= 13) return 81;
         if (c <= 48) return 115;
@@ -2315,19 +2351,35 @@ buildAWDLFrame(uint8_t *buf, size_t cap, bool mi, uint64_t nowUs,
         q[2] = fChanSeqValid ? fChanSeq[8] : 0;
         q[3] = fChanSeqValid ? fChanSeq[kChanSeqStep] : (uint8_t)(pm - 1);
         uint8_t fill = fChanSeqValid ? fChanSeq[9] : 255;
-        if (listenerChan && fill && fill != 255)
+        if (listenerChan && fill && fill != 255) {
             fill = listenerChan;
-        put16(q + 4, fill == 255 ? 0xffff : (uint16_t)(fill | (opClass(fill) << 8)));
+        } else if (fill && fill != 255 && fChanSeqValid) {
+            const auto *entries = reinterpret_cast<const apple80211_channel *>(fChanSeq + kChanSeqEntries);
+            bool six = false, other = false;
+            for (unsigned i = 0; i < count; i++) {
+                if (entries[i].channel != fill)
+                    continue;
+                if (entries[i].flags & APPLE80211_C_FLAG_6GHZ)
+                    six = true;
+                else
+                    other = true;
+            }
+            if (six) {
+                const uint8_t index = other ? 0 : awdlChannelIndex(ic, fill, IEEE80211_CHAN_6GHZ);
+                fill = index ? index : 255;
+            }
+        }
+        put16(q + 4, fill == 255 ? 0xffff : (uint16_t)(channelNumber(fill) | (opClass(fill) << 8)));
         for (unsigned i = 0; i < 16; i++) {
             uint8_t c = chanAt((uint16_t)(i * pm));
-            q[6 + 2 * i] = c;
+            q[6 + 2 * i] = channelNumber(c);
             q[7 + 2 * i] = opClass(c);
         }
     };
     p[0] = kAWDLSyncParamsTLV;
     put16(p + 1, (uint16_t)(syncLen - 3));
     uint8_t *v = p + 3;
-    v[0] = chanAt((uint16_t)(seq + pm));    // next AW channel
+    v[0] = channelNumber(chanAt((uint16_t)(seq + pm)));    // next AW channel
     put16(v + 1, down);                     // tx_down_counter
     v[3] = masterChan;
     v[4] = 0;                               // guard time
@@ -3407,13 +3459,17 @@ getSSID(apple80211_ssid_data *d)
 IOReturn AirportItlwmAWDLInterface::
 getCHANNEL(apple80211_channel_data *d)
 {
-    const ieee80211com *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
-    const uint8_t chan = ic && ic->ic_awdl_listener_chan ? ic->ic_awdl_listener_chan : 6;
+    auto *ic = fController ? fController->fHalService->get80211Controller() : nullptr;
+    const uint8_t active = ic ? ic->ic_awdl_listen_chan : 0;
+    const bool six = active && IEEE80211_IS_CHAN_6GHZ(&ic->ic_channels[active]);
+    const uint8_t chan = six ? ieee80211_chan2number(ic, &ic->ic_channels[active]) :
+        (ic && ic->ic_awdl_listener_chan ? ic->ic_awdl_listener_chan : 6);
     memset(d, 0, sizeof(*d));
     d->version = APPLE80211_VERSION;
     d->channel.version = APPLE80211_VERSION;
     d->channel.channel = chan;
-    d->channel.flags = (chan <= 14 ? APPLE80211_C_FLAG_2GHZ : APPLE80211_C_FLAG_5GHZ) |
+    d->channel.flags = (six ? APPLE80211_C_FLAG_6GHZ :
+        chan <= 14 ? APPLE80211_C_FLAG_2GHZ : APPLE80211_C_FLAG_5GHZ) |
         APPLE80211_C_FLAG_20MHZ;
     return kIOReturnSuccess;
 }
