@@ -856,6 +856,9 @@ iwm_load_firmware_7000(struct iwm_softc *sc, enum iwm_ucode_type ucode_type)
         data = fws->fw_sect[i].fws_data;
         dlen = fws->fw_sect[i].fws_len;
         offset = fws->fw_sect[i].fws_devoff;
+        if (offset == IWM_CPU1_CPU2_SEPARATOR_SECTION ||
+            offset == IWM_PAGING_SEPARATOR_SECTION)
+            break;
         if (dlen > sc->sc_fwdmasegsz) {
             err = EFBIG;
         } else
