@@ -1526,6 +1526,19 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                         instance->postMessage(this, AirportWCL::LqmUpdate,
                             &update, sizeof(update), true);
                     }
+#elif __IO80211_TARGET == __MAC_26_0
+                    apple80211_rssi_data rssi = {};
+                    apple80211_noise_data noise = {};
+                    getRSSI(&rssi);
+                    getNOISE(&noise);
+                    AirportWCL::LqmBeaconUpdate update;
+                    if (AirportWCL::makeBeaconUpdate(
+                            wclLqmBeacons - wclLqmReportedBeacons, update,
+                            rssi.aggregate_rssi, noise.aggregate_noise)) {
+                        instance->postMessage(this, AirportWCL::LqmUpdate,
+                            &update, sizeof(update), true);
+                        wclLqmReportedBeacons = wclLqmBeacons;
+                    }
 #else
                     AirportWCL::LqmBeaconUpdate update;
                     if (AirportWCL::makeBeaconUpdate(
