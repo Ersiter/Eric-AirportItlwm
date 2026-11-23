@@ -4313,6 +4313,17 @@ ieee80211_recv_disassoc(struct ieee80211com *ic, mbuf_t m,
              * the AP ignores and the join times out. mac80211 ignores it likewise. */
             if (ic->ic_state < IEEE80211_S_ASSOC)
                 break;
+#ifdef AIRPORT_WCL
+            /* Report an active AP's disconnect to WCL before leaving the BSS. */
+            if (ic->ic_state == IEEE80211_S_RUN && ic->ic_event_handler &&
+                IEEE80211_ADDR_EQ(wh->i_addr2, ic->ic_bss->ni_bssid) &&
+                IEEE80211_ADDR_EQ(wh->i_addr3, ic->ic_bss->ni_bssid)) {
+                ic->ic_deauth_reason = reason;
+                (*ic->ic_event_handler)(ic, IEEE80211_EVT_STA_DEAUTH, NULL);
+                ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+                break;
+            }
+#endif
             if (!roamscan) /* ignore disassoc during bgscan */
                 ieee80211_new_state(ic, IEEE80211_S_ASSOC,
                                     IEEE80211_FC0_SUBTYPE_DISASSOC);
