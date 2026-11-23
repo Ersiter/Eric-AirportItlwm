@@ -993,6 +993,7 @@ iwm_load_firmware(struct iwm_softc *sc, enum iwm_ucode_type ucode_type)
     int err/*, w*/;
     
     sc->sc_uc.uc_intr = 0;
+    sc->sc_uc.uc_ok = 0;
     
     if (sc->sc_device_family >= IWM_DEVICE_FAMILY_8000)
         err = iwm_load_firmware_8000(sc, ucode_type);
