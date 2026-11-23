@@ -8143,6 +8143,7 @@ iwx_send_cmd_impl(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
     /* Kick command ring. */
     DPRINTF(("%s: Sending command (%.2x.%.2x), %d bytes at [%d]:%d ver: %d\n", __func__, group_id, cmd->hdr.cmd, cmd->hdr_wide.length, cmd->hdr.idx, cmd->hdr.qid, cmd->hdr_wide.version));
     txdata->flags &= ~IWX_TXDATA_FLAG_CMD_FAILED;
+    txdata->host_cmd_id = hcmd->id & 0xffff;
     txdata->flags |= IWX_TXDATA_FLAG_CMD_PENDING;
 #ifdef AIRPORT_WCL
     sc->sc_cmd_trace[idx] = { iwx_uptime_us(), hcmd->id, 0 };
@@ -19375,6 +19376,18 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                 sc->sc_ic.ic_awdl_notif_code[slot] = key;
             sc->sc_ic.ic_awdl_notif_count[slot]++;
         }
+        const auto copy_command_response = [&] {
+            if (qid != IWX_DQA_CMD_QUEUE || idx >= sc->txq[qid].ring_count ||
+                !(sc->txq[qid].data[idx].flags & IWX_TXDATA_FLAG_CMD_PENDING) ||
+                !sc->sc_cmd_resp_pkt[idx])
+                return;
+            if (len > sc->sc_cmd_resp_len[idx]) {
+                ::free(sc->sc_cmd_resp_pkt[idx]);
+                sc->sc_cmd_resp_pkt[idx] = NULL;
+                return;
+            }
+            memcpy(sc->sc_cmd_resp_pkt[idx], pkt, len);
+        };
         switch (code) {
             case IWX_REPLY_RX_PHY_CMD:
                 iwx_rx_rx_phy_cmd(sc, pkt, data);
@@ -19525,7 +19538,6 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             case IWX_ADD_STA_KEY:
             case IWX_PHY_CONFIGURATION_CMD:
             case IWX_TX_ANT_CONFIGURATION_CMD:
-            case IWX_BEACON_TEMPLATE_CMD:
             case IWX_ADD_STA:
             case IWX_MAC_CONTEXT_CMD:
             case IWX_REPLY_SF_CFG_CMD:
@@ -19557,35 +19569,10 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             case IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_MLD_SCD_QUEUE_CONFIG_CMD):
             case IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_MLD_RX_BAID_CONFIG_CMD):
             case IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_MLD_RLC_CONFIG_CMD):
-            case IWX_SCD_QUEUE_CFG: {
-                size_t pkt_len;
-                
-                if (qid != IWX_DQA_CMD_QUEUE ||
-                    idx >= sc->txq[IWX_DQA_CMD_QUEUE].ring_count ||
-                    !(sc->txq[IWX_DQA_CMD_QUEUE].data[idx].flags & IWX_TXDATA_FLAG_CMD_PENDING) ||
-                    sc->sc_cmd_resp_pkt[idx] == NULL)
-                    break;
-                
-                //            bus_dmamap_sync(sc->sc_dmat, data->map, 0,
-                //                sizeof(*pkt), BUS_DMASYNC_POSTREAD);
-                
-                pkt_len = sizeof(pkt->len_n_flags) +
-                iwx_rx_packet_len(pkt);
-                
-                if ((pkt->hdr.group_id & IWX_CMD_FAILED_MSK) ||
-                    pkt_len < sizeof(*pkt) ||
-                    pkt_len > sc->sc_cmd_resp_len[idx]) {
-                    ::free(sc->sc_cmd_resp_pkt[idx]);
-                    sc->sc_cmd_resp_pkt[idx] = NULL;
-                    break;
-                }
-                
-                //            bus_dmamap_sync(sc->sc_dmat, data->map, sizeof(*pkt),
-                //                pkt_len - sizeof(*pkt), BUS_DMASYNC_POSTREAD);
-                memcpy(sc->sc_cmd_resp_pkt[idx], pkt, pkt_len);
+            case IWX_SCD_QUEUE_CFG:
+                copy_command_response();
                 break;
-            }
-                
+
             case IWX_WIDE_ID(IWX_REGULATORY_AND_NVM_GROUP, IWX_PNVM_INIT_COMPLETE_NTFY): {
                 iwx_record_pnvm_notification(sc, pkt);
                 sc->sc_init_complete |= IWX_PNVM_COMPLETE;
@@ -19967,6 +19954,13 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             }
                 
             default:
+                // A direct reply can complete its command without a notification handler.
+                if (qid == IWX_DQA_CMD_QUEUE && idx < sc->txq[qid].ring_count &&
+                    (sc->txq[qid].data[idx].flags & IWX_TXDATA_FLAG_CMD_PENDING) &&
+                    code == sc->txq[qid].data[idx].host_cmd_id) {
+                    copy_command_response();
+                    break;
+                }
                 handled = 0;
                 XYLog("%s: unhandled firmware response 0x%x/0x%x "
                       "rx ring %d[%d]\n",
