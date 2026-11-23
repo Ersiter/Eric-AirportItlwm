@@ -1802,6 +1802,10 @@ iwx_mld_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in,
     cmd.client.is_assoc = assoc ? 1 : 0;
 
     cmd.filter_flags = htole32(IWX_MLD_MAC_CFG_FILTER_ACCEPT_GRP);
+#ifdef AIRPORT_WCL
+    // WCL completes the join on the associated beacon and reads fresh beacons for BEACON_INFO.
+    cmd.filter_flags |= htole32(IWX_MLD_MAC_CFG_FILTER_ACCEPT_BEACON);
+#else
     if (!assoc || !ni->ni_associd || !ni->ni_dtimperiod) {
         /*
          * Allow beacons to pass through as long as we are not
@@ -1809,6 +1813,7 @@ iwx_mld_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in,
          */
         cmd.filter_flags |= htole32(IWX_MLD_MAC_CFG_FILTER_ACCEPT_BEACON);
     }
+#endif
 
     /* What the firmware is given, for when it asserts on this command. */
     XYLogE("%s: action %u assoc %d aid %u he %u eht %u eml timeout %u sync delay %u "
