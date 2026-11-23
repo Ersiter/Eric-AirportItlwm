@@ -246,7 +246,8 @@ private:
     PeerSchedule &peerRecord(const uint8_t *address);
     const PeerSchedule *findPeerSchedule(const uint8_t *address, uint64_t us) const;
     uint8_t observedPeerChannel(uint64_t now, const uint8_t *address = nullptr) const;
-    bool canSendData(const uint8_t *address, uint8_t chan, uint64_t now) const;
+    bool canSendData(const uint8_t *address, uint8_t chan, uint64_t now,
+        uint64_t *retryAt = nullptr) const;
     const PeerSchedule *preferredPeerSchedule(uint64_t now) const;
     void updatePeerChannels(ieee80211com *ic, uint64_t now) const;
     void scheduleAlignedListen(uint64_t afterUs);
@@ -386,7 +387,7 @@ public:
     // Ethernet frames from awdl0, sent as AWDL data frames during a dwell.
     void enqueueData(mbuf_t m);
     void kickDataTx(uint64_t now);
-    bool flushData(ieee80211com *ic, bool lowLatency, uint64_t now);
+    void flushData(ieee80211com *ic, bool lowLatency, uint64_t now, uint64_t &retryAt);
     void enqueueLowLatencyData(mbuf_t m);
     void clearLowLatencyData();
     // 32 overflowed during AirDrop (AWDLDataTxDropFull): data only

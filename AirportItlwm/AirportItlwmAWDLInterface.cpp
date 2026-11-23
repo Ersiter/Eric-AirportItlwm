@@ -1741,7 +1741,7 @@ findPeerSchedule(const uint8_t *address, uint64_t us) const
 }
 
 bool AirportItlwmAWDLInterface::
-canSendData(const uint8_t *address, uint8_t chan, uint64_t now) const
+canSendData(const uint8_t *address, uint8_t chan, uint64_t now, uint64_t *retryAt) const
 {
     const uint64_t guardUs = 2 * 1024;
     if (IEEE80211_IS_MULTICAST(address)) {
@@ -1751,13 +1751,20 @@ canSendData(const uint8_t *address, uint8_t chan, uint64_t now) const
         const uint16_t pm = presenceMode();
         const int64_t k = floorDiv((int64_t)now - fRefUs, slot);
         const int64_t next = floorDiv((int64_t)(now + guardUs) - fRefUs, slot);
+        if (retryAt)
+            *retryAt = fRefUs + (k + 1) * slot;
         // Keep multicast data in the windows advertised to peers.
         return ownChannelAt((uint16_t)(fRefSeq + k * pm)) == chan &&
             ownChannelAt((uint16_t)(fRefSeq + next * pm)) == chan;
     }
     const auto *peer = findPeerSchedule(address, now);
-    if (peer)
+    if (peer) {
+        if (retryAt && peer->slotUs) {
+            const int64_t slot = floorDiv(static_cast<int64_t>(now) - peer->refUs, peer->slotUs);
+            *retryAt = peer->refUs + (slot + 1) * peer->slotUs;
+        }
         return peerChannelAt(*peer, now) == chan && peerChannelAt(*peer, now + guardUs) == chan;
+    }
     // A Bonjour response can precede the peer's first usable synchronization frame.
     const uint8_t observed = observedPeerChannel(now, address);
     return !observed || observed == chan;
@@ -2318,14 +2325,14 @@ txTimerFired(OSObject *owner, IOTimerEventSource *)
     if (that->fTxUnicastMIUs && now >= that->fTxUnicastMIUs)
         that->sendPendingUnicastMI(hostUs());
     if ((that->fTxPending & kTxPendingData) && elapsed >= that->fTxDataUs) {
-        bool pending = false;
+        uint64_t retryAt = that->fTxEndUs;
         if (awDataAllowed()) {
-            pending = that->flushData(ic, true, now);
-            pending |= that->flushData(ic, false, now);
+            that->flushData(ic, true, now, retryAt);
+            that->flushData(ic, false, now, retryAt);
             that->updatePeerChannels(ic, now);
         }
-        if (pending)
-            that->fTxDataUs = elapsed + 1024;
+        if (retryAt < that->fTxEndUs)
+            that->fTxDataUs = retryAt - that->fTxSlotUs;
         else
             that->fTxPending &= ~kTxPendingData;
     }
@@ -2573,23 +2580,25 @@ enqueueData(mbuf_t m)
 void AirportItlwmAWDLInterface::
 kickDataTx(uint64_t now)
 {
-    if (!fAWRunning || !fTxTimer || now < fTxSlotUs || now >= fTxEndUs ||
-        (fTxPending & kTxPendingData))
+    if (!fAWRunning || !fTxTimer || now < fTxSlotUs || now >= fTxEndUs)
+        return;
+    const uint64_t offset = MAX((uint64_t)kTxDataAtUs, now - fTxSlotUs);
+    if ((fTxPending & kTxPendingData) && fTxDataUs <= offset)
         return;
     fTxPending |= kTxPendingData;
-    fTxDataUs = MAX((uint64_t)kTxDataAtUs, now - fTxSlotUs);
+    fTxDataUs = offset;
     scheduleTxTimer();
 }
 
 static const uint64_t kDataMaxAgeUs = 10000000;
 
 // Keep held frames in order per destination while other destinations can use this window.
-bool AirportItlwmAWDLInterface::
-flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
+void AirportItlwmAWDLInterface::
+flushData(ieee80211com *ic, bool lowLatency, uint64_t now, uint64_t &retryAt)
 {
     auto transmit = lowLatency ? ic->ic_awdl_llw_tx : ic->ic_awdl_tx;
     if (!transmit)
-        return false;
+        return;
     auto &queue = lowLatency ? fLowLatencyDataQ : fDataQ;
     auto &queuedUs = lowLatency ? fLowLatencyDataQUs : fDataQUs;
     const unsigned head = lowLatency ? fLowLatencyDataQHead : fDataQHead;
@@ -2612,6 +2621,7 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
         uint8_t eh[14];
         const size_t length = mbuf_pkthdr_len(m);
         int err = 0;
+        uint64_t frameRetryAt = now + 1024;
         bool qos = false;
         if (now - queuedUs[index] > kDataMaxAgeUs) {
             err = ETIMEDOUT;
@@ -2638,7 +2648,7 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
                 err = EAGAIN;
             } else if (!group && peerWaiting) {
                 err = EINPROGRESS;
-            } else if (!canSendData(eh, fTxChan, txUs)) {
+            } else if (!canSendData(eh, fTxChan, txUs, &frameRetryAt)) {
                 fDataTxNotCommon++;
                 err = EAGAIN;
             } else {
@@ -2667,6 +2677,7 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
                 }
                 mbuf_copydata(m, sizeof(eh), length - sizeof(eh), frame + overhead);
                 err = transmit(ic, fTxChan, frame, overhead + length - sizeof(eh));
+                frameRetryAt = txUs + 1024;
                 backpressure = err == EAGAIN || err == EBUSY || err == ENOBUFS;
                 if (err == EINPROGRESS)
                     peerWaiting = true;
@@ -2675,6 +2686,8 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
             }
         }
         if (err == EAGAIN || err == EBUSY || err == ENOBUFS || err == EINPROGRESS) {
+            // Channel mismatches wait for a window boundary. Queue pressure can clear sooner.
+            retryAt = MIN(retryAt, frameRetryAt);
             const unsigned to = (head + kept++) % kDataQueueLen;
             queue[to] = m;
             queuedUs[to] = queuedUs[index];
@@ -2700,7 +2713,6 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now)
         mbuf_freem(m);
     }
     count = kept;
-    return count != 0;
 }
 
 void AirportItlwmAWDLInterface::
