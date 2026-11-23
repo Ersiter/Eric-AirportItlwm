@@ -7386,13 +7386,13 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                 (status & IWX_TX_STATUS_MSK) == IWX_TX_STATUS_SUCCESS);
         }
         auto target = OSDynamicCast(OSData, sc->sc_pcitag->getProperty("AirportItlwm-HotspotScanSSID"));
-        if (target && txd->m && txd->in && target->getLength() == txd->in->in_ni.ni_esslen &&
-            memcmp(target->getBytesNoCopy(), txd->in->in_ni.ni_essid, target->getLength()) == 0 &&
+        if (target && status_frame.m && status_frame.in && target->getLength() == status_frame.in->in_ni.ni_esslen &&
+            memcmp(target->getBytesNoCopy(), status_frame.in->in_ni.ni_essid, target->getLength()) == 0 &&
             sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210) {
             uint8_t payload[512];
-            const unsigned packetSize = mbuf_pkthdr_len(txd->m);
+            const unsigned packetSize = mbuf_pkthdr_len(status_frame.m);
             const unsigned size = MIN(packetSize, 128U);
-            mbuf_copydata(txd->m, 0, size, payload);
+            mbuf_copydata(status_frame.m, 0, size, payload);
             const bool eapol = size >= 8 && payload[0] == 0xaa && payload[1] == 0xaa &&
                 payload[6] == 0x88 && payload[7] == 0x8e;
             const unsigned ipHeader = size >= 9 ? (payload[8] & 15) * 4 : 0;
@@ -7405,18 +7405,19 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                 auto updated = records ? OSArray::withArray(records) : OSArray::withCapacity(64);
                 auto record = OSDictionary::withCapacity(4);
                 if (updated && record) {
-                    auto command = &ring->cmd[(idx + ring->ring_count - 1) % ring->ring_count];
+                    auto command = &ring->cmd[status_slot];
                     auto tx = reinterpret_cast<iwx_tx_cmd_gen3 *>(command->data);
                     auto wh = reinterpret_cast<ieee80211_frame *>(command->data + sizeof(*tx));
                     char state[256];
                     struct timeval now;
                     getmicrouptime(&now);
                     snprintf(state, sizeof(state),
-                        "uptime=%ld.%06d gen=%d kind=%s qid=%d idx=%d status=0x%x acked=%u flags=0x%x offload=0x%x fc=%02x/%02x",
+                        "uptime=%ld.%06d gen=%d kind=%s qid=%d idx=%d status=0x%x acked=%u flags=0x%x offload=0x%x fc=%02x/%02x raTid=0x%x keyId=%u hostTxPN=%llu",
                         (long)now.tv_sec, (int)now.tv_usec, sc->sc_generation, eapol ? "eapol" : "dhcp",
-                        qid, (idx + ring->ring_count - 1) % ring->ring_count,
+                        qid, status_slot,
                         le16toh(tx_resp->status.status), iwx_tx_status_is_acked(le16toh(tx_resp->status.status)),
-                        le16toh(tx->flags), le32toh(tx->offload_assist), wh->i_fc[0], wh->i_fc[1]);
+                        le16toh(tx->flags), le32toh(tx->offload_assist), wh->i_fc[0], wh->i_fc[1],
+                        tx_resp->ra_tid, status_frame.tx_key_id, (unsigned long long)status_frame.host_tx_pn);
                     auto text = OSString::withCString(state);
                     if (text) {
                         record->setObject("State", text);
@@ -7431,7 +7432,7 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                     };
                     const unsigned captureSize = dhcp ? MIN(packetSize, (unsigned)sizeof(payload)) : size;
                     if (captureSize > size)
-                        mbuf_copydata(txd->m, size, captureSize - size, payload + size);
+                        mbuf_copydata(status_frame.m, size, captureSize - size, payload + size);
                     bytes("PayloadPrefix", payload, captureSize);
                     bytes("TxCommand", tx, sizeof(*tx) + ieee80211_get_hdrlen(wh));
                     bytes("TxResponse", tx_resp, (unsigned)length);
