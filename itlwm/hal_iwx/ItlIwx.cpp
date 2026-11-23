@@ -17606,8 +17606,17 @@ iwx_send_bt_init_conf(struct iwx_softc *sc)
     XYLog("%s\n", __FUNCTION__);
     struct iwx_bt_coex_cmd bt_cmd;
     
-    bt_cmd.mode = htole32(IWX_BT_COEX_WIFI);
-    bt_cmd.enabled_modules = 0;
+    // Linux MVM coexistence policy, as integrated in ForbiddenItlwm #92.
+    uint32_t mode = IWX_BT_COEX_WIFI;
+    uint32_t modules = 0;
+    if (!sc->sc_use_mld_api) {
+        mode = IWX_BT_COEX_NW;
+        modules = IWX_BT_COEX_SYNC2SCO_ENABLED | IWX_BT_COEX_HIGH_BAND_RET;
+        if (isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_BT_MPLUT_SUPPORT))
+            modules |= IWX_BT_COEX_MPLUT_ENABLED;
+    }
+    bt_cmd.mode = htole32(mode);
+    bt_cmd.enabled_modules = htole32(modules);
     
     return iwx_send_cmd_pdu(sc, IWX_BT_CONFIG, 0, sizeof(bt_cmd),
                             &bt_cmd);
