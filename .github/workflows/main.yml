@@ -41,7 +41,7 @@ jobs:
           path: MacKernelSDK
       - name: Expose public Tahoe MSI-X API
         run: python3 scripts/prepare_tahoe_sdk.py
-      - name: Build Tahoe and Sequoia ABI variants
+      - name: Build Sonoma through Golden Gate ABI variants
         env:
           CONFIGURATION: ${{ inputs.configuration || 'Debug' }}
         run: |
@@ -49,7 +49,7 @@ jobs:
           mkdir -p logs artifacts
           xcodebuild -version > logs/toolchain.txt
           git rev-parse HEAD > logs/source-commit.txt
-          for variant in Tahoe-26.0-26.3 Tahoe-26.4-and-later Sequoia-15.2-15.3 Sequoia-15.4-and-later; do
+          for variant in Sonoma14.0 Sonoma14.4 Sequoia-15.2-15.3 Sequoia-15.4-and-later Tahoe-26.0-26.3 Tahoe-26.4-and-later GoldenGate; do
             platform="${variant%%-*}"
             flags=()
             if [[ "$variant" == Tahoe-26.0-26.3 ]]; then
@@ -83,7 +83,7 @@ jobs:
       - name: Upload experimental build
         uses: actions/upload-artifact@v4
         with:
-          name: AirportItlwm-Tahoe-Sequoia-${{ inputs.configuration || 'Debug' }}-${{ github.sha }}
+          name: AirportItlwm-Sonoma-through-GoldenGate-${{ inputs.configuration || 'Debug' }}-${{ github.sha }}
           path: artifacts/
           retention-days: 7
           if-no-files-found: error
