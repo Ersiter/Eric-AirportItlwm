@@ -11255,13 +11255,17 @@ iwx_awdl_standing_channel(struct iwx_softc *sc)
     const uint8_t home = iwx_awdl_go_home_channel(sc);
     static constexpr uint8_t social[] = {149, 44, 6};
     uint8_t best = 0, bestSlots = 0;
-    uint8_t usableHome = 0;
+    uint8_t usableHome = 0, discovery = 0;
     for (unsigned i = 0; i < nitems(social); i++) {
         const uint8_t chan = social[i];
         const auto &c = ic.ic_channels[chan];
         if (!c.ic_flags || !isset(ic.ic_chan_active, chan) ||
             (c.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_NOADHOC)))
             continue;
+        if (c.ic_reg_flags & IEEE80211_CHAN_NO_HE)
+            continue;
+        if (!discovery)
+            discovery = chan;
         const uint8_t slots = ic.ic_awdl_peer_channel_slots[i];
         if (slots && chan == sc->sc_listener_chan)
             return chan;
@@ -11276,7 +11280,10 @@ iwx_awdl_standing_channel(struct iwx_softc *sc)
             bestSlots = slots;
         }
     }
-    return best ? best : usableHome;
+    if (best || usableHome)
+        return best ? best : usableHome;
+    // Listen on a permitted social channel before the first peer advertises a schedule.
+    return discovery;
 }
 
 /* The AWDL TX queues as the driver sees them (index, queued, whether the TX watchdog is armed) and the listener's flags. */
