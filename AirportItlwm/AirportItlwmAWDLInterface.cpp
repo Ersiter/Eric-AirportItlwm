@@ -1945,6 +1945,8 @@ scheduleOwnListen(uint64_t afterUs)
     const bool allowHome = homeOnly || awCanListenOnHome(ic, home);
     const uint8_t listener = ic->ic_awdl_listener_chan;
     const bool protectOwnSlots = ic->ic_awdl_listen_home && !listener && !homeOnly;
+    const uint32_t standingLimit = listener && listener != home ? ic->ic_awdl_listener_dwell_limit_tu : 0;
+    const bool resumeSlot = protectOwnSlots || standingLimit;
     if (homeOnly && home != ic->ic_awdl_home_chan)
         return false;
     uint64_t now = hostUs();
@@ -1963,10 +1965,12 @@ scheduleOwnListen(uint64_t afterUs)
                 dwell = (uint32_t)((end - start) / 1024);
             }
         }
+        if (standingLimit && chan == listener)
+            dwell = MIN(dwell, standingLimit);
         fListenNextChan = chan;
         fListenNextDwellTU = dwell;
         fListenNextTxStartUs = txStart;
-        fListenNextEndUs = protectOwnSlots ? start + (uint64_t)dwell * 1024 : 0;
+        fListenNextEndUs = resumeSlot ? start + (uint64_t)dwell * 1024 : 0;
         fListenNextHuntGapUs = huntGapUs;
         uint64_t abs;
         nanoseconds_to_absolutetime(start * 1000, &abs);
@@ -2042,7 +2046,7 @@ scheduleOwnListen(uint64_t afterUs)
     }
     int64_t slot = (int64_t)slotUs();
     uint16_t pm = presenceMode();
-    int64_t k = protectOwnSlots ? floorDiv((int64_t)from - fRefUs, slot) :
+    int64_t k = resumeSlot ? floorDiv((int64_t)from - fRefUs, slot) :
         floorDiv((int64_t)from + kListenLeadUs - fRefUs, slot) + 1;
     // The peer we track (the phone during AirDrop) must be heard at least every
     // few seconds or IO80211Family drops it from NDP (lastAF ~6 s). When our own
@@ -2089,11 +2093,11 @@ scheduleOwnListen(uint64_t afterUs)
             listenEnd = slotStart + run * slot;
         }
         // A late wakeup can still use the remainder of an advertised slot.
-        const int64_t start = protectOwnSlots ? MAX((int64_t)from, listenStart - kListenLeadUs) :
+        const int64_t start = resumeSlot ? MAX((int64_t)from, listenStart - kListenLeadUs) :
             listenStart - kListenLeadUs;
-        const uint32_t dwell = (uint32_t)((listenEnd - start) / 1024);
-        if (protectOwnSlots && dwell < kListenDwellMinTU)
+        if (resumeSlot && listenEnd - start < kListenDwellMinTU * 1024)
             continue;
+        const uint32_t dwell = (uint32_t)((listenEnd - start) / 1024);
         if (armListen(chan, MIN(dwell, fListenDwellTU), (uint64_t)start,
             (peerWindow || observedWindow) ? 0 : (uint64_t)slotStart, 0))
             return true;

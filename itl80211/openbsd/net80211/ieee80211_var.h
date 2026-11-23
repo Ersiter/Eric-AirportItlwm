@@ -687,6 +687,7 @@ struct ieee80211com {
     uint8_t         ic_awdl_peer_channel_slots[3]; /* slots on 149, 44, 6 */
     int             (*ic_awdl_tx_ready)(struct ieee80211com *, uint8_t);
     uint8_t         ic_awdl_listener_chan;  /* standing listener's channel, 0 = none */
+    uint16_t        ic_awdl_listener_dwell_limit_tu; /* off-home firmware session limit */
     uint8_t         ic_awdl_home_chan;      /* required infrastructure channel, 0 = unrestricted */
     uint8_t         ic_awdl_listen_home;    /* backend can schedule a window on the infrastructure channel */
     void            (*ic_awdl_stop)(struct ieee80211com *);

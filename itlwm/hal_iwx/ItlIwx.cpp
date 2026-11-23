@@ -11231,9 +11231,19 @@ static void iwx_awdl_go_width(struct iwx_softc *sc, uint8_t &width, uint16_t &ce
     }
 }
 
+static constexpr uint16_t kIWXAWDLDiscoveryMaxTU = 128;
+
+static bool iwx_awdl_go_channel_usable(const ieee80211com &ic, uint8_t chan)
+{
+    const auto &c = ic.ic_channels[chan];
+    return c.ic_flags && isset(ic.ic_chan_active, chan) &&
+        !(c.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_NOADHOC)) &&
+        !(c.ic_reg_flags & IEEE80211_CHAN_NO_HE);
+}
+
 static bool iwx_awdl_go_matches_channel(struct iwx_softc *sc, uint8_t chan)
 {
-    if (!chan || chan != sc->sc_listener_chan)
+    if (!chan || chan != sc->sc_listener_chan || !iwx_awdl_go_channel_usable(sc->sc_ic, chan))
         return false;
     const bool privateDiscovery = sc->sc_awdl_discovery_phy == sc->sc_listener_phy.id;
     if (chan != iwx_awdl_go_home_channel(sc))
@@ -11258,11 +11268,7 @@ iwx_awdl_standing_channel(struct iwx_softc *sc)
     uint8_t usableHome = 0, discovery = 0;
     for (unsigned i = 0; i < nitems(social); i++) {
         const uint8_t chan = social[i];
-        const auto &c = ic.ic_channels[chan];
-        if (!c.ic_flags || !isset(ic.ic_chan_active, chan) ||
-            (c.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_NOADHOC)))
-            continue;
-        if (c.ic_reg_flags & IEEE80211_CHAN_NO_HE)
+        if (!iwx_awdl_go_channel_usable(ic, chan))
             continue;
         if (!discovery)
             discovery = chan;
@@ -11429,15 +11435,20 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
                     task_add(sc->sc_nswq, &sc->sc_awdl_peer_task);
             }
             if (sc->sc_listener_refitting || sc->sc_listener_retry_us || chan != sc->sc_listener_chan ||
-                (sc->sc_listener_go && !iwx_awdl_go_matches_channel(sc, target))) {
+                (sc->sc_listener_go && !iwx_awdl_go_matches_channel(sc, chan))) {
                 iwx_awdl_record_listen(ic, chan, 4, EBUSY, sc->sc_listener_chan);
                 return EBUSY;
+            }
+            if (sc->sc_listener_go) {
+                err = that->iwx_awdl_discovery_window(sc, dwell_tu);
+                if (err && sc->sc_awdl_discovery_phy == sc->sc_listener_phy.id) {
+                    iwx_awdl_record_listen(ic, chan, 4, err, sc->sc_listener_chan);
+                    return err;
+                }
             }
             ic->ic_awdl_listen_chan = chan;
             sc->sc_awdl_listen_active = 1;
             sc->sc_aux_roc_running = 1;
-            if (sc->sc_listener_go)
-                that->iwx_awdl_discovery_window(sc, dwell_tu);
             iwx_awdl_record_listen(ic, chan, 2, 0, 0);
             that->iwx_awdl_ba_reply(sc);
             return 0;
@@ -13572,7 +13583,7 @@ iwx_awdl_discovery_window(struct iwx_softc *sc, uint32_t dwell)
     cmd.id_and_color = htole32(IWX_AWDL_DISCOVERY_LINK_ID);
     cmd.action = htole32(IWX_FW_CTXT_ACTION_ADD);
     cmd.conf_id = htole32(IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV);
-    const uint32_t duration = MIN(dwell, 128U);
+    const uint32_t duration = MIN(dwell, (uint32_t)kIWXAWDLDiscoveryMaxTU);
     cmd.duration_tu = htole32(duration);
     sc->sc_awdl_discovery_deadline_us = now + uint64_t(duration) * IEEE80211_DUR_TU;
     sc->sc_awdl_discovery_requested = true;
@@ -14226,6 +14237,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     ic->ic_awdl_roc_qid = queue;
     sc->sc_listener_chan = chan;
     ic->ic_awdl_listener_chan = chan;
+    ic->ic_awdl_listener_dwell_limit_tu = offHome ? kIWXAWDLDiscoveryMaxTU : 0;
     sc->sc_listener_up = 1;
     // The dedicated peer has a TID 0 queue and can allocate TID 6 for LLW.
     ic->ic_awdl_tx_qos = 1;
@@ -14364,6 +14376,7 @@ iwx_awdl_go_stop(struct iwx_softc *sc, bool restoreStation)
     sc->sc_awdl_listen_active = 0;
     sc->sc_ic.ic_awdl_listen_chan = 0;
     sc->sc_ic.ic_awdl_listener_chan = 0;
+    sc->sc_ic.ic_awdl_listener_dwell_limit_tu = 0;
 
     const auto removeQueue = [&](int &qid, int sta, int tid) -> int {
         if (qid < 0)
@@ -14606,11 +14619,12 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
     if (sc->sc_listener_refitting || sc->sc_awdl_peer_busy)
         return;
     chan = iwx_awdl_standing_channel(sc);
-    if (sc->sc_listener_go && !iwx_awdl_go_matches_channel(sc, chan)) {
+    const bool go = sc->sc_listener_go;
+    if (go && !iwx_awdl_go_matches_channel(sc, sc->sc_listener_chan)) {
         iwx_awdl_go_stop(sc, true);
         return;
     }
-    if (chan == sc->sc_listener_chan) {
+    if (chan == sc->sc_listener_chan || (go && !chan)) {
         sc->sc_listener_retry_us = 0;
         sc->sc_listener_candidate = 0;
         return;
@@ -14619,7 +14633,8 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
     if (now < sc->sc_listener_retry_us)
         return;
     // Wait for a peer's preference to settle. A channel that became unusable must move immediately.
-    if (chan && sc->sc_listener_chan && iwx_awdl_listener_pick(sc, sc->sc_listener_chan)) {
+    const auto pending = [sc](int qid) { return qid >= 0 && sc->txq[qid].queued; };
+    if (chan && sc->sc_listener_chan && (go || iwx_awdl_listener_pick(sc, sc->sc_listener_chan))) {
         if (sc->sc_listener_candidate != chan) {
             sc->sc_listener_candidate = chan;
             sc->sc_listener_candidate_us = now;
@@ -14629,12 +14644,17 @@ iwx_awdl_listener_refit(struct iwx_softc *sc)
             (sc->sc_listener_last_data_us && now - sc->sc_listener_last_data_us < 1000000))
             return;
     }
+    if (go) {
+        if (!pending(sc->sc_awdl_peer_qid) && !pending(sc->sc_awdl_peer_llw_qid) &&
+            !pending(sc->sc_awdl_peer_mgmt_qid))
+            iwx_awdl_go_stop(sc, true);
+        return;
+    }
 
     sc->sc_listener_refitting = 1;
     sc->sc_awdl_listen_active = 0;
     sc->sc_aux_roc_running = 0;
     ic->ic_awdl_listen_chan = 0;
-    const auto pending = [sc](int qid) { return qid >= 0 && sc->txq[qid].queued; };
     if (sc->sc_listener_chan) {
         const int mgmtSta = (sc->sc_listener_go || iwx_awdl_client_enabled()) ?
             IWX_AWDL_BCAST_STA_ID : IWX_LISTENER_STA_ID;
