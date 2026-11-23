@@ -11363,8 +11363,10 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             if (sc->sc_use_mld_api) {
                 target = that->iwx_awdl_standing_channel(sc);
                 const bool offHome = target != iwx_awdl_go_home_channel(sc);
-                if (!target || (offHome && chan != target))
+                if (!target || (offHome && chan != target) ||
+                    iwx_uptime_us() < sc->sc_listener_retry_us)
                     goto roc;
+                sc->sc_listener_retry_us = 0;
                 if (!(sc->sc_flags & IWX_FLAG_STA_ACTIVE) || !ic->ic_bss->ni_port_valid ||
                     !ic->ic_awdl_addr_gen || sc->sc_mld_link_updates)
                     return EAGAIN;
@@ -13867,6 +13869,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
     bool link_active = false, sta_added = false, mac_associated = false, bcast_added = false;
     bool queue_added = false, data_queue_added = false;
     bool mcast_added = false, mcast_queue_added = false, sf_held = false;
+    bool activationDeferred = false;
     const bool go = itlAWDLStandingFlag();
     const bool offHome = go && chan != iwx_awdl_go_home_channel(sc);
     const bool client = !go && iwx_awdl_client_enabled();
@@ -14003,7 +14006,13 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         (sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN | IWX_FLAG_SHUTDOWN |
             IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)) || sc->sc_mld_link_updates ||
         (sc->sc_mld_active_links & (sc->sc_mld_active_links - 1)))) {
-        sc->sc_pcitag->setProperty("AWDLActivationResult", "blocked before LINK_CONFIG");
+        char result[144];
+        snprintf(result, sizeof(result),
+            "blocked before LINK_CONFIG state=%d fwState=%d flags=0x%x linkUpdates=%u activeLinks=0x%x",
+            ic->ic_state, sc->ns_nstate, sc->sc_flags,
+            unsigned(sc->sc_mld_link_updates), unsigned(sc->sc_mld_active_links));
+        sc->sc_pcitag->setProperty("AWDLActivationResult", result);
+        activationDeferred = true;
         err = EAGAIN;
         goto fail;
     }
@@ -14327,6 +14336,12 @@ fail:
         if (cleanup && generation == sc->sc_generation) {
             XYLogE("%s: listener cleanup failed %d\n", DEVNAME(sc), cleanup);
             iwx_schedule_recovery(sc, __FUNCTION__, __LINE__);
+        } else if (activationDeferred && generation == sc->sc_generation) {
+            // A station transition interrupted setup before activation. Retry after a clean rollback.
+            sc->sc_listener_tries--;
+            ic->ic_awdl_listener_tries = sc->sc_listener_tries;
+            sc->sc_listener_restore_pending = sc->sc_listener_tries == 1;
+            sc->sc_listener_retry_us = iwx_uptime_us() + 1000000;
         }
     }
     if (generation == sc->sc_generation)
