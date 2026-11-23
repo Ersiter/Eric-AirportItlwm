@@ -14100,26 +14100,7 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
             goto fail;
         mac_associated = true;
     }
-    if (dedicatedGroup) {
-        setupStage(11);
-        if (generation != sc->sc_generation) {
-            err = ENXIO;
-            goto fail;
-        }
-        /* Broadcast management has its own station on the same firmware link. */
-        struct iwx_mld_sta_cfg_cmd_v2 cmd = {};
-        cmd.sta_id = htole32(mgmtSta);
-        cmd.link_id = htole32(IWX_LISTENER_LINK_ID);
-        cmd.station_type = htole32(IWX_STA_GENERAL_PURPOSE);
-        cmd.mfp = htole32(1);
-        memset(cmd.peer_mld_address, 0xff, sizeof(cmd.peer_mld_address));
-        memset(cmd.peer_link_address, 0xff, sizeof(cmd.peer_link_address));
-        err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD),
-            0, staCmdSize, &cmd);
-        if (err)
-            goto fail;
-        bcast_added = true;
-    }
+    // Linux iwlmld registers the multicast station and its queue before broadcast management.
     if (dedicatedGroup) {
         setupStage(12);
         if (generation != sc->sc_generation) {
@@ -14143,6 +14124,44 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         if (err)
             goto fail;
         mcast_added = true;
+    }
+    if (mcast_added) {
+        setupStage(13);
+        if (!iwx_nic_lock(sc)) {
+            err = EBUSY;
+            goto fail;
+        }
+        mcastQueue = iwx_tvqm_enable_txq(sc, 0, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_AWDL_MCAST_STA_ID);
+        iwx_nic_unlock(sc);
+        if (generation != sc->sc_generation) {
+            err = ENXIO;
+            goto fail;
+        }
+        if (mcastQueue < 0) {
+            err = -mcastQueue;
+            goto fail;
+        }
+        mcast_queue_added = true;
+    }
+    if (dedicatedGroup) {
+        setupStage(11);
+        if (generation != sc->sc_generation) {
+            err = ENXIO;
+            goto fail;
+        }
+        /* Broadcast management has its own station on the same firmware link. */
+        struct iwx_mld_sta_cfg_cmd_v2 cmd = {};
+        cmd.sta_id = htole32(mgmtSta);
+        cmd.link_id = htole32(IWX_LISTENER_LINK_ID);
+        cmd.station_type = htole32(IWX_STA_GENERAL_PURPOSE);
+        cmd.mfp = htole32(1);
+        memset(cmd.peer_mld_address, 0xff, sizeof(cmd.peer_mld_address));
+        memset(cmd.peer_link_address, 0xff, sizeof(cmd.peer_link_address));
+        err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD),
+            0, staCmdSize, &cmd);
+        if (err)
+            goto fail;
+        bcast_added = true;
     }
     setupStage(7);
     if (generation != sc->sc_generation) {
@@ -14179,24 +14198,6 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
             goto fail;
         }
         data_queue_added = true;
-    }
-    if (mcast_added) {
-        setupStage(13);
-        if (!iwx_nic_lock(sc)) {
-            err = EBUSY;
-            goto fail;
-        }
-        mcastQueue = iwx_tvqm_enable_txq(sc, 0, 0, IWX_DEFAULT_QUEUE_SIZE, IWX_AWDL_MCAST_STA_ID);
-        iwx_nic_unlock(sc);
-        if (generation != sc->sc_generation) {
-            err = ENXIO;
-            goto fail;
-        }
-        if (mcastQueue < 0) {
-            err = -mcastQueue;
-            goto fail;
-        }
-        mcast_queue_added = true;
     }
     if (go) {
         setupStage(14);
