@@ -97,9 +97,11 @@ ForbiddenItlwm 的 BTLEAdvFixup 用原版 BlueToolFixup 做同样的事：两套
 
 ## 反馈问题
 
-用 Debug 包，复现前运行 `Collect-EricWirelessDiagnostics.command`，按提示选择 Wi-Fi、隔空投送／即时热点或蓝牙发现。
-在 [GitHub Issue](https://github.com/Ersiter/Eric-AirportItlwm/issues) 写明网卡、路由器或对端设备及实测结果。
-隔空投送请注明发送方向。ZIP 包含网络元数据或 `bluetoothd` 样本时请私下发送。
+使用 Debug 包，先运行 `Collect-EricWirelessDiagnostics.command`，再复现一次问题。
+Wi-Fi、隔空投送和即时热点统一选 1，蓝牙设备发现选 2。
+在 [GitHub Issue](https://github.com/Ersiter/Eric-AirportItlwm/issues) 写明网卡、路由器或对端设备及实测结果。隔空投送请注明发送方向。
+选项 1 的归档包含采集状态，并在采集到数据时附上本机的 DHCP/EAPOL 抓包文件（`.pcap`）。
+归档可能包含网络元数据和握手流量，请私下发送。
 
 ## 编译
 

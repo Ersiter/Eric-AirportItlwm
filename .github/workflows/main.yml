@@ -70,6 +70,7 @@ jobs:
             product="$PWD/build/$variant/products/$CONFIGURATION/$platform/AirportItlwm.kext"
             dwarfdump --uuid "$product/Contents/MacOS/AirportItlwm" > "artifacts/UUID-$variant.txt"
             ditto -c -k --keepParent "$product" "artifacts/AirportItlwm-$variant.zip"
+            zip -q -j "artifacts/AirportItlwm-$variant.zip" scripts/Collect-EricWirelessDiagnostics.command
           done
           cp logs/source-commit.txt artifacts/
           cp LICENSE iwlwifi-firmware-license BE200.md artifacts/

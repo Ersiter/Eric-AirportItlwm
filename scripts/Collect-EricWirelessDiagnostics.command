@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Eric wireless diagnostics for Wi-Fi, AirDrop, Instant Hotspot and Bluetooth.
+# R15 - Eric wireless diagnostics for Wi-Fi, AirDrop, Instant Hotspot and Bluetooth.
 export LC_ALL=C COPYFILE_DISABLE=1
 umask 077
 
@@ -16,12 +16,11 @@ fi
 case "${1:-}" in
     --bluetooth) focus=bluetooth ;;
     "")
-        printf '1. Wi-Fi\n2. AirDrop or Instant Hotspot\n3. Bluetooth device discovery\nChoose [1-3]: '
+        printf '1. Wi-Fi, AirDrop or Instant Hotspot\n2. Bluetooth device discovery\nChoose [1-2]: '
         IFS= read -r answer || exit 1
         case "$answer" in
-            1) focus=wifi ;;
-            2) focus=continuity ;;
-            3) focus=bluetooth ;;
+            1) focus=wireless ;;
+            2) focus=bluetooth ;;
             *) echo "Choose 1, 2 or 3."; exit 1 ;;
         esac ;;
     *) echo "Usage: $0 [--bluetooth]"; exit 1 ;;
@@ -36,15 +35,22 @@ stream_pid=
 timeline_pid=
 mdns_pid=
 mdns_drop_pid=
+hotspot_pids=()
 
 stop_recording() {
     local pid
     local pids=()
+    for pid in "${hotspot_pids[@]}"; do
+        /bin/kill -TERM "$pid" 2>/dev/null
+        pids+=("$pid")
+    done
     for pid in "$stream_pid" "$timeline_pid" "$mdns_pid" "$mdns_drop_pid"; do
-        [ -n "$pid" ] && pids+=("$pid")
+        if [ -n "$pid" ]; then
+            /bin/kill "$pid" 2>/dev/null
+            pids+=("$pid")
+        fi
     done
     if [ "${#pids[@]}" -gt 0 ]; then
-        /bin/kill "${pids[@]}" 2>/dev/null
         /bin/sleep 1
         for pid in "${pids[@]}"; do
             if /bin/kill -0 "$pid" 2>/dev/null; then
@@ -57,6 +63,7 @@ stop_recording() {
     timeline_pid=
     mdns_pid=
     mdns_drop_pid=
+    hotspot_pids=()
 }
 trap 'stop_recording; /bin/rm -r -- "$work"' EXIT
 trap 'exit 130' INT TERM
@@ -76,7 +83,6 @@ boot_build="$(/usr/bin/sw_vers -buildVersion)"
 os_version="$(/usr/bin/sw_vers -productVersion)"
 (
     ulimit -f 256
-    echo "Collector revision: 12"
     echo "Report: $focus"
     stamp
     /usr/bin/sw_vers
@@ -140,7 +146,7 @@ snapshot() {
         deadline 3 /sbin/ifconfig -v "$interface"
         /usr/sbin/netstat -nI "$interface" -b
     done
-    if [ "$focus" = continuity ] && /sbin/ifconfig awdl0 >/dev/null 2>&1; then
+    if [ "$focus" = wireless ] && /sbin/ifconfig awdl0 >/dev/null 2>&1; then
         echo '[Group memberships on awdl0]'
         deadline 3 /usr/sbin/netstat -ng -I awdl0 -v
     fi
@@ -175,7 +181,7 @@ kernel_lines() {
         /usr/bin/tail -n 900
 }
 
-echo "Eric Wireless Diagnostics. Reports can contain network and device names. Send them privately."
+echo "Eric Wireless Diagnostics. Reports can include network names, device identifiers and Wi-Fi handshake packets. Send the ZIP privately."
 printf 'Describe the problem and, for AirDrop, the sending device: '
 IFS= read -r problem
 printf '%s\n' "$problem" > "$work/attempt.txt"
@@ -184,8 +190,33 @@ save_snapshot before 5
 bounded kernel_lines > "$work/kernel-before.txt" 2>&1
 
 predicate='process IN {"bluetoothd","wifid","airportd","wifip2pd","sharingd","rapportd","nearbyd","eapolclient","IPConfiguration"} OR (process == "kernel" AND (eventMessage CONTAINS[c] "itlwm" OR eventMessage CONTAINS[c] "awdl" OR eventMessage CONTAINS[c] "btlfx" OR eventMessage CONTAINS[c] "BlueToolFixup" OR eventMessage CONTAINS[c] "IntelBT" OR eventMessage CONTAINS[c] "[advsets]" OR eventMessage CONTAINS[c] "[rpa]" OR eventMessage CONTAINS[c] "[pagein]"))'
-if [ "$focus" = continuity ]; then
+if [ "$focus" = bluetooth ]; then
+    predicate="$predicate"' OR (process IN {"coreaudiod","Music","FL Studio"} AND (eventMessage CONTAINS[c] "route" OR eventMessage CONTAINS[c] "output" OR eventMessage CONTAINS[c] "device"))'
+elif [ "$focus" = wireless ]; then
     predicate="$predicate"' OR (process == "mDNSResponder" AND (eventMessage CONTAINS[c] "awdl0" OR eventMessage CONTAINS[c] "_airdrop._tcp"))'
+fi
+if [ "$focus" = wireless ]; then
+    if [ -z "$wifi_interfaces" ]; then
+        echo "No Wi-Fi interface found. Saving wireless diagnostics without a host packet capture."
+    fi
+    for interface in $wifi_interfaces; do
+        capture_log="$work/hotspot-$interface-capture.txt"
+        (
+            ulimit -f 1024
+            exec /usr/sbin/tcpdump -p -ni "$interface" -s 0 -U -c 256 \
+                -w "$work/hotspot-$interface.pcap" '(udp and (port 67 or port 68)) or ether proto 0x888e'
+        ) > "$capture_log" 2>&1 &
+        pid=$!
+        hotspot_pids+=("$pid")
+        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            /usr/bin/grep -q 'listening on' "$capture_log" && break
+            /bin/kill -0 "$pid" 2>/dev/null || break
+            /bin/sleep 0.2
+        done
+        if ! /usr/bin/grep -q 'listening on' "$capture_log"; then
+            echo "Host packet capture unavailable on $interface. Saving the other diagnostics."
+        fi
+    done
 fi
 printf 'Start: %s\n' "$(stamp)" >> "$work/attempt.txt"
 (ulimit -f 3072; exec /usr/bin/log stream --level info --style compact --predicate "$predicate") > "$work/live.txt" 2>&1 &
@@ -204,7 +235,7 @@ stream_pid=$!
 ) > "$work/timeline.txt" 2>&1 &
 timeline_pid=$!
 
-if [ "$focus" = continuity ]; then
+if [ "$focus" = wireless ]; then
     (
         ulimit -f 128
         while ! /sbin/ifconfig awdl0 >/dev/null 2>&1; do
@@ -224,18 +255,47 @@ fi
 echo "Recording now."
 case "$focus" in
     bluetooth) echo "Open System Settings > Bluetooth. Put a nearby device in pairing mode and wait about 30 seconds." ;;
-    continuity) echo "Try one AirDrop transfer or join the iPhone hotspot once." ;;
-    wifi) echo "Open the Wi-Fi list and reproduce the problem once." ;;
+    wireless) echo "Reproduce the problem once and wait for the result." ;;
 esac
-echo "Press Enter after the result, or wait up to 120 seconds."
-IFS= read -r -t 120 unused
+echo "Type a short event label and press Enter to timestamp it. Empty Enter finishes."
+echo "Optional event labels include hotspot-selected, bluetooth-off and hotspot-gone."
+record_end=$((SECONDS + 120))
+while [ "$SECONDS" -lt "$record_end" ]; do
+    IFS= read -r -t "$((record_end - SECONDS))" marker || break
+    [ -n "$marker" ] || break
+    printf 'Event: %s %s\n' "$(stamp)" "$marker" >> "$work/attempt.txt"
+done
 echo "Recording finished. Saving the final snapshot and ZIP..."
 stop_recording
 printf 'End: %s\n' "$(stamp)" >> "$work/attempt.txt"
 save_snapshot after 25
 bounded kernel_lines > "$work/kernel-after.txt" 2>&1
 
-if [ "$focus" = continuity ]; then
+if [ "$focus" = wireless ]; then
+    {
+        echo 'Host DHCP/EAPOL capture on Wi-Fi interfaces'
+        [ -n "$wifi_interfaces" ] || echo 'Unavailable. No Wi-Fi interface was found.'
+        for interface in $wifi_interfaces; do
+            pcap="$work/hotspot-$interface.pcap"
+            echo "[$interface]"
+            if [ -s "$pcap" ]; then
+                bounded /usr/sbin/tcpdump -tttt -nnevv -r "$pcap" > "$work/hotspot-$interface-decoded.txt" 2>&1
+                /usr/bin/awk '/^[0-9][0-9][0-9][0-9]-/ { n++ } END { print n+0, "packets decoded from PCAP" }' \
+                    "$work/hotspot-$interface-decoded.txt"
+            else
+                echo 'No PCAP was written.'
+            fi
+            /bin/cat "$work/hotspot-$interface-capture.txt"
+        done
+        for capture in awdl-mdns awdl-mdns-drops; do
+            echo "[$capture]"
+            if [ -s "$work/$capture.txt" ]; then
+                /usr/bin/grep -E 'listening on|packets? (captured|received|dropped)|tcpdump:' "$work/$capture.txt"
+            else
+                echo 'Capture did not start during the recording window.'
+            fi
+        done
+    } > "$work/capture-status.txt" 2>&1
     # ioreg renders each firmware trace as one long line.
     /usr/sbin/ioreg -p IOService -l -w 0 2>/dev/null |
         /usr/bin/grep -aE '"AirportItlwm-Hotspot(Tx|Rx149)"[[:space:]]*=' > "$work/hotspot-frames.txt"
@@ -244,12 +304,16 @@ fi
 patch_predicate='eventMessage CONTAINS[c] "[advsets]" OR eventMessage CONTAINS[c] "[rpa]" OR eventMessage CONTAINS[c] "[pagein]" OR eventMessage CONTAINS[c] "BlueToolFixup" OR eventMessage CONTAINS[c] "enableExtendedAdvertising" OR eventMessage CONTAINS[c] "support for extended scans"'
 bounded deadline 15 /usr/bin/log show --last boot --info --style compact --predicate "$patch_predicate" > "$work/patches.txt" 2>&1
 
-if [ "$focus" = wifi ] && ! /usr/bin/grep -qi "com.zxystd.AirportItlwm" "$work/environment.txt"; then
-    load_predicate='eventMessage CONTAINS[c] "AirportItlwm" OR eventMessage CONTAINS[c] "IO80211Family" OR eventMessage CONTAINS[c] "IOSkywalkFamily"'
-    bounded deadline 15 /usr/bin/log show --last boot --info --style compact --predicate "$load_predicate" > "$work/kext-load.txt" 2>&1
+if [ "$focus" = wireless ] && { [ -z "$wifi_interfaces" ] ||
+    /usr/bin/grep -qi 'No Wi-Fi hardware installed' "$work/after.txt" ||
+    ! /usr/bin/grep -qi 'com.zxystd.AirportItlwm' "$work/environment.txt"; }; then
+    load_predicate='eventMessage CONTAINS[c] "itlwm" OR eventMessage CONTAINS[c] "IOPCIEDeviceWrapper" OR eventMessage CONTAINS[c] "IO80211Family" OR eventMessage CONTAINS[c] "IOSkywalkFamily" OR (process == "kernel" AND eventMessage CONTAINS[c] "iwm:")'
+    bounded deadline 15 /usr/bin/log show --last boot --info --debug --style compact --predicate "$load_predicate" > "$work/kext-load.txt" 2>&1
+    /usr/sbin/ioreg -p IOService -r -c IOPCIEDeviceWrapper -d 2 -w 0 > "$work/wifi-binding.txt" 2>&1
 fi
 
 if [ "$focus" = bluetooth ]; then
+    bounded deadline 8 /usr/sbin/system_profiler -timeout 6 -detailLevel basic SPAudioDataType > "$work/audio-devices.txt" 2>&1
     /usr/bin/find /Library/Logs/DiagnosticReports -maxdepth 2 -type f -mtime -2 \
             -iname '*bluetoothd*.ips' -exec /usr/bin/stat -f '%m %N' {} + 2>/dev/null |
         /usr/bin/sort -rn | /usr/bin/head -n 3 | while IFS= read -r row; do

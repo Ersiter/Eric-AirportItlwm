@@ -117,10 +117,11 @@ best AirDrop speed.
 
 ## Reporting a problem
 
-Use the Debug package and start `Collect-EricWirelessDiagnostics.command` before reproducing the issue.
-Choose Wi-Fi, AirDrop / Instant Hotspot, or Bluetooth discovery. In your [GitHub issue](https://github.com/Ersiter/Eric-AirportItlwm/issues),
-include the adapter, router or other device, and what happened. For AirDrop, say which device was sending.
-Send the ZIP privately if it contains network metadata or a `bluetoothd` sample.
+Use the Debug package and run `Collect-EricWirelessDiagnostics.command` before reproducing the issue once.
+Choose option 1 for Wi-Fi, AirDrop, or Instant Hotspot, or option 2 for Bluetooth discovery.
+In your [GitHub issue](https://github.com/Ersiter/Eric-AirportItlwm/issues), include the adapter, router or other device, and what happened. For AirDrop, say which device was sending.
+The option 1 archive includes capture status and host-side DHCP/EAPOL packet captures (`.pcap`) when available.
+Send the archive privately because it can contain network metadata and handshake traffic.
 
 ## Build
 
