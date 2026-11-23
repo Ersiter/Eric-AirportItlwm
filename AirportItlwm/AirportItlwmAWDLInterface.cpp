@@ -1740,34 +1740,40 @@ findPeerSchedule(const uint8_t *address, uint64_t us) const
     return nullptr;
 }
 
-bool AirportItlwmAWDLInterface::
-canSendData(const uint8_t *address, uint8_t chan, uint64_t now, uint64_t *retryAt) const
+uint64_t AirportItlwmAWDLInterface::
+dataTxTime(const uint8_t *address, uint8_t chan, uint64_t now, uint64_t end) const
 {
     const uint64_t guardUs = 2 * 1024;
-    if (IEEE80211_IS_MULTICAST(address)) {
-        if (!fChanSeqValid)
-            return false;
-        const int64_t slot = (int64_t)slotUs();
-        const uint16_t pm = presenceMode();
-        const int64_t k = floorDiv((int64_t)now - fRefUs, slot);
-        const int64_t next = floorDiv((int64_t)(now + guardUs) - fRefUs, slot);
-        if (retryAt)
-            *retryAt = fRefUs + (k + 1) * slot;
-        // Keep multicast data in the windows advertised to peers.
-        return ownChannelAt((uint16_t)(fRefSeq + k * pm)) == chan &&
-            ownChannelAt((uint16_t)(fRefSeq + next * pm)) == chan;
+    if (now >= end || end - now < guardUs)
+        return end;
+
+    const bool group = IEEE80211_IS_MULTICAST(address);
+    const auto *peer = group ? nullptr : findPeerSchedule(address, now);
+    if (!group && !peer) {
+        // A Bonjour response can precede the first usable synchronization frame.
+        const uint8_t observed = observedPeerChannel(now, address);
+        return !observed || observed == chan ? now : end;
     }
-    const auto *peer = findPeerSchedule(address, now);
-    if (peer) {
-        if (retryAt && peer->slotUs) {
-            const int64_t slot = floorDiv(static_cast<int64_t>(now) - peer->refUs, peer->slotUs);
-            *retryAt = peer->refUs + (slot + 1) * peer->slotUs;
-        }
-        return peerChannelAt(*peer, now) == chan && peerChannelAt(*peer, now + guardUs) == chan;
+    if (group && !fChanSeqValid)
+        return end;
+
+    const int64_t slot = peer ? peer->slotUs : static_cast<int64_t>(slotUs());
+    const int64_t reference = peer ? peer->refUs : fRefUs;
+    const auto channelAt = [&](uint64_t us) -> unsigned {
+        if (peer)
+            return peerChannelAt(*peer, us);
+        const int64_t i = floorDiv(static_cast<int64_t>(us) - reference, slot);
+        return ownChannelAt(static_cast<uint16_t>(fRefSeq + i * presenceMode()));
+    };
+    uint64_t candidate = now;
+    // One cycle of the channel sequence suffices, within the current dwell.
+    for (unsigned i = 0; i <= 16 && candidate <= end - guardUs; i++) {
+        if (channelAt(candidate) == chan && channelAt(candidate + guardUs) == chan)
+            return candidate;
+        const int64_t k = floorDiv(static_cast<int64_t>(candidate) - reference, slot);
+        candidate = reference + (k + 1) * slot;
     }
-    // A Bonjour response can precede the peer's first usable synchronization frame.
-    const uint8_t observed = observedPeerChannel(now, address);
-    return !observed || observed == chan;
+    return end;
 }
 
 const AirportItlwmAWDLInterface::PeerSchedule *AirportItlwmAWDLInterface::
@@ -1885,6 +1891,8 @@ trackPeer(const uint8_t *af, size_t len, const uint8_t *src, uint64_t rxUs, unsi
     if (!hadReference && peerScheduleFresh(peer, now))
         fListenPeer = index;
     fPeerUpdates++;
+    if (fDataQCount || fLowLatencyDataQCount)
+        kickDataTx(now, src);
     // Finish the current TX window, then replace any pending channel hunt.
     if (!fListenAlignedActive ||
         (fListenNextHuntGapUs && !hadPreferred && preferredPeerSchedule(now)))
@@ -2532,11 +2540,10 @@ sendPendingUnicastMI(uint64_t now)
             continue;
         }
         uint64_t retry = 0;
-        if (const auto *peer = findPeerSchedule(request.peer, now)) {
-            if (!canSendData(request.peer, fTxChan, now)) {
-                const int64_t slot = floorDiv((int64_t)now - peer->refUs, peer->slotUs);
-                retry = (uint64_t)(peer->refUs + (slot + 1) * peer->slotUs);
-            }
+        if (findPeerSchedule(request.peer, now)) {
+            const uint64_t next = dataTxTime(request.peer, fTxChan, now, fTxEndUs);
+            if (next != now)
+                retry = next;
         } else {
             const uint8_t observed = observedPeerChannel(now, request.peer);
             if ((observed ? observed : request.channel) != fTxChan)
@@ -2574,19 +2581,24 @@ enqueueData(mbuf_t m)
     fDataQUs[index] = now;
     fDataQCount++;
     fDataTxQueued++;
-    kickDataTx(now);
+    uint8_t destination[IEEE80211_ADDR_LEN];
+    kickDataTx(now, mbuf_copydata(m, 0, sizeof(destination), destination) ? nullptr : destination);
 }
 
 void AirportItlwmAWDLInterface::
-kickDataTx(uint64_t now)
+kickDataTx(uint64_t now, const uint8_t *destination)
 {
     if (!fAWRunning || !fTxTimer || now < fTxSlotUs || now >= fTxEndUs)
         return;
-    const uint64_t offset = MAX((uint64_t)kTxDataAtUs, now - fTxSlotUs);
-    if ((fTxPending & kTxPendingData) && fTxDataUs <= offset)
+    const uint64_t start = MAX(fTxSlotUs + kTxDataAtUs, now);
+    const uint64_t scheduled = (fTxPending & kTxPendingData) ? fTxSlotUs + fTxDataUs : fTxEndUs;
+    if (scheduled <= start)
+        return;
+    const uint64_t next = destination ? dataTxTime(destination, fTxChan, start, fTxEndUs) : start;
+    if (next >= scheduled)
         return;
     fTxPending |= kTxPendingData;
-    fTxDataUs = offset;
+    fTxDataUs = next - fTxSlotUs;
     scheduleTxTimer();
 }
 
@@ -2648,7 +2660,7 @@ flushData(ieee80211com *ic, bool lowLatency, uint64_t now, uint64_t &retryAt)
                 err = EAGAIN;
             } else if (!group && peerWaiting) {
                 err = EINPROGRESS;
-            } else if (!canSendData(eh, fTxChan, txUs, &frameRetryAt)) {
+            } else if ((frameRetryAt = dataTxTime(eh, fTxChan, txUs, fTxEndUs)) != txUs) {
                 fDataTxNotCommon++;
                 err = EAGAIN;
             } else {
@@ -2733,7 +2745,8 @@ enqueueLowLatencyData(mbuf_t m)
     fLowLatencyDataQ[index] = m;
     fLowLatencyDataQUs[index] = now;
     fLowLatencyDataQCount++;
-    kickDataTx(now);
+    uint8_t destination[IEEE80211_ADDR_LEN];
+    kickDataTx(now, mbuf_copydata(m, 0, sizeof(destination), destination) ? nullptr : destination);
 }
 
 void AirportItlwmAWDLInterface::
