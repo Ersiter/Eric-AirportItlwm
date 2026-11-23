@@ -320,6 +320,12 @@ bool ItlIwx::attach(IOPCIDevice *device)
 #ifdef AIRPORT_WCL
     com.sc_diagnostic_sequence = 0;
     bzero(com.sc_diagnostics, sizeof(com.sc_diagnostics));
+    bzero(com.sc_cmd_trace, sizeof(com.sc_cmd_trace));
+    com.sc_cmd_last_done_us = 0;
+    com.sc_cmd_last_latency_us = 0;
+    com.sc_cmd_last_done = 0;
+    com.sc_cmd_last_done_slot = -1;
+    com.sc_cmd_last_done_queued = 0;
     device->setProperty("AirportItlwm-DiagnosticVersion", 2, 32);
 #endif
     com.qfullmsk.reset();
@@ -7887,6 +7893,9 @@ iwx_phy_ctxt_cmd(struct iwx_softc *sc, struct iwx_phy_ctxt *ctxt,
 #define IWX_CMD_STAGE_RING_EMPTY 4
 #define IWX_CMD_STAGE_DMA_EPOCH  5
 #define IWX_CMD_STAGE_GENERATION 6
+#define IWX_CMD_STAGE_RING_FULL  7
+#define IWX_CMD_STAGE_SLOT_BUSY  8
+#define IWX_CMD_STAGE_RESP_BUSY  9
 
 int ItlIwx::
 iwx_send_cmd(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
@@ -7905,6 +7914,39 @@ iwx_send_cmd(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
         iwx_record_diagnostic(sc, "command-error", __FUNCTION__,
             sc->sc_cmd_error_stage, error, hcmd->id);
         iwx_publish_diagnostics(sc);
+        if (error == ENOSPC && !sc->sc_pcitag->getProperty("AirportItlwm-CmdFirstNoSpace")) {
+            const auto &ring = sc->txq[IWX_DQA_CMD_QUEUE];
+            const unsigned idx = ring.cur & (ring.ring_count - 1);
+            const uint64_t now = iwx_uptime_us();
+            char value[320];
+            snprintf(value, sizeof(value),
+                "gen=%d uptime_us=%llu cmd=0x%x stage=%u queued=%d count=%u cur=%d slot=%u flags=0x%x resp=%d last_cmd=0x%x last_slot=%d last_done_us=%llu last_latency_us=%llu last_queued=%d",
+                sc->sc_generation, now, hcmd->id, sc->sc_cmd_error_stage, ring.queued,
+                ring.ring_count, ring.cur, idx, ring.data[idx].flags, sc->sc_cmd_resp_pkt[idx] != nullptr,
+                sc->sc_cmd_last_done, sc->sc_cmd_last_done_slot, sc->sc_cmd_last_done_us,
+                sc->sc_cmd_last_latency_us, sc->sc_cmd_last_done_queued);
+            sc->sc_pcitag->setProperty("AirportItlwm-CmdFirstNoSpace", value);
+            // Keep each property within the collector's per-line limit.
+            for (unsigned first = 0; first < ring.ring_count; first += 16) {
+                char name[48], slots[1792];
+                size_t used = 0;
+                for (unsigned i = first; i < MIN(first + 16, ring.ring_count); ++i) {
+                    const auto &trace = sc->sc_cmd_trace[i];
+                    const unsigned flags = ring.data[i].flags;
+                    if (!(flags & (IWX_TXDATA_FLAG_CMD_PENDING | IWX_TXDATA_FLAG_CMD_WAITING)) &&
+                        !sc->sc_cmd_resp_pkt[i])
+                        continue;
+                    used += snprintf(slots + used, sizeof(slots) - used,
+                        "%u:cmd=0x%x,flags=0x%x,age_us=%llu,unhandled=0x%x,resp=%u ",
+                        i, trace.command, flags, trace.sent_us ? now - trace.sent_us : 0,
+                        trace.unhandled_reply, sc->sc_cmd_resp_pkt[i] != nullptr);
+                }
+                if (used) {
+                    snprintf(name, sizeof(name), "AirportItlwm-CmdSlots%03u", first);
+                    sc->sc_pcitag->setProperty(name, slots);
+                }
+            }
+        }
     }
 #endif
     return error;
@@ -7960,9 +8002,14 @@ iwx_send_cmd_impl(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
     desc = &ring->desc[idx];
     txdata = &ring->data[idx];
     /* A completed synchronous command owns its slot until its caller wakes. */
-    if (ring->queued >= ring->ring_count - 1 ||
-        (txdata->flags & (IWX_TXDATA_FLAG_CMD_PENDING | IWX_TXDATA_FLAG_CMD_WAITING)))
+    if (ring->queued >= ring->ring_count - 1) {
+        sc->sc_cmd_error_stage = IWX_CMD_STAGE_RING_FULL;
         return ENOSPC;
+    }
+    if (txdata->flags & (IWX_TXDATA_FLAG_CMD_PENDING | IWX_TXDATA_FLAG_CMD_WAITING)) {
+        sc->sc_cmd_error_stage = IWX_CMD_STAGE_SLOT_BUSY;
+        return ENOSPC;
+    }
     if ((hcmd->flags & IWX_CMD_WANT_RESP) && async)
         return EINVAL;
     
@@ -7977,8 +8024,10 @@ iwx_send_cmd_impl(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
         //        KASSERT(!async);
         //        KASSERT(hcmd->resp_pkt_len >= sizeof(struct iwx_rx_packet));
         //        KASSERT(hcmd->resp_pkt_len <= IWX_CMD_RESP_MAX);
-        if (sc->sc_cmd_resp_pkt[idx] != NULL)
+        if (sc->sc_cmd_resp_pkt[idx] != NULL) {
+            sc->sc_cmd_error_stage = IWX_CMD_STAGE_RESP_BUSY;
             return ENOSPC;
+        }
         resp_buf = (uint8_t *)malloc(hcmd->resp_pkt_len, 0,
                                      M_NOWAIT | M_ZERO);
         if (resp_buf == NULL)
@@ -8095,6 +8144,9 @@ iwx_send_cmd_impl(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
     DPRINTF(("%s: Sending command (%.2x.%.2x), %d bytes at [%d]:%d ver: %d\n", __func__, group_id, cmd->hdr.cmd, cmd->hdr_wide.length, cmd->hdr.idx, cmd->hdr.qid, cmd->hdr_wide.version));
     txdata->flags &= ~IWX_TXDATA_FLAG_CMD_FAILED;
     txdata->flags |= IWX_TXDATA_FLAG_CMD_PENDING;
+#ifdef AIRPORT_WCL
+    sc->sc_cmd_trace[idx] = { iwx_uptime_us(), hcmd->id, 0 };
+#endif
     if (!async)
         txdata->flags |= IWX_TXDATA_FLAG_CMD_WAITING;
     ring->queued++;
@@ -8124,6 +8176,17 @@ iwx_send_cmd_impl(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
             sc->sc_cmd_error_stage = IWX_CMD_STAGE_GENERATION;
             return ENXIO;
         }
+#ifdef AIRPORT_WCL
+        if (err == EWOULDBLOCK && !sc->sc_pcitag->getProperty("AirportItlwm-CmdFirstTimeout")) {
+            char value[192];
+            const auto &trace = sc->sc_cmd_trace[idx];
+            snprintf(value, sizeof(value),
+                "gen=%d cmd=0x%x slot=%d sent_us=%llu age_us=%llu queued=%d unhandled=0x%x",
+                generation, hcmd->id, idx, trace.sent_us,
+                iwx_uptime_us() - trace.sent_us, ring->queued, trace.unhandled_reply);
+            sc->sc_pcitag->setProperty("AirportItlwm-CmdFirstTimeout", value);
+        }
+#endif
         txdata->flags &= ~IWX_TXDATA_FLAG_CMD_WAITING;
         if (!err && (txdata->flags & IWX_TXDATA_FLAG_CMD_FAILED))
             err = EIO;
@@ -8249,6 +8312,14 @@ iwx_cmd_done(struct iwx_softc *sc, int qid, int idx, int code)
                  DEVNAME(sc), code));
     } else if (ring->queued > 0)
         ring->queued--;
+#ifdef AIRPORT_WCL
+    const auto &trace = sc->sc_cmd_trace[idx];
+    sc->sc_cmd_last_done_us = iwx_uptime_us();
+    sc->sc_cmd_last_latency_us = sc->sc_cmd_last_done_us - trace.sent_us;
+    sc->sc_cmd_last_done = trace.command;
+    sc->sc_cmd_last_done_slot = idx;
+    sc->sc_cmd_last_done_queued = ring->queued;
+#endif
 }
 
 uint32_t ItlIwx::
@@ -13924,12 +13995,21 @@ iwx_mld_listener_setup(struct iwx_softc *sc, uint8_t chan)
         (sc->sc_flags & (IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN | IWX_FLAG_SHUTDOWN |
             IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL)) || sc->sc_mld_link_updates ||
         (sc->sc_mld_active_links & (sc->sc_mld_active_links - 1)))) {
+        sc->sc_pcitag->setProperty("AWDLActivationResult", "blocked before LINK_CONFIG");
         err = EAGAIN;
         goto fail;
     }
-    if ((err = iwx_mld_listener_link(sc, IWX_FW_CTXT_ACTION_MODIFY,
-        IWX_MLD_LINK_CONTEXT_MODIFY_ACTIVE | (go && !offHome ? IWX_MLD_LINK_CONTEXT_MODIFY_RATES_INFO : 0), 1)) != 0)
-        goto fail;
+    {
+        const uint64_t started = iwx_uptime_us();
+        err = iwx_mld_listener_link(sc, IWX_FW_CTXT_ACTION_MODIFY,
+            IWX_MLD_LINK_CONTEXT_MODIFY_ACTIVE | (go && !offHome ? IWX_MLD_LINK_CONTEXT_MODIFY_RATES_INFO : 0), 1);
+        char result[128];
+        snprintf(result, sizeof(result), "gen=%d start_us=%llu elapsed_us=%llu err=%d",
+            generation, started, iwx_uptime_us() - started, err);
+        sc->sc_pcitag->setProperty("AWDLActivationResult", result);
+        if (err)
+            goto fail;
+    }
     link_active = true;
     if (go) {
         if (generation != sc->sc_generation)
@@ -15199,7 +15279,12 @@ iwx_awdl_listen_abort(struct iwx_softc *sc)
             // Reuse the channel-change drain before admitting TX in the next ROC.
             sc->sc_p2p_roc_chan = 0;
         } else if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running) {
-            iwx_p2p_session_cmd(sc, IWX_FW_CTXT_ACTION_REMOVE, 0);
+            int err = iwx_p2p_session_cmd(sc, IWX_FW_CTXT_ACTION_REMOVE, 0);
+            if (err) {
+                sc->sc_aux_roc_resp_err++;
+                iwx_aux_roc_sync_counters(sc);
+                return err;
+            }
         }
         sc->sc_aux_roc_pending = 0;
         sc->sc_aux_roc_running = 0;
@@ -19905,6 +19990,14 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
         if (handled && !(qid & (1 << 7))) {
             iwx_cmd_done(sc, qid, idx, code);
         }
+#ifdef AIRPORT_WCL
+        if (!handled && qid == IWX_DQA_CMD_QUEUE && idx < sc->txq[qid].ring_count &&
+            (sc->txq[qid].data[idx].flags & IWX_TXDATA_FLAG_CMD_PENDING)) {
+            sc->sc_cmd_trace[idx].unhandled_reply = code;
+            iwx_record_diagnostic(sc, "command-unhandled-reply", __FUNCTION__, idx,
+                0, sc->sc_cmd_trace[idx].command, -1, -1, pkt, code);
+        }
+#endif
         
         offset += roundup(len, IWX_FH_RSCSR_FRAME_ALIGN);
         

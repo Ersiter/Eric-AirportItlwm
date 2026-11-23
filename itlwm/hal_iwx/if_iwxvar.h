@@ -850,6 +850,14 @@ struct iwx_softc {
 #ifdef AIRPORT_WCL
     volatile uint32_t sc_diagnostic_sequence;
     struct iwx_diagnostic sc_diagnostics[32];
+    struct {
+        uint64_t sent_us;
+        uint32_t command;
+        uint16_t unhandled_reply;
+    } sc_cmd_trace[IWX_CMD_QUEUE_SIZE_GEN3];
+    uint64_t sc_cmd_last_done_us, sc_cmd_last_latency_us;
+    uint32_t sc_cmd_last_done;
+    int sc_cmd_last_done_slot, sc_cmd_last_done_queued;
 #endif
 
 //	struct rwlock ioctl_rwl;
