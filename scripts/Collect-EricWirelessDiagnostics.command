@@ -39,12 +39,20 @@ mdns_drop_pid=
 
 stop_recording() {
     local pid
+    local pids=()
     for pid in "$stream_pid" "$timeline_pid" "$mdns_pid" "$mdns_drop_pid"; do
-        if [ -n "$pid" ]; then
-            /bin/kill "$pid" 2>/dev/null
-            wait "$pid" 2>/dev/null
-        fi
+        [ -n "$pid" ] && pids+=("$pid")
     done
+    if [ "${#pids[@]}" -gt 0 ]; then
+        /bin/kill "${pids[@]}" 2>/dev/null
+        /bin/sleep 1
+        for pid in "${pids[@]}"; do
+            if /bin/kill -0 "$pid" 2>/dev/null; then
+                /bin/kill -KILL "$pid" 2>/dev/null
+            fi
+            wait "$pid" 2>/dev/null
+        done
+    fi
     stream_pid=
     timeline_pid=
     mdns_pid=
@@ -56,6 +64,10 @@ trap 'exit 130' INT TERM
 bounded() {
     (ulimit -f 512; "$@")
 }
+# Darwin ships Perl on the supported systems. Carry the deadline through exec.
+deadline() {
+    /usr/bin/perl -e 'alarm shift; exec @ARGV or die "$ARGV[0]: $!"' "$@"
+}
 stamp() {
     /bin/date '+%Y-%m-%d %H:%M:%S %z'
 }
@@ -64,7 +76,7 @@ boot_build="$(/usr/bin/sw_vers -buildVersion)"
 os_version="$(/usr/bin/sw_vers -productVersion)"
 (
     ulimit -f 256
-    echo "Collector revision: 10"
+    echo "Collector revision: 12"
     echo "Report: $focus"
     stamp
     /usr/bin/sw_vers
@@ -119,25 +131,44 @@ registry_state() {
 snapshot() {
     stamp
     echo '[Wi-Fi and AWDL]'
-    /usr/bin/wdutil info
+    echo '[Driver properties]'
+    registry_state
+    if [ "$1" = after ]; then
+        deadline 8 /usr/bin/wdutil info
+    fi
     for interface in $wifi_interfaces awdl0 llw0; do
-        /sbin/ifconfig -v "$interface"
-        /usr/sbin/netstat -I "$interface" -b
+        deadline 3 /sbin/ifconfig -v "$interface"
+        /usr/sbin/netstat -nI "$interface" -b
     done
     if [ "$focus" = continuity ] && /sbin/ifconfig awdl0 >/dev/null 2>&1; then
         echo '[Group memberships on awdl0]'
-        /usr/sbin/netstat -g -I awdl0 -v
+        deadline 3 /usr/sbin/netstat -ng -I awdl0 -v
     fi
     echo '[IPv6 neighbours, routes and AirDrop connections on awdl0/llw0]'
     /usr/sbin/ndp -an 2>&1 | /usr/bin/grep -E 'Neighbor|awdl0|llw0'
     /usr/sbin/netstat -rn -f inet6 2>&1 | /usr/bin/grep -E 'awdl0|llw0'
-    /usr/sbin/ndp -p 2>&1 | /usr/bin/grep -A2 -E 'awdl0|llw0'
+    /usr/sbin/ndp -np 2>&1 | /usr/bin/grep -A2 -E 'awdl0|llw0'
     /usr/sbin/netstat -an -p tcp 2>&1 | /usr/bin/grep -E '\.8770 '
     /usr/sbin/netstat -s -p tcp 2>&1 | /usr/bin/grep -E 'retransmit timeouts|connection requests|embryonic|listen queue'
+    [ "$1" = before ] && return 0
     echo '[Bluetooth controller]'
-    /usr/sbin/system_profiler -timeout 10 -detailLevel basic SPBluetoothDataType
-    echo '[Driver properties]'
-    registry_state
+    deadline 12 /usr/sbin/system_profiler -timeout 10 -detailLevel basic SPBluetoothDataType
+}
+save_snapshot() {
+    local phase="$1" limit="$2" pid elapsed=0
+    set -m
+    (set +m; bounded snapshot "$phase") > "$work/$phase.txt" 2>&1 &
+    pid=$!
+    set +m
+    while /bin/kill -0 "$pid" 2>/dev/null && [ "$elapsed" -lt "$limit" ]; do
+        /bin/sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    if /bin/kill -0 "$pid" 2>/dev/null; then
+        kill -KILL -- "-$pid" 2>/dev/null
+        echo "Snapshot time limit reached. Partial output retained." >> "$work/$phase.txt"
+    fi
+    wait "$pid" 2>/dev/null
 }
 kernel_lines() {
     /sbin/dmesg 2>&1 | /usr/bin/grep -aiE 'itlwm|awdl|BlueToolFixup|btlfx|IntelBT|ibtfw|BTLEAdv|\[advsets\]|\[rpa\]|\[pagein\]|permission|not permitted' |
@@ -148,8 +179,8 @@ echo "Eric Wireless Diagnostics. Reports can contain network and device names. S
 printf 'Describe the problem and, for AirDrop, the sending device: '
 IFS= read -r problem
 printf '%s\n' "$problem" > "$work/attempt.txt"
-echo "Recording will start after the initial snapshot."
-bounded snapshot > "$work/before.txt" 2>&1
+echo "Saving initial interface state..."
+save_snapshot before 5
 bounded kernel_lines > "$work/kernel-before.txt" 2>&1
 
 predicate='process IN {"bluetoothd","wifid","airportd","wifip2pd","sharingd","rapportd","nearbyd","eapolclient","IPConfiguration"} OR (process == "kernel" AND (eventMessage CONTAINS[c] "itlwm" OR eventMessage CONTAINS[c] "awdl" OR eventMessage CONTAINS[c] "btlfx" OR eventMessage CONTAINS[c] "BlueToolFixup" OR eventMessage CONTAINS[c] "IntelBT" OR eventMessage CONTAINS[c] "[advsets]" OR eventMessage CONTAINS[c] "[rpa]" OR eventMessage CONTAINS[c] "[pagein]"))'
@@ -157,14 +188,14 @@ if [ "$focus" = continuity ]; then
     predicate="$predicate"' OR (process == "mDNSResponder" AND (eventMessage CONTAINS[c] "awdl0" OR eventMessage CONTAINS[c] "_airdrop._tcp"))'
 fi
 printf 'Start: %s\n' "$(stamp)" >> "$work/attempt.txt"
-(ulimit -f 3072; exec /usr/bin/log stream --level debug --style compact --predicate "$predicate") > "$work/live.txt" 2>&1 &
+(ulimit -f 3072; exec /usr/bin/log stream --level info --style compact --predicate "$predicate") > "$work/live.txt" 2>&1 &
 stream_pid=$!
 (
     ulimit -f 384
     while :; do
         stamp
         for interface in $wifi_interfaces awdl0; do
-            /usr/sbin/netstat -I "$interface" -b 2>&1 | /usr/bin/tail -n 2
+            /usr/sbin/netstat -nI "$interface" -b 2>&1 | /usr/bin/tail -n 2
         done
         registry_state | /usr/bin/grep -aE 'Listener|Peer|AirDrop|Frame|Data|AWDL(FwGroup|Rx(Group|Dropped)|Listen(Rx|ByChan)|Roc(Started|Ended|Rx|LastUs))|Status|Error|Scan|Join|Associate|Country|WCL' |
             /usr/bin/cut -c 1-250
@@ -190,6 +221,7 @@ if [ "$focus" = continuity ]; then
     mdns_drop_pid=$!
 fi
 
+echo "Recording now."
 case "$focus" in
     bluetooth) echo "Open System Settings > Bluetooth. Put a nearby device in pairing mode and wait about 30 seconds." ;;
     continuity) echo "Try one AirDrop transfer or join the iPhone hotspot once." ;;
@@ -197,9 +229,10 @@ case "$focus" in
 esac
 echo "Press Enter after the result, or wait up to 120 seconds."
 IFS= read -r -t 120 unused
+echo "Recording finished. Saving the final snapshot and ZIP..."
 stop_recording
 printf 'End: %s\n' "$(stamp)" >> "$work/attempt.txt"
-bounded snapshot > "$work/after.txt" 2>&1
+save_snapshot after 25
 bounded kernel_lines > "$work/kernel-after.txt" 2>&1
 
 if [ "$focus" = continuity ]; then
@@ -209,11 +242,11 @@ if [ "$focus" = continuity ]; then
 fi
 
 patch_predicate='eventMessage CONTAINS[c] "[advsets]" OR eventMessage CONTAINS[c] "[rpa]" OR eventMessage CONTAINS[c] "[pagein]" OR eventMessage CONTAINS[c] "BlueToolFixup" OR eventMessage CONTAINS[c] "enableExtendedAdvertising" OR eventMessage CONTAINS[c] "support for extended scans"'
-bounded /usr/bin/log show --last boot --info --style compact --predicate "$patch_predicate" > "$work/patches.txt" 2>&1
+bounded deadline 15 /usr/bin/log show --last boot --info --style compact --predicate "$patch_predicate" > "$work/patches.txt" 2>&1
 
 if [ "$focus" = wifi ] && ! /usr/bin/grep -qi "com.zxystd.AirportItlwm" "$work/environment.txt"; then
     load_predicate='eventMessage CONTAINS[c] "AirportItlwm" OR eventMessage CONTAINS[c] "IO80211Family" OR eventMessage CONTAINS[c] "IOSkywalkFamily"'
-    bounded /usr/bin/log show --last boot --info --style compact --predicate "$load_predicate" > "$work/kext-load.txt" 2>&1
+    bounded deadline 15 /usr/bin/log show --last boot --info --style compact --predicate "$load_predicate" > "$work/kext-load.txt" 2>&1
 fi
 
 if [ "$focus" = bluetooth ]; then
