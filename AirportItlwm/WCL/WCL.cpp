@@ -533,6 +533,10 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
 IOReturn AirportItlwmSkywalkInterface::startWCLScan(const AirportWCL::ScanRequest &scan)
 {
     auto ic = fHalService->get80211Controller();
+    // A directed join scan can replace our own unassociated discovery scan (ForbiddenItlwm #91).
+    if (scanPending && !scanDeferred && !joinPending && scan.ssidLength &&
+        !deferredScan.ssidLength && ic->ic_state == IEEE80211_S_SCAN && ic->ic_wcl_scan_restart_supported)
+        finishWCLScan(kIOReturnAborted);
     if (scanPending || joinPending) {
         XYLog("WCL scan busy pending scan=%d join=%d state=%d authorized=%d firstBeacon=%d bgscan=%d\n",
             scanPending, joinPending, ic->ic_state, portAuthorized, firstBeaconNotified,
@@ -1697,7 +1701,8 @@ IOReturn AirportItlwmSkywalkInterface::getWCL_EXTENDED_BSS_INFO(apple80211_exten
 IOReturn AirportItlwmSkywalkInterface::copyWCLExtendedBss(void *data)
 {
     ieee80211com *ic = fHalService->get80211Controller();
-    if (!data || !ic->ic_bss || ic->ic_state != IEEE80211_S_RUN)
+    if (!data || !ic->ic_bss ||
+        (ic->ic_state != IEEE80211_S_ASSOC && ic->ic_state != IEEE80211_S_RUN))
         return kIOReturnNotReady;
     static_assert(sizeof(apple80211_rate_set_data) == 0xbc, "Extended BSS rates size");
     static_assert(sizeof(apple80211_mcs_index_set_data) == 0x10, "Extended BSS MCS size");
@@ -1707,12 +1712,17 @@ IOReturn AirportItlwmSkywalkInterface::copyWCLExtendedBss(void *data)
 #else
     bzero(bytes, 0x214);
 #endif
-    IOReturn status = getRATE_SET(reinterpret_cast<apple80211_rate_set_data *>(bytes));
-    if (status)
-        return status;
-    status = getMCS_INDEX_SET(reinterpret_cast<apple80211_mcs_index_set_data *>(bytes + 0xbc));
-    if (status)
-        return status;
+    auto rates = reinterpret_cast<apple80211_rate_set_data *>(bytes);
+    rates->version = APPLE80211_VERSION;
+    rates->num_rates = min(size_t(ic->ic_bss->ni_rates.rs_nrates), ARRAY_SIZE(rates->rates));
+    for (unsigned i = 0; i < rates->num_rates; ++i) {
+        rates->rates[i].version = APPLE80211_VERSION;
+        rates->rates[i].rate = ic->ic_bss->ni_rates.rs_rates[i];
+    }
+    auto mcs = reinterpret_cast<apple80211_mcs_index_set_data *>(bytes + 0xbc);
+    mcs->version = APPLE80211_VERSION;
+    auto node = ieee80211_mld_active_node(ic);
+    memcpy(mcs->mcs_set_map, node->ni_rxmcs, min(sizeof(node->ni_rxmcs), sizeof(mcs->mcs_set_map)));
     apple80211_vht_mcs_index_set_data vht = {};
     vht.version = APPLE80211_VERSION;
     vht.mcs_map = 0xffff;
