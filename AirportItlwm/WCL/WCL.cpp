@@ -1607,6 +1607,9 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             }
             break;
         case IEEE80211_EVT_STA_DEAUTH: {
+            // A completed join keeps this flag set until the peer disconnects.
+            // WCL must issue the next join rather than reusing the old target.
+            ic->ic_wcl_join_requested = false;
             purgeWCLUserEapol();
             portAuthorized = false;
             updateWCLLinkQuality(true);

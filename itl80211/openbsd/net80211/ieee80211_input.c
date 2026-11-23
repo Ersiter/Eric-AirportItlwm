@@ -4242,7 +4242,7 @@ ieee80211_recv_deauth(struct ieee80211com *ic, mbuf_t m,
             int stay_auth = ((ic->ic_userflags & IEEE80211_F_STAYAUTH) &&
                              ic->ic_state >= IEEE80211_S_AUTH);
 #ifdef AIRPORT_WCL
-            // WCL has completed the failed join and discarded its key. Let WCL select the next BSS.
+            // A peer disconnect ends WCL's join; WCL selects the next BSS.
             if (!ic->ic_wcl_join_requested) {
                 ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
                 break;
