@@ -2030,6 +2030,7 @@ struct iwx_tx_queue_cfg_rsp {
 #define IWX_LEGACY_GROUP    0x0
 #define IWX_LONG_GROUP        0x1
 #define IWX_SYSTEM_GROUP    0x2
+#define IWX_SYSTEM_NOTIF_FC 0xfc
 #define IWX_MAC_CONF_GROUP    0x3
 #define IWX_PHY_OPS_GROUP    0x4
 #define IWX_DATA_PATH_GROUP    0x5

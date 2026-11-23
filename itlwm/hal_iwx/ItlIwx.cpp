@@ -19953,6 +19953,11 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                 break;
             }
                 
+            case IWX_WIDE_ID(IWX_SYSTEM_GROUP, IWX_SYSTEM_NOTIF_FC):
+                // KGP firmware reference treats this system notification as informational.
+                if (qid & (1 << 7))
+                    break;
+                [[fallthrough]];
             default:
                 // A direct reply can complete its command without a notification handler.
                 if (qid == IWX_DQA_CMD_QUEUE && idx < sc->txq[qid].ring_count &&
