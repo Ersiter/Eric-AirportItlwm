@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# R15 - Eric wireless diagnostics for Wi-Fi, AirDrop, Instant Hotspot and Bluetooth.
+# R16 - Eric wireless diagnostics for Wi-Fi, AirDrop, Instant Hotspot and Bluetooth.
 export LC_ALL=C COPYFILE_DISABLE=1
 umask 077
 
@@ -258,7 +258,7 @@ case "$focus" in
     wireless) echo "Reproduce the problem once and wait for the result." ;;
 esac
 echo "Type a short event label and press Enter to timestamp it. Empty Enter finishes."
-echo "Optional event labels include hotspot-selected, bluetooth-off and hotspot-gone."
+echo "Optional event labels include hotspot-selected, bluetooth-off, hotspot-gone and watch-sleep-focus-on/off."
 record_end=$((SECONDS + 120))
 while [ "$SECONDS" -lt "$record_end" ]; do
     IFS= read -r -t "$((record_end - SECONDS))" marker || break
@@ -268,6 +268,11 @@ done
 echo "Recording finished. Saving the final snapshot and ZIP..."
 stop_recording
 printf 'End: %s\n' "$(stamp)" >> "$work/attempt.txt"
+if /usr/bin/grep -Eq 'SFAutoUnlockErrorDomain Code=204([[:space:]]|$)' "$work/live.txt"; then
+    watch_note='Apple Watch approval reported error 204. Check Sleep Focus on the Watch and turn it off before retrying.'
+    printf '%s\n' "$watch_note" >> "$work/attempt.txt"
+    printf '%s\n' "$watch_note"
+fi
 save_snapshot after 25
 bounded kernel_lines > "$work/kernel-after.txt" 2>&1
 
