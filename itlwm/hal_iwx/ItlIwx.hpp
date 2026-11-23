@@ -516,6 +516,8 @@ public:
     void iwx_mld_modify_link_fill(iwx_softc *, iwx_node *, iwx_mld_link_config_cmd *, int, int);
     int iwx_mld_mac_ctxt_cmd(iwx_softc *, iwx_node *, uint32_t, int);
     int iwx_mld_add_link(iwx_softc *, iwx_node *, int);
+    static int iwx_mld_authorize_sta(ieee80211com *, ieee80211_node *);
+    int iwx_mld_program_link_sta(iwx_softc *, iwx_node *, int, int, bool);
     int iwx_mld_add_sta_cmd(iwx_softc *, iwx_node *, int);
     int iwx_mld_wait_sta_queues_empty(iwx_softc *, int);
     int iwx_mld_remove_sta_queues(iwx_softc *);

@@ -1586,17 +1586,14 @@ iwx_mld_add_link(struct iwx_softc *sc, struct iwx_node *in, int link_slot)
 }
 
 int ItlIwx::
-iwx_mld_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
+iwx_mld_program_link_sta(struct iwx_softc *sc, struct iwx_node *in,
+    int link_slot, int sta_id, bool mfp)
 {
     struct ieee80211com *ic = &sc->sc_ic;
-    struct iwx_mld_link_config_cmd link_cmd;
     struct iwx_mld_sta_cfg_cmd_v2 sta_cmd;
     int cmd_ver;
     size_t cmd_size;
     uint32_t aggsize, mpdu_dens;
-    int err, changes, link_slot, sta_id;
-    uint32_t old_sta_mask, new_sta_mask;
-    uint32_t old_active_sta_mask, new_active_sta_mask;
 
     cmd_ver = iwx_lookup_cmd_ver(sc, IWX_MAC_CONF_GROUP,
         IWX_MLD_STA_CONFIG_CMD);
@@ -1614,6 +1611,72 @@ iwx_mld_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
             sc->sc_dev.dv_xname, cmd_ver);
         return ENOTSUP;
     }
+
+    memset(&sta_cmd, 0, sizeof(sta_cmd));
+    sta_cmd.sta_id = htole32(sta_id);
+    sta_cmd.station_type = htole32(IWX_STA_LINK);
+    sta_cmd.link_id = htole32(link_slot);
+    IEEE80211_ADDR_COPY(sta_cmd.peer_mld_address,
+        ic->ic_wcl_peer_is_mlo ? ic->ic_wcl_peer_mld_addr : in->in_macaddr);
+    IEEE80211_ADDR_COPY(sta_cmd.peer_link_address, in->in_macaddr);
+    sta_cmd.assoc_id = htole32(IEEE80211_AID(in->in_ni.ni_associd));
+    if (mfp)
+        sta_cmd.mfp = htole32(1);
+
+    const int is_6ghz = IEEE80211_IS_CHAN_6GHZ(in->in_ni.ni_chan);
+    if ((in->in_ni.ni_flags & IEEE80211_NODE_HT) ||
+        (is_6ghz && (in->in_ni.ni_flags &
+            (IEEE80211_NODE_HE | IEEE80211_NODE_EHT)))) {
+        if (iwx_mimo_enabled(sc) && in->in_ni.ni_rx_nss > 1)
+            sta_cmd.mimo = htole32(1);
+        iwx_mld_fill_ampdu_size_and_dens(&in->in_ni, &aggsize, &mpdu_dens);
+        sta_cmd.tx_ampdu_spacing = htole32(mpdu_dens);
+        sta_cmd.tx_ampdu_max_size = htole32(aggsize);
+    }
+
+    if (in->in_ni.ni_flags & IEEE80211_NODE_HE) {
+        sta_cmd.htc_flags = htole32(iwx_mld_get_htc_flags(&in->in_ni));
+        sta_cmd.ack_enabled = htole32((in->in_ni.ni_he_cap_elem.mac_cap_info[2] &
+            IEEE80211_HE_MAC_CAP2_ACK_EN) ? 1 : 0);
+        iwx_mld_fill_pkt_ext(&in->in_ni, &sta_cmd.pkt_ext);
+    }
+
+
+    return iwx_send_cmd_pdu(sc,
+        IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD),
+        0, cmd_size, &sta_cmd);
+}
+
+int ItlIwx::
+iwx_mld_authorize_sta(struct ieee80211com *ic, struct ieee80211_node *ni)
+{
+    if (ni->ni_flags & IEEE80211_NODE_MFP)
+        return 0;
+    struct iwx_softc *sc = (struct iwx_softc *)ic->ic_softc;
+    ItlIwx *that = container_of(sc, ItlIwx, com);
+    for (int slot = 0; slot < MAX(1, ic->ic_mld_link_count); slot++) {
+        const int id = sc->sc_mld_sta_ids[slot];
+        if (slot && !ic->ic_mld_links[slot].assoc_accepted)
+            continue;
+        auto *link = slot ? ic->ic_mld_links[slot].ni : ni;
+        if (!link || id >= 32 || !(sc->sc_mld_sta_mask & (1U << id)))
+            return ENXIO;
+        int err = that->iwx_mld_program_link_sta(sc, (struct iwx_node *)link, slot, id, false);
+        XYLog("MLD port authorization sta=%d link=%d mfp=0 err=%d\n", id, slot, err);
+        if (err)
+            return err;
+    }
+    return 0;
+}
+
+int ItlIwx::
+iwx_mld_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    struct iwx_mld_link_config_cmd link_cmd;
+    int err, changes, link_slot, sta_id;
+    uint32_t old_sta_mask, new_sta_mask;
+    uint32_t old_active_sta_mask, new_active_sta_mask;
 
     if (ic->ic_opmode != IEEE80211_M_STA)
         return ENOTSUP;
@@ -1657,40 +1720,8 @@ iwx_mld_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
     if (err)
         return err;
 
-    memset(&sta_cmd, 0, sizeof(sta_cmd));
-    sta_cmd.sta_id = htole32(sta_id);
-    sta_cmd.station_type = htole32(IWX_STA_LINK);
-    sta_cmd.link_id = htole32(link_slot);
-    IEEE80211_ADDR_COPY(sta_cmd.peer_mld_address,
-        ic->ic_wcl_peer_is_mlo ? ic->ic_wcl_peer_mld_addr : in->in_macaddr);
-    IEEE80211_ADDR_COPY(sta_cmd.peer_link_address, in->in_macaddr);
-    sta_cmd.assoc_id = htole32(IEEE80211_AID(in->in_ni.ni_associd));
-    if ((in->in_ni.ni_flags & IEEE80211_NODE_MFP) ||
-        !in->in_ni.ni_port_valid)
-        sta_cmd.mfp = htole32(1);
-
-    const int is_6ghz = IEEE80211_IS_CHAN_6GHZ(in->in_ni.ni_chan);
-    if ((in->in_ni.ni_flags & IEEE80211_NODE_HT) ||
-        (is_6ghz && (in->in_ni.ni_flags &
-            (IEEE80211_NODE_HE | IEEE80211_NODE_EHT)))) {
-        if (iwx_mimo_enabled(sc) && in->in_ni.ni_rx_nss > 1)
-            sta_cmd.mimo = htole32(1);
-        iwx_mld_fill_ampdu_size_and_dens(&in->in_ni, &aggsize, &mpdu_dens);
-        sta_cmd.tx_ampdu_spacing = htole32(mpdu_dens);
-        sta_cmd.tx_ampdu_max_size = htole32(aggsize);
-    }
-
-    if (in->in_ni.ni_flags & IEEE80211_NODE_HE) {
-        sta_cmd.htc_flags = htole32(iwx_mld_get_htc_flags(&in->in_ni));
-        sta_cmd.ack_enabled = htole32((in->in_ni.ni_he_cap_elem.mac_cap_info[2] &
-            IEEE80211_HE_MAC_CAP2_ACK_EN) ? 1 : 0);
-        iwx_mld_fill_pkt_ext(&in->in_ni, &sta_cmd.pkt_ext);
-    }
-
-
-    err = iwx_send_cmd_pdu(sc,
-        IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_STA_CONFIG_CMD),
-        0, cmd_size, &sta_cmd);
+    err = iwx_mld_program_link_sta(sc, in, link_slot, sta_id,
+        (ic->ic_bss->ni_flags & IEEE80211_NODE_MFP) || !ic->ic_bss->ni_port_valid);
     if (!err) {
         old_sta_mask = sc->sc_mld_sta_mask;
         new_sta_mask = old_sta_mask | (1U << sta_id);
@@ -1955,6 +1986,10 @@ iwx_mld_set_key(struct iwx_softc *sc, struct ieee80211_node *ni,
     err = iwx_send_cmd_pdu(sc,
         IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_MLD_SEC_KEY_CMD),
         0, sizeof(cmd), &cmd);
+    if (!remove)
+        XYLog("MLD key install id=%u flags=0x%x staMask=0x%x txPN=%llu rxPN=%llu err=%d\n",
+            k->k_id, flags, sta_mask, (unsigned long long)k->k_tsc,
+            (unsigned long long)le64toh(cmd.u.add.rx_seq), err);
     if (err)
         return err;
     if (!remove && (k->k_flags & IEEE80211_KEY_GROUP))

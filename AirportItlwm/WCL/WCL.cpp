@@ -533,8 +533,12 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
 IOReturn AirportItlwmSkywalkInterface::startWCLScan(const AirportWCL::ScanRequest &scan)
 {
     auto ic = fHalService->get80211Controller();
-    if (scanPending || joinPending)
+    if (scanPending || joinPending) {
+        XYLog("WCL scan busy pending scan=%d join=%d state=%d authorized=%d firstBeacon=%d bgscan=%d\n",
+            scanPending, joinPending, ic->ic_state, portAuthorized, firstBeaconNotified,
+            !!(ic->ic_flags & IEEE80211_F_BGSCAN));
         return kIOReturnBusy;
+    }
     if (!(ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING)))
         return kIOReturnNotReady;
 
@@ -565,8 +569,12 @@ IOReturn AirportItlwmSkywalkInterface::programWCLScan()
         return kIOReturnNotReady;
     if (joinPending || ic->ic_state == IEEE80211_S_AUTH ||
         ic->ic_state == IEEE80211_S_ASSOC ||
-        ((ic->ic_flags & IEEE80211_F_BGSCAN) && !ic->ic_wcl_scan_restart_supported))
+        ((ic->ic_flags & IEEE80211_F_BGSCAN) && !ic->ic_wcl_scan_restart_supported)) {
+        XYLog("WCL scan busy state scan=%d join=%d state=%d authorized=%d firstBeacon=%d bgscan=%d\n",
+            scanPending, joinPending, ic->ic_state, portAuthorized, firstBeaconNotified,
+            !!(ic->ic_flags & IEEE80211_F_BGSCAN));
         return kIOReturnBusy;
+    }
 
     const auto &scan = deferredScan;
     uint8_t mappedChannels[sizeof(ic->ic_wcl_scan_channels)] = {};
@@ -611,7 +619,12 @@ IOReturn AirportItlwmSkywalkInterface::programWCLScan()
     ieee80211_seed_scan_rnr(ic);
     if (ic->ic_state == IEEE80211_S_RUN) {
         ieee80211_begin_cache_bgscan(&ic->ic_if);
-        return (ic->ic_flags & IEEE80211_F_BGSCAN) ? kIOReturnSuccess : kIOReturnBusy;
+        if (ic->ic_flags & IEEE80211_F_BGSCAN)
+            return kIOReturnSuccess;
+        XYLog("WCL scan busy bgscan-start scan=%d join=%d state=%d authorized=%d firstBeacon=%d bgscan=%d\n",
+            scanPending, joinPending, ic->ic_state, portAuthorized, firstBeaconNotified,
+            !!(ic->ic_flags & IEEE80211_F_BGSCAN));
+        return kIOReturnBusy;
     }
     return ic->ic_newstate(ic, IEEE80211_S_SCAN, -1) ? kIOReturnError : kIOReturnSuccess;
 }

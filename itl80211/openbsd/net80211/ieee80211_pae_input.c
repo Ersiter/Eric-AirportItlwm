@@ -578,6 +578,21 @@ ieee80211_reset_key_slot(struct ieee80211com *ic,
     memset(k, 0, sizeof(*k));
 }
 
+static int
+ieee80211_authorize_port(struct ieee80211com *ic, struct ieee80211_node *ni)
+{
+    if (!ni->ni_port_valid && ic->ic_opmode == IEEE80211_M_STA &&
+        ic->ic_authorize_sta && ic->ic_authorize_sta(ic, ni)) {
+        IEEE80211_SEND_MGMT(ic, ni, IEEE80211_FC0_SUBTYPE_DEAUTH,
+            IEEE80211_REASON_AUTH_LEAVE);
+        ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+        return 0;
+    }
+    ni->ni_port_valid = 1;
+    ieee80211_set_link_state(ic, LINK_STATE_UP);
+    return 1;
+}
+
 /*
  * Process Message 3 of the 4-Way Handshake (sent by Authenticator).
  */
@@ -981,8 +996,8 @@ ieee80211_recv_4way_msg3(struct ieee80211com *ic,
             if (deferlink == 0) {
                 DPRINTF(("marking port %s valid\n",
                          ether_sprintf(ni->ni_macaddr)));
-                ni->ni_port_valid = 1;
-                ieee80211_set_link_state(ic, LINK_STATE_UP);
+                if (!ieee80211_authorize_port(ic, ni))
+                    return;
             }
             ni->ni_assoc_fail = 0;
             if (ic->ic_opmode == IEEE80211_M_STA)
@@ -1320,8 +1335,8 @@ ieee80211_recv_rsn_group_msg1(struct ieee80211com *ic,
         {
             DPRINTF(("marking port %s valid\n",
                      ether_sprintf(ni->ni_macaddr)));
-            ni->ni_port_valid = 1;
-            ieee80211_set_link_state(ic, LINK_STATE_UP);
+            if (!ieee80211_authorize_port(ic, ni))
+                return;
             ni->ni_assoc_fail = 0;
         }
     }
@@ -1430,8 +1445,8 @@ ieee80211_recv_wpa_group_msg1(struct ieee80211com *ic,
         {
             DPRINTF(("marking port %s valid\n",
                      ether_sprintf(ni->ni_macaddr)));
-            ni->ni_port_valid = 1;
-            ieee80211_set_link_state(ic, LINK_STATE_UP);
+            if (!ieee80211_authorize_port(ic, ni))
+                return;
             ni->ni_assoc_fail = 0;
         }
     }

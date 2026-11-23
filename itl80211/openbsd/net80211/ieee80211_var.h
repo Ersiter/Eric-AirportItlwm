@@ -517,6 +517,7 @@ struct ieee80211com {
 	int			(*ic_set_key)(struct ieee80211com *,
 				    struct ieee80211_node *,
 				    struct ieee80211_key *);
+    int (*ic_authorize_sta)(struct ieee80211com *, struct ieee80211_node *);
 	void			(*ic_defer_eapol_key_input)(struct ieee80211com *,
 				    mbuf_t, struct ieee80211_node *);
 #ifdef AIRPORT_WCL

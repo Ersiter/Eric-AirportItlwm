@@ -5813,6 +5813,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
     sc->sc_ic.ic_awdl_peer_cache = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_peer_cache : NULL;
 #ifdef AIRPORT_VTD
+    sc->sc_ic.ic_authorize_sta = sc->sc_use_mld_api ? iwx_mld_authorize_sta : NULL;
     sc->sc_ic.ic_defer_eapol_key_input = sc->sc_use_mld_api ?
         iwx_defer_eapol_key_input : NULL;
 #endif
@@ -8794,6 +8795,8 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     data->m = m;
     data->in = in;
     data->type = type;
+    data->tx_key_id = k ? k->k_id : 0xff;
+    data->host_tx_pn = k ? k->k_tsc : 0;
 
     DPRINTFN(3, ("sending data: 嘤嘤嘤 tid=%d qid=%d idx=%d queued=%d len=%d nsegs=%d flags=0x%08x rate_n_flags=0x%08x offload_assist=%u\n",
           tid, ring->qid, ring->cur, ring->queued, totlen, nsegs, le32toh(flags),
