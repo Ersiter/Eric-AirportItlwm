@@ -11287,7 +11287,11 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
                     return EAGAIN;
                 if (sc->sc_aux_roc_pending || sc->sc_aux_roc_running) {
                     err = that->iwx_awdl_listen_abort(sc);
-                    return err ? err : EAGAIN;
+                    if (err)
+                        return err;
+                    if (ic->ic_state != IEEE80211_S_RUN || !ic->ic_bss ||
+                        !ic->ic_bss->ni_port_valid || that->iwx_awdl_standing_channel(sc) != target)
+                        return EAGAIN;
                 }
                 if (offHome) {
                     // iwlmld blocks EMLSR before assigning a second channel context to P2P.
