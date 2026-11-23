@@ -19525,6 +19525,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             case IWX_ADD_STA_KEY:
             case IWX_PHY_CONFIGURATION_CMD:
             case IWX_TX_ANT_CONFIGURATION_CMD:
+            case IWX_BEACON_TEMPLATE_CMD:
             case IWX_ADD_STA:
             case IWX_MAC_CONTEXT_CMD:
             case IWX_REPLY_SF_CFG_CMD:
