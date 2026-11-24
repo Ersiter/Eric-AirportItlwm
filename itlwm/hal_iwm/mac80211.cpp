@@ -3167,6 +3167,38 @@ fail:
     return err;
 }
 
+void ItlIwm::
+iwm_awdl_stop(struct ieee80211com *ic)
+{
+    auto *sc = static_cast<struct iwm_softc *>(IC2IFP(ic)->if_softc);
+    auto *that = container_of(sc, ItlIwm, com);
+    sc->sc_awdl_listener_active = 0;
+    ic->ic_awdl_listen_chan = 0;
+    if ((!sc->sc_awdl_listener_up && !sc->sc_awdl_setting_up) || sc->sc_awdl_stopping)
+        return;
+    sc->sc_awdl_stopping = true;
+    if (!sc->sc_awdl_setting_up)
+        that->iwm_add_task(sc, sc->sc_nswq, &sc->sc_awdl_stop_task);
+}
+
+void ItlIwm::
+iwm_awdl_stop_task(void *arg)
+{
+    auto *sc = static_cast<struct iwm_softc *>(arg);
+    auto *that = container_of(sc, ItlIwm, com);
+    const int generation = sc->sc_generation;
+    if (!sc->sc_awdl_stopping || (sc->sc_flags & (IWM_FLAG_SHUTDOWN | IWM_FLAG_HW_ERR)))
+        return;
+    const int err = that->iwm_awdl_listener_reset(sc);
+    if (generation != sc->sc_generation)
+        return;
+    sc->sc_awdl_stopping = false;
+    if (err)
+        IWM_RESTART(sc, "awdl-stop-failed", err, 0);
+    else
+        sc->sc_awdl_listener_tries = 0;
+}
+
 int ItlIwm::
 iwm_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
 {
@@ -3175,8 +3207,9 @@ iwm_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
     ItlIwm *that = container_of(sc, ItlIwm, com);
     const uint8_t selected = that->iwm_awdl_listener_pick(sc);
 
-    if (sc->sc_flags & (IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN |
-                        IWM_FLAG_SHUTDOWN | IWM_FLAG_HW_ERR | IWM_FLAG_RFKILL))
+    if (sc->sc_awdl_stopping ||
+        (sc->sc_flags & (IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN |
+                         IWM_FLAG_SHUTDOWN | IWM_FLAG_HW_ERR | IWM_FLAG_RFKILL)))
         return EBUSY;
     if (ic->ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN || !selected)
         return EBUSY;
@@ -3189,7 +3222,16 @@ iwm_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             return ic->ic_awdl_listener_code ? ic->ic_awdl_listener_code : ENOTSUP;
         sc->sc_awdl_listener_tries++;
         ic->ic_awdl_listener_tries = sc->sc_awdl_listener_tries;
+        const int generation = sc->sc_generation;
+        sc->sc_awdl_setting_up = true;
         int err = that->iwm_awdl_listener_setup(sc, selected);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        sc->sc_awdl_setting_up = false;
+        if (sc->sc_awdl_stopping) {
+            that->iwm_add_task(sc, sc->sc_nswq, &sc->sc_awdl_stop_task);
+            return err ? err : EBUSY;
+        }
         if (err)
             return err;
     }
@@ -4910,6 +4952,9 @@ iwm_stop(struct _ifnet *ifp)
     iwm_del_task(sc, sc->sc_nswq, &sc->newstate_task);
     iwm_del_task(sc, systq, &sc->ba_task);
     iwm_del_task(sc, systq, &sc->sc_awdl_ba_task);
+    iwm_del_task(sc, sc->sc_nswq, &sc->sc_awdl_stop_task);
+    sc->sc_awdl_stopping = false;
+    sc->sc_awdl_setting_up = false;
     iwm_del_task(sc, systq, &sc->mac_ctxt_task);
     iwm_del_task(sc, systq, &sc->chan_ctxt_task);
     //    KASSERT(sc->task_refs.refs >= 1, "sc->task_refs.refs >= 1");
@@ -6169,6 +6214,7 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
     task_set(&sc->newstate_task, iwm_newstate_task, sc, "newstate_task");
     task_set(&sc->ba_task, iwm_ba_task, sc, "ba_task");
     task_set(&sc->sc_awdl_ba_task, iwm_awdl_ba_task, sc, "awdl_ba_task");
+    task_set(&sc->sc_awdl_stop_task, iwm_awdl_stop_task, sc, "awdl_stop_task");
     task_set(&sc->mac_ctxt_task, iwm_mac_ctxt_task, sc, "mac_ctxt_task");
     task_set(&sc->chan_ctxt_task, iwm_chan_ctxt_task, sc, "chan_ctxt_task");
     
@@ -6196,6 +6242,7 @@ iwm_attach(struct iwm_softc *sc, struct pci_attach_args *pa)
     if (itlAWDLEnabled() && (sc->sc_capaflags & IWM_UCODE_TLV_FLAGS_P2P) &&
         isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DQA_SUPPORT)) {
         ic->ic_awdl_listen = iwm_awdl_listen;
+        ic->ic_awdl_stop = iwm_awdl_stop;
         ic->ic_awdl_tx = iwm_awdl_tx;
         ic->ic_awdl_llw_tx = iwm_awdl_tx;
         ic->ic_awdl_peer_cache = iwm_awdl_peer_cache;

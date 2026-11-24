@@ -724,6 +724,9 @@ struct iwm_softc {
     int sc_awdl_low_latency; /* OS request retained when the listener is rebuilt */
     /* An ADDBA request is answered from a task: its firmware session needs a command that sleeps. */
     struct task sc_awdl_ba_task;
+    struct task sc_awdl_stop_task;
+    bool sc_awdl_stopping;
+    bool sc_awdl_setting_up;
     uint8_t sc_awdl_ba_peer[ETHER_ADDR_LEN];
     uint8_t sc_awdl_ba_reply[40];
     uint16_t sc_awdl_ba_ssn, sc_awdl_ba_win;

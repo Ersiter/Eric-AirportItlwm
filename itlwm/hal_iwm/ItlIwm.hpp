@@ -339,6 +339,8 @@ public:
     int    iwm_awdl_add_sta(struct iwm_softc *);
     int    iwm_awdl_remove_sta(struct iwm_softc *);
     int     iwm_awdl_listener_reset(struct iwm_softc *);
+    static void iwm_awdl_stop(struct ieee80211com *);
+    static void iwm_awdl_stop_task(void *);
     void    iwm_awdl_clear_keys(struct iwm_softc *);
     int    iwm_flush_tx_path(struct iwm_softc *, int);
     void    iwm_led_enable(struct iwm_softc *);
