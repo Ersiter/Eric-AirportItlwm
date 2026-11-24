@@ -1,8 +1,9 @@
 #!/bin/bash
 
-# R16 - Eric wireless diagnostics for Wi-Fi, AirDrop, Instant Hotspot and Bluetooth.
+# R17 - Eric wireless diagnostics for Wi-Fi, AirDrop, Instant Hotspot and Bluetooth.
 export LC_ALL=C COPYFILE_DISABLE=1
 umask 077
+wireless_log_level=debug
 
 if [ "$(/usr/bin/uname -s)" != Darwin ]; then
     echo "Run this collector on the affected Mac."
@@ -21,7 +22,7 @@ case "${1:-}" in
         case "$answer" in
             1) focus=wireless ;;
             2) focus=bluetooth ;;
-            *) echo "Choose 1, 2 or 3."; exit 1 ;;
+            *) echo "Choose 1 or 2."; exit 1 ;;
         esac ;;
     *) echo "Usage: $0 [--bluetooth]"; exit 1 ;;
 esac
@@ -190,10 +191,12 @@ save_snapshot before 5
 bounded kernel_lines > "$work/kernel-before.txt" 2>&1
 
 predicate='process IN {"bluetoothd","wifid","airportd","wifip2pd","sharingd","rapportd","nearbyd","eapolclient","IPConfiguration"} OR (process == "kernel" AND (eventMessage CONTAINS[c] "itlwm" OR eventMessage CONTAINS[c] "awdl" OR eventMessage CONTAINS[c] "btlfx" OR eventMessage CONTAINS[c] "BlueToolFixup" OR eventMessage CONTAINS[c] "IntelBT" OR eventMessage CONTAINS[c] "[advsets]" OR eventMessage CONTAINS[c] "[rpa]" OR eventMessage CONTAINS[c] "[pagein]"))'
+stream_level=info
 if [ "$focus" = bluetooth ]; then
     predicate="$predicate"' OR (process IN {"coreaudiod","Music","FL Studio"} AND (eventMessage CONTAINS[c] "route" OR eventMessage CONTAINS[c] "output" OR eventMessage CONTAINS[c] "device"))'
 elif [ "$focus" = wireless ]; then
-    predicate="$predicate"' OR (process == "mDNSResponder" AND (eventMessage CONTAINS[c] "awdl0" OR eventMessage CONTAINS[c] "_airdrop._tcp"))'
+    stream_level="$wireless_log_level"
+    predicate="$predicate"' OR process == "configd" OR subsystem BEGINSWITH[c] "com.apple.wifi" OR (process == "mDNSResponder" AND (eventMessage CONTAINS[c] "awdl0" OR eventMessage CONTAINS[c] "_airdrop._tcp"))'
 fi
 if [ "$focus" = wireless ]; then
     if [ -z "$wifi_interfaces" ]; then
@@ -201,11 +204,9 @@ if [ "$focus" = wireless ]; then
     fi
     for interface in $wifi_interfaces; do
         capture_log="$work/hotspot-$interface-capture.txt"
-        (
-            ulimit -f 1024
-            exec /usr/sbin/tcpdump -p -ni "$interface" -s 0 -U -c 256 \
-                -w "$work/hotspot-$interface.pcap" '(udp and (port 67 or port 68)) or ether proto 0x888e'
-        ) > "$capture_log" 2>&1 &
+        /usr/sbin/tcpdump -p -ni "$interface" -s 0 -U \
+            -w "$work/hotspot-$interface.pcap" '(udp and (port 67 or port 68)) or ether proto 0x888e' \
+            > "$capture_log" 2>&1 &
         pid=$!
         hotspot_pids+=("$pid")
         for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -219,10 +220,10 @@ if [ "$focus" = wireless ]; then
     done
 fi
 printf 'Start: %s\n' "$(stamp)" >> "$work/attempt.txt"
-(ulimit -f 3072; exec /usr/bin/log stream --level info --style compact --predicate "$predicate") > "$work/live.txt" 2>&1 &
+/usr/bin/log stream --level "$stream_level" --style compact --predicate "$predicate" \
+    > "$work/live.txt" 2>&1 &
 stream_pid=$!
 (
-    ulimit -f 384
     while :; do
         stamp
         for interface in $wifi_interfaces awdl0; do
@@ -237,18 +238,14 @@ timeline_pid=$!
 
 if [ "$focus" = wireless ]; then
     (
-        ulimit -f 128
         while ! /sbin/ifconfig awdl0 >/dev/null 2>&1; do
             /bin/sleep 1
         done
-        exec /usr/sbin/tcpdump -p -ni awdl0 -evl -s 0 -c 256 'udp port 5353'
+        exec /usr/sbin/tcpdump -p -ni awdl0 -evl -s 0 'udp port 5353'
     ) > "$work/awdl-mdns.txt" 2>&1 &
     mdns_pid=$!
-    (
-        ulimit -f 128
-        exec /usr/sbin/tcpdump -ni droptap -l -k ID -c 128 \
-            -Q 'if=awdl0 and dir=in' 'udp dst port 5353'
-    ) > "$work/awdl-mdns-drops.txt" 2>&1 &
+    /usr/sbin/tcpdump -ni droptap -l -k ID -Q 'if=awdl0 and dir=in' 'udp dst port 5353' \
+        > "$work/awdl-mdns-drops.txt" 2>&1 &
     mdns_drop_pid=$!
 fi
 
@@ -266,6 +263,16 @@ while [ "$SECONDS" -lt "$record_end" ]; do
     printf 'Event: %s %s\n' "$(stamp)" "$marker" >> "$work/attempt.txt"
 done
 echo "Recording finished. Saving the final snapshot and ZIP..."
+if /bin/kill -0 "$stream_pid" 2>/dev/null; then
+    printf 'Unified log stream (%s) remained active through the recording window.\n' "$stream_level" >> "$work/attempt.txt"
+else
+    wait "$stream_pid" 2>/dev/null
+    stream_status=$?
+    stream_pid=
+    stream_note="Unified log stream ($stream_level) ended early (exit $stream_status). Partial output retained in live.txt."
+    printf '%s\n' "$stream_note" >> "$work/attempt.txt"
+    printf '%s\n' "$stream_note"
+fi
 stop_recording
 printf 'End: %s\n' "$(stamp)" >> "$work/attempt.txt"
 if /usr/bin/grep -Eq 'SFAutoUnlockErrorDomain Code=204([[:space:]]|$)' "$work/live.txt"; then
@@ -284,7 +291,7 @@ if [ "$focus" = wireless ]; then
             pcap="$work/hotspot-$interface.pcap"
             echo "[$interface]"
             if [ -s "$pcap" ]; then
-                bounded /usr/sbin/tcpdump -tttt -nnevv -r "$pcap" > "$work/hotspot-$interface-decoded.txt" 2>&1
+                /usr/sbin/tcpdump -tttt -nnevv -r "$pcap" > "$work/hotspot-$interface-decoded.txt" 2>&1
                 /usr/bin/awk '/^[0-9][0-9][0-9][0-9]-/ { n++ } END { print n+0, "packets decoded from PCAP" }' \
                     "$work/hotspot-$interface-decoded.txt"
             else
@@ -383,19 +390,41 @@ PERL
     fi
 fi
 
+split_for_upload() {
+    local source="$1" name="${1##*/}" chunk part
+    # Wrap each piece as a standard ZIP so issue attachments accept every part.
+    /usr/bin/split -b 23000000 -a 3 "$source" "$work/$name.chunk-" || return 1
+    for chunk in "$work/$name".chunk-*; do
+        part="$work/${name%.zip}-part-${chunk##*-}.zip"
+        /usr/bin/zip -q -0 -X -j "$part" "$chunk" || return 1
+        [ "$(/usr/bin/stat -f %z "$part")" -lt 24000000 ] || return 1
+        /usr/bin/unzip -tq "$part" >/dev/null || return 1
+        if [ -n "${SUDO_UID:-}" ]; then
+            /usr/sbin/chown "$SUDO_UID:${SUDO_GID:-0}" "$part" || return 1
+        fi
+    done
+    for part in "$work/${name%.zip}"-part-*.zip; do
+        /bin/mv -- "$part" "$base/" || return 1
+        printf 'Send privately: %s\n' "$base/${part##*/}"
+    done
+}
+
 archive="$base/EricWirelessDiagnostics-$boot_build-$(/bin/date +%Y%m%d-%H%M%S)-${work##*.}.zip"
 if ! /usr/bin/zip -q -9 -X -j "$archive" "$work"/*; then
     echo "Archive could not be written."
     exit 1
 fi
 bytes="$(/usr/bin/stat -f %z "$archive")"
-if [ "$bytes" -ge 24000000 ]; then
-    /bin/rm -f -- "$archive"
-    echo "Diagnostics exceeded the 24 MB attachment budget."
-    exit 1
-fi
 /bin/chmod 600 "$archive"
 if [ -n "${SUDO_UID:-}" ]; then
     /usr/sbin/chown "$SUDO_UID:${SUDO_GID:-0}" "$archive"
+fi
+if [ "$bytes" -ge 24000000 ]; then
+    if split_for_upload "$archive"; then
+        /bin/rm -f -- "$archive"
+        echo "Send every ZIP part together."
+        exit 0
+    fi
+    echo "Could not create all upload parts. The complete ZIP is saved below."
 fi
 printf 'Send privately: %s (%s bytes)\n' "$archive" "$bytes"

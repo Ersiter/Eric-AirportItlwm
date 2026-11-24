@@ -49,6 +49,15 @@ jobs:
           mkdir -p logs artifacts
           xcodebuild -version > logs/toolchain.txt
           git rev-parse HEAD > logs/source-commit.txt
+          collector="$RUNNER_TEMP/Collect-EricWirelessDiagnostics.command"
+          collector_level=debug
+          if [[ "$CONFIGURATION" == Release ]]; then
+            collector_level=info
+          fi
+          sed "s/^wireless_log_level=debug$/wireless_log_level=$collector_level/" \
+            scripts/Collect-EricWirelessDiagnostics.command > "$collector"
+          grep -qx "wireless_log_level=$collector_level" "$collector"
+          chmod 755 "$collector"
           for variant in Sonoma14.0 Sonoma14.4 Sequoia-15.2-15.3 Sequoia-15.4-and-later Tahoe-26.0-26.3 Tahoe-26.4-and-later GoldenGate; do
             platform="${variant%%-*}"
             flags=()
@@ -70,7 +79,7 @@ jobs:
             product="$PWD/build/$variant/products/$CONFIGURATION/$platform/AirportItlwm.kext"
             dwarfdump --uuid "$product/Contents/MacOS/AirportItlwm" > "artifacts/UUID-$variant.txt"
             ditto -c -k --keepParent "$product" "artifacts/AirportItlwm-$variant.zip"
-            zip -q -j "artifacts/AirportItlwm-$variant.zip" scripts/Collect-EricWirelessDiagnostics.command
+            zip -q -j "artifacts/AirportItlwm-$variant.zip" "$collector"
           done
           cp logs/source-commit.txt artifacts/
           cp LICENSE iwlwifi-firmware-license BE200.md artifacts/
