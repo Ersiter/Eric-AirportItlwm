@@ -2963,13 +2963,19 @@ ieee80211_recv_probe_resp_bss(struct ieee80211com *ic, mbuf_t m,
             ni->ni_supported_rsnakms |= wpa.rsn_akms;
         }
         
-        /* Prefer RSN, unless WCL requested WPA for this BSSID. */
+        /* Prefer RSN when it satisfies the directed join. WPA is an explicit option. */
         bool wpa_join = false;
 #ifdef AIRPORT_WCL
-        wpa_join = ic->ic_wcl_join_requested && (ic->ic_flags & IEEE80211_F_RSNON) &&
-            ic->ic_rsnprotos == IEEE80211_PROTO_WPA &&
-            (ni->ni_supported_rsnprotos & IEEE80211_PROTO_WPA) &&
-            IEEE80211_ADDR_EQ(wh->i_addr3, ic->ic_des_bssid);
+        if (ic->ic_wcl_join_requested && (ic->ic_flags & IEEE80211_F_RSNON) &&
+            (ic->ic_rsnprotos & ni->ni_supported_rsnprotos & IEEE80211_PROTO_WPA) &&
+            IEEE80211_ADDR_EQ(wh->i_addr3, ic->ic_des_bssid)) {
+            const bool rsn_match = (ic->ic_rsnprotos &
+                ni->ni_supported_rsnprotos & IEEE80211_PROTO_RSN) &&
+                (rsn.rsn_akms & ic->ic_rsnakms) &&
+                (rsn.rsn_ciphers & ic->ic_rsnciphers);
+            wpa_join = !rsn_match && (wpa.rsn_akms & ic->ic_rsnakms) &&
+                (wpa.rsn_ciphers & ic->ic_rsnciphers);
+        }
 #endif
         if (!wpa_join && rsnie != NULL &&
             (ni->ni_supported_rsnprotos & IEEE80211_PROTO_RSN) &&

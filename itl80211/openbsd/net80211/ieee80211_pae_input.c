@@ -1437,29 +1437,31 @@ ieee80211_recv_wpa_group_msg1(struct ieee80211com *ic,
                 return;
         }
     }
+    /* Reply before opening the port. The AP is still waiting for message 2. */
+    uint64_t previous_replaycnt = ni->ni_replaycnt;
+    ni->ni_replaycnt = BE_READ_8(key->replaycnt);
+    if (ieee80211_send_group_msg2(ic, ni, k) != 0) {
+        ni->ni_replaycnt = previous_replaycnt;
+        return;
+    }
     if (info & EAPOL_KEY_SECURE) {
 #ifndef IEEE80211_STA_ONLY
         if (ic->ic_opmode != IEEE80211_M_IBSS ||
             ++ni->ni_key_count == 2)
 #endif
         {
-            DPRINTF(("marking port %s valid\n",
-                     ether_sprintf(ni->ni_macaddr)));
             if (!ieee80211_authorize_port(ic, ni))
                 return;
             ni->ni_assoc_fail = 0;
+            if (ic->ic_opmode == IEEE80211_M_STA)
+                ic->ic_rsngroupcipher = ni->ni_rsngroupcipher;
         }
     }
-    /* update the last seen value of the key replay counter field */
-    ni->ni_replaycnt = BE_READ_8(key->replaycnt);
-    
+
     if (ic->ic_if.if_flags & IFF_DEBUG)
         XYLog("%s: received msg %d/%d of the %s handshake from %s\n",
               ic->ic_if.if_xname, 1, 2, "group key",
               ether_sprintf(ni->ni_macaddr));
-    
-    /* send message 2 to authenticator */
-    (void)ieee80211_send_group_msg2(ic, ni, k);
 }
 
 #ifndef IEEE80211_STA_ONLY

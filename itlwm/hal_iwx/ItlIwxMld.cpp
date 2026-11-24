@@ -2137,8 +2137,11 @@ iwx_mld_remove_sta_keys(struct iwx_softc *sc, struct iwx_node *in)
     for (int i = 0; i < IEEE80211_GROUP_NKID; i++) {
         key = &ic->ic_nw_keys[i];
         if (key->k_cipher != IEEE80211_CIPHER_CCMP &&
-            !ieee80211_is_bip_cipher(key->k_cipher))
+            !ieee80211_is_bip_cipher(key->k_cipher)) {
+            if (key->k_flags & IEEE80211_KEY_SWCRYPTO)
+                ieee80211_delete_key(ic, &in->in_ni, key);
             continue;
+        }
         err = iwx_mld_set_key(sc, &in->in_ni, key, 1);
         if (err) {
             iwx_mld_log_failure(sc, "deauth", "group-key-remove",
@@ -2175,6 +2178,8 @@ iwx_mld_remove_sta_keys(struct iwx_softc *sc, struct iwx_node *in)
             return err;
         }
         explicit_bzero(key, sizeof(*key));
+    } else if (key->k_flags & IEEE80211_KEY_SWCRYPTO) {
+        ieee80211_delete_key(ic, &in->in_ni, key);
     }
     return 0;
 }
