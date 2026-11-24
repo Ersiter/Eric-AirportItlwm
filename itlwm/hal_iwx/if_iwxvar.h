@@ -948,6 +948,7 @@ struct iwx_softc {
 	uint32_t sc_aux_roc_started;
 	uint8_t sc_listener_up;  /* listener resources are allocated */
 	uint8_t sc_listener_setting_up;
+	bool sc_listener_stop_after_setup;
 	uint8_t sc_listener_refitting;
 	bool sc_listener_go;
 	uint8_t sc_awdl_discovery_stage, sc_awdl_discovery_phy;

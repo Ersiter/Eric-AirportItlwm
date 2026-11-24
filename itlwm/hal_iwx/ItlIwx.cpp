@@ -11118,7 +11118,7 @@ iwx_bgscan(struct ieee80211com *ic)
     ItlIwx *that = container_of(sc, ItlIwx, com);
     int err;
 
-    if (sc->sc_flags & IWX_FLAG_SCAN_ABORTING) {
+    if ((sc->sc_flags & IWX_FLAG_SCAN_ABORTING) || sc->sc_listener_setting_up) {
         ic->ic_flags &= ~IEEE80211_F_DISABLE_BG_AUTO_CONNECT;
         return EBUSY;
     }
@@ -11435,8 +11435,8 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             if (sc->sc_use_mld_api) {
                 target = that->iwx_awdl_standing_channel(sc);
                 const bool offHome = target != iwx_awdl_go_home_channel(sc);
-                // Keep a foreign-channel GO from holding firmware resources across an infrastructure join.
-                if (!target || offHome || iwx_uptime_us() < sc->sc_listener_retry_us)
+                if (!target || (offHome && chan != target) ||
+                    iwx_uptime_us() < sc->sc_listener_retry_us)
                     goto roc;
                 sc->sc_listener_retry_us = 0;
                 if (!(sc->sc_flags & IWX_FLAG_STA_ACTIVE) || !ic->ic_bss->ni_port_valid ||
@@ -11480,6 +11480,18 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
                 if (generation != sc->sc_generation)
                     return ENXIO;
                 sc->sc_listener_setting_up = 0;
+                if (sc->sc_listener_stop_after_setup) {
+                    sc->sc_listener_stop_after_setup = false;
+                    that->iwx_awdl_stop(ic);
+                    if (generation != sc->sc_generation)
+                        return ENXIO;
+                }
+                if (sc->ns_nstate != IEEE80211_S_RUN) {
+                    that->iwx_add_task(sc, sc->sc_nswq, &sc->newstate_task);
+                    return EAGAIN;
+                }
+                if (!err && !sc->sc_listener_up)
+                    return EAGAIN;
             } else {
                 err = that->iwx_legacy_listener_setup(sc);
             }
@@ -15335,6 +15347,10 @@ iwx_awdl_stop(struct ieee80211com *ic)
             }, that, sc);
         return;
     }
+    if (sc->sc_listener_setting_up) {
+        sc->sc_listener_stop_after_setup = true;
+        return;
+    }
     const int generation = sc->sc_generation;
     const int cancelError = that->iwx_awdl_listen_abort(sc);
     if (generation != sc->sc_generation)
@@ -17120,6 +17136,9 @@ iwx_newstate_task(void *psc)
             }, psc);
         return;
     }
+    // The setup owner requeues the latest infrastructure transition after publishing or rolling back.
+    if (sc->sc_listener_setting_up)
+        return;
     struct ieee80211com *ic = &sc->sc_ic;
     enum ieee80211_state nstate = sc->ns_nstate;
     enum ieee80211_state ostate = ic->ic_state;
@@ -18785,6 +18804,7 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_awdl_discovery_deadline_us = 0;
     sc->sc_awdl_discovery_qid = -1;
     sc->sc_listener_setting_up = 0;
+    sc->sc_listener_stop_after_setup = false;
     sc->sc_mld_link_updates = 0;
     sc->sc_ic.ic_awdl_tx_qos = 0;
     sc->sc_ic.ic_awdl_llw_qos = 0;
