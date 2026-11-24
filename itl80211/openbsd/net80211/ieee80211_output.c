@@ -642,17 +642,13 @@ fallback:
         struct ieee80211_tx_ba *ba;
         tid = ieee80211_classify(ic, m);
         ba = &ni->ni_tx_ba[tid];
-        /* We use QoS data frames for aggregation only. */
-        if (ba->ba_state != IEEE80211_BA_AGREED) {
-            hdrlen = sizeof(struct ieee80211_frame);
-            addqos = 0;
-            if ((ic->ic_caps & IEEE80211_C_TX_AMPDU_SETUP_IN_RS) == 0 &&
-                ieee80211_can_use_ampdu(ic, ni))
-                ieee80211_node_trigger_addba_req(ni, tid);
-        } else {
-            hdrlen = sizeof(struct ieee80211_qosframe);
-            addqos = 1;
-        }
+        if (ba->ba_state != IEEE80211_BA_AGREED &&
+            (ic->ic_caps & IEEE80211_C_TX_AMPDU_SETUP_IN_RS) == 0 &&
+            ieee80211_can_use_ampdu(ic, ni))
+            ieee80211_node_trigger_addba_req(ni, tid);
+        /* MLD firmware has data TID queues before any Block Ack agreement. */
+        addqos = ic->ic_tx_qos_without_ba || ba->ba_state == IEEE80211_BA_AGREED;
+        hdrlen = addqos ? sizeof(struct ieee80211_qosframe) : sizeof(struct ieee80211_frame);
     } else {
         hdrlen = sizeof(struct ieee80211_frame);
         addqos = 0;

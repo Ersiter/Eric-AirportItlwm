@@ -5814,6 +5814,7 @@ iwx_run_init_mvm_ucode(struct iwx_softc *sc, int readnvm)
 
     sc->sc_use_mld_api = sc->sc_device_family >= IWX_DEVICE_FAMILY_BZ &&
         isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_MLD_API_SUPPORT);
+    sc->sc_ic.ic_tx_qos_without_ba = sc->sc_use_mld_api;
     sc->sc_ic.ic_awdl_listen_home = sc->sc_use_mld_api;
     sc->sc_ic.ic_awdl_stop = sc->sc_use_mld_api ? iwx_awdl_stop : NULL;
     sc->sc_ic.ic_awdl_rx_ba = sc->sc_use_mld_api || iwx_awdl_legacy_ba_enabled() ? iwx_awdl_rx_ba : NULL;
