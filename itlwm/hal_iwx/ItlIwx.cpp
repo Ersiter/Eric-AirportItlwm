@@ -13591,22 +13591,19 @@ iwx_awdl_discovery_setup(struct iwx_softc *sc)
     sc->sc_awdl_discovery_phy = phy;
     const int generation = sc->sc_generation;
     int err;
-    if (!sc->sc_p2p_mac) {
-        err = iwx_mld_p2p_mac_cmd(sc, IWX_FW_CTXT_ACTION_ADD, false);
+    // The foreign PHY must also receive group frames for AWDL's shared BSSID.
+    const bool wantPromisc = phy == sc->sc_listener_phy.id;
+    if (!sc->sc_p2p_mac || sc->sc_p2p_addr_gen != sc->sc_ic.ic_awdl_addr_gen ||
+        sc->sc_p2p_promisc != wantPromisc) {
+        err = iwx_mld_p2p_mac_cmd(sc, sc->sc_p2p_mac ? IWX_FW_CTXT_ACTION_MODIFY :
+            IWX_FW_CTXT_ACTION_ADD, wantPromisc);
         if (generation != sc->sc_generation)
             return ENXIO;
         if (err)
             return err;
         sc->sc_p2p_mac = 1;
         sc->sc_p2p_addr_gen = sc->sc_ic.ic_awdl_addr_gen;
-        sc->sc_p2p_promisc = 0;
-    } else if (sc->sc_p2p_addr_gen != sc->sc_ic.ic_awdl_addr_gen) {
-        err = iwx_mld_p2p_mac_cmd(sc, IWX_FW_CTXT_ACTION_MODIFY, sc->sc_p2p_promisc);
-        if (generation != sc->sc_generation)
-            return ENXIO;
-        if (err)
-            return err;
-        sc->sc_p2p_addr_gen = sc->sc_ic.ic_awdl_addr_gen;
+        sc->sc_p2p_promisc = wantPromisc;
     }
 
     struct iwx_mld_link_config_cmd link = {};
