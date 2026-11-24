@@ -7353,7 +7353,8 @@ iwx_record_assoc_tx(struct iwx_softc *sc, const struct iwx_tx_ring *ring,
         ring->cmd[slot].data + sizeof(struct iwx_tx_cmd_gen3));
     const uint8_t subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
     if (subtype != IEEE80211_FC0_SUBTYPE_ASSOC_REQ &&
-        subtype != IEEE80211_FC0_SUBTYPE_REASSOC_REQ)
+        subtype != IEEE80211_FC0_SUBTYPE_REASSOC_REQ &&
+        subtype != IEEE80211_FC0_SUBTYPE_AUTH)
         return;
 
     const unsigned body_len = mbuf_pkthdr_len(frame.m);
@@ -13399,6 +13400,9 @@ iwx_mld_p2p_mac_cmd(struct iwx_softc *sc, uint32_t action, bool promisc)
     memset(&cmd, 0, sizeof(cmd));
     cmd.id_and_color = htole32(IWX_P2P_MAC_ID);
     cmd.action = htole32(action);
+    if (action == IWX_FW_CTXT_ACTION_REMOVE)
+        return iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_MAC_CONFIG_CMD),
+            0, sizeof(cmd), &cmd);
     cmd.mac_type = htole32(IWX_FW_MAC_TYPE_P2P_DEVICE);
     /* Peers send unicast AWDL frames to awdl0's address. */
     if (ic->ic_awdl_addr_gen) {
@@ -14984,6 +14988,57 @@ fail:
     sc->sc_aux_roc_sta_code = err;
     iwx_aux_roc_sync_counters(sc);
     return err;
+}
+
+int ItlIwx::
+iwx_mld_p2p_stop(struct iwx_softc *sc)
+{
+    if (sc->sc_listener_up)
+        return 0;
+
+    // AUTH has stopped ROC and any GO before releasing its cached firmware resources.
+    const int generation = sc->sc_generation;
+    const int qid = sc->sc_aux_roc_qid;
+    if (sc->sc_p2p_queue && qid >= 0) {
+        int err = iwx_flush_sta_tids(sc, IWX_AUX_STA_ID, 0xffff);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        if (sc->txq[qid].queued)
+            return EBUSY;
+        err = iwx_mld_queue_cmd(sc, 1U << IWX_AUX_STA_ID, IWX_MAX_TID_COUNT,
+            1, 0, 0, 0, nullptr, nullptr);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        iwx_free_tx_ring(sc, &sc->txq[qid]);
+        sc->sc_aux_roc_qid = sc->sc_ic.ic_awdl_roc_qid = -1;
+        sc->sc_p2p_queue = 0;
+    }
+    if (sc->sc_aux_roc_sta && isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_REDUCED_SCAN_CONFIG)) {
+        struct iwx_mld_mvm_remove_sta_cmd cmd = {};
+        cmd.sta_id = htole32(IWX_AUX_STA_ID);
+        const int err = iwx_send_cmd_pdu(sc, IWX_WIDE_ID(IWX_MAC_CONF_GROUP,
+            IWX_MLD_STA_REMOVE_CMD), 0, sizeof(cmd), &cmd);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        sc->sc_aux_roc_sta = 0;
+    }
+    if (sc->sc_p2p_mac) {
+        const int err = iwx_mld_p2p_mac_cmd(sc, IWX_FW_CTXT_ACTION_REMOVE, false);
+        if (generation != sc->sc_generation)
+            return ENXIO;
+        if (err)
+            return err;
+        sc->sc_p2p_mac = sc->sc_p2p_promisc = 0;
+        sc->sc_p2p_addr_gen = 0;
+    }
+    sc->sc_p2p_roc_chan = 0;
+    return 0;
 }
 
 /* iwl_mld_start_roc() and iwl_mld_cancel_roc(), for the P2P discovery activity. */

@@ -2345,6 +2345,9 @@ iwx_mld_auth(struct iwx_softc *sc)
     err = iwx_awdl_go_stop(sc, false);
     if (err)
         return err;
+    err = iwx_mld_p2p_stop(sc);
+    if (err)
+        return err;
     iwx_mld_limit_link_resources(sc);
     iwx_awdl_listener_refit(sc);
     /* Every context programmed below derives its centre from the BSS channel. */
