@@ -11286,8 +11286,8 @@ iwx_awdl_standing_channel(struct iwx_softc *sc)
             bestSlots = slots;
         }
     }
-    if (best || usableHome)
-        return best ? best : usableHome;
+    if (usableHome || best)
+        return usableHome ? usableHome : best;
     // Listen on a permitted social channel before the first peer advertises a schedule.
     return discovery;
 }
@@ -11369,8 +11369,8 @@ iwx_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t dwell_tu)
             if (sc->sc_use_mld_api) {
                 target = that->iwx_awdl_standing_channel(sc);
                 const bool offHome = target != iwx_awdl_go_home_channel(sc);
-                if (!target || (offHome && chan != target) ||
-                    iwx_uptime_us() < sc->sc_listener_retry_us)
+                // Keep a foreign-channel GO from holding firmware resources across an infrastructure join.
+                if (!target || offHome || iwx_uptime_us() < sc->sc_listener_retry_us)
                     goto roc;
                 sc->sc_listener_retry_us = 0;
                 if (!(sc->sc_flags & IWX_FLAG_STA_ACTIVE) || !ic->ic_bss->ni_port_valid ||
