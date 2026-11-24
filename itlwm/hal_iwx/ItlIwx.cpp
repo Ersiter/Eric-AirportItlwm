@@ -11303,8 +11303,8 @@ iwx_awdl_dump(struct ieee80211com *ic, char *buf, size_t len)
         { "peer", sc->sc_awdl_peer_qid }, { "peerllw", sc->sc_awdl_peer_llw_qid },
         { "peermgmt", sc->sc_awdl_peer_mgmt_qid },
     };
-    size_t used = snprintf(buf, len, "up=%d chan=%u refit=%d retry=%d peer_added=%d", sc->sc_listener_up,
-        sc->sc_listener_chan, sc->sc_listener_refitting, sc->sc_listener_retry_us != 0, sc->sc_awdl_peer_added);
+    size_t used = snprintf(buf, len, "up=%d chan=%u refit=%d retry=%d peer_added=%d roc_promisc=%d",
+        sc->sc_listener_up, sc->sc_listener_chan, sc->sc_listener_refitting, sc->sc_listener_retry_us != 0, sc->sc_awdl_peer_added, sc->sc_p2p_promisc);
     for (unsigned i = 0; i < nitems(queues) && used < len; i++) {
         const int qid = queues[i].qid;
         if (qid <= 0 || qid >= (int)nitems(sc->txq)) {
@@ -14870,7 +14870,7 @@ iwx_mld_p2p_setup(struct iwx_softc *sc)
     uint32_t stage = 0;
     int err = 0;
 
-    int wantPromisc = iwx_awdl_promisc_enabled() && ic->ic_awdl_want_data;
+    const bool wantPromisc = ic->ic_awdl_addr_gen && ic->ic_awdl_want_data;
     if (!sc->sc_p2p_mac ||
         (sc->sc_p2p_addr_gen != ic->ic_awdl_addr_gen && ic->ic_awdl_addr_gen) ||
         sc->sc_p2p_promisc != wantPromisc) {
