@@ -4320,7 +4320,7 @@ ieee80211_recv_disassoc(struct ieee80211com *ic, mbuf_t m,
                 IEEE80211_ADDR_EQ(wh->i_addr3, ic->ic_bss->ni_bssid)) {
                 ic->ic_deauth_reason = reason;
                 (*ic->ic_event_handler)(ic, IEEE80211_EVT_STA_DEAUTH, NULL);
-                ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+                ieee80211_new_state(ic, IEEE80211_S_SCAN, IEEE80211_FC0_SUBTYPE_DISASSOC);
                 break;
             }
 #endif

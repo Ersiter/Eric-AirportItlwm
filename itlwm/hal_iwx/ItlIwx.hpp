@@ -499,7 +499,7 @@ public:
     int    iwx_auth(struct iwx_softc *);
     int    iwx_deauth(struct iwx_softc *);
     int    iwx_run(struct iwx_softc *);
-    int    iwx_run_stop(struct iwx_softc *);
+    int    iwx_run_stop(struct iwx_softc *, bool peerDisconnected);
     static struct ieee80211_node *iwx_node_alloc(struct ieee80211com *);
     static int    iwx_set_key(struct ieee80211com *, struct ieee80211_node *,
            struct ieee80211_key *);

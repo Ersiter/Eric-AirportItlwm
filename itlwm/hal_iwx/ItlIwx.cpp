@@ -16707,7 +16707,7 @@ iwx_run(struct iwx_softc *sc)
 }
 
 int ItlIwx::
-iwx_run_stop(struct iwx_softc *sc)
+iwx_run_stop(struct iwx_softc *sc, bool peerDisconnected)
 {
     struct ieee80211com *ic = &sc->sc_ic;
     struct ieee80211_node *bss = ic->ic_bss;
@@ -16719,7 +16719,7 @@ iwx_run_stop(struct iwx_softc *sc)
      * TX_MGMT_ONLY holds data frames back until the transition completes, and
      * ieee80211_newstate() clears it there.
      */
-    if (bss != NULL && (ic->ic_flags & IEEE80211_F_RSNON) &&
+    if (!peerDisconnected && bss != NULL && (ic->ic_flags & IEEE80211_F_RSNON) &&
         (bss->ni_flags & IEEE80211_NODE_MFP)) {
         ic->ic_xflags |= IEEE80211_F_TX_MGMT_ONLY;
         if (IEEE80211_SEND_MGMT(ic, bss, IEEE80211_FC0_SUBTYPE_DEAUTH,
@@ -17103,7 +17103,8 @@ iwx_newstate_task(void *psc)
                     if (err)
                         goto out;
                 }
-                err = that->iwx_run_stop(sc);
+                err = that->iwx_run_stop(sc, nstate == IEEE80211_S_SCAN &&
+                    arg == IEEE80211_FC0_SUBTYPE_DISASSOC);
                 if (err)
                     goto out;
                 /* FALLTHROUGH */
