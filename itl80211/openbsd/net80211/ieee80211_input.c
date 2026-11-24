@@ -4244,7 +4244,7 @@ ieee80211_recv_deauth(struct ieee80211com *ic, mbuf_t m,
 #ifdef AIRPORT_WCL
             // A peer disconnect ends WCL's join; WCL selects the next BSS.
             if (!ic->ic_wcl_join_requested) {
-                ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+                ieee80211_new_state(ic, IEEE80211_S_SCAN, IEEE80211_FC0_SUBTYPE_DEAUTH);
                 break;
             }
 #endif

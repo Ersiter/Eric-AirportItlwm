@@ -17103,8 +17103,8 @@ iwx_newstate_task(void *psc)
                     if (err)
                         goto out;
                 }
-                err = that->iwx_run_stop(sc, nstate == IEEE80211_S_SCAN &&
-                    arg == IEEE80211_FC0_SUBTYPE_DISASSOC);
+                err = that->iwx_run_stop(sc, arg == IEEE80211_FC0_SUBTYPE_DISASSOC ||
+                    arg == IEEE80211_FC0_SUBTYPE_DEAUTH);
                 if (err)
                     goto out;
                 /* FALLTHROUGH */
