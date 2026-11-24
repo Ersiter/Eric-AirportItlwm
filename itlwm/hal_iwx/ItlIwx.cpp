@@ -13597,7 +13597,7 @@ iwx_awdl_discovery_window(struct iwx_softc *sc, uint32_t dwell)
 }
 
 int ItlIwx::
-iwx_awdl_discovery_stop(struct iwx_softc *sc)
+iwx_awdl_discovery_cancel(struct iwx_softc *sc)
 {
     const int generation = sc->sc_generation;
     int err;
@@ -13615,6 +13615,16 @@ iwx_awdl_discovery_stop(struct iwx_softc *sc)
             return err;
         sc->sc_awdl_discovery_requested = false;
     }
+    return 0;
+}
+
+int ItlIwx::
+iwx_awdl_discovery_stop(struct iwx_softc *sc)
+{
+    const int generation = sc->sc_generation;
+    int err = iwx_awdl_discovery_cancel(sc);
+    if (err)
+        return err;
     if (sc->sc_awdl_discovery_stage == 4) {
         int qid = sc->sc_awdl_discovery_qid;
         if (sc->txq[qid].queued) {
@@ -15001,7 +15011,7 @@ iwx_p2p_session_cmd(struct iwx_softc *sc, uint32_t action, uint32_t duration_tu)
         .duration_tu = htole32(duration_tu),
     };
     return iwx_send_cmd_pdu(sc, iwx_cmd_id(IWX_SESSION_PROTECTION_CMD, IWX_MAC_CONF_GROUP, 0),
-                     IWX_CMD_ASYNC, sizeof(cmd), &cmd);
+                     action == IWX_FW_CTXT_ACTION_ADD ? IWX_CMD_ASYNC : 0, sizeof(cmd), &cmd);
 }
 
 int ItlIwx::
@@ -15298,7 +15308,7 @@ iwx_awdl_listen_abort(struct iwx_softc *sc)
         sc->sc_awdl_listen_active = 0;
         sc->sc_aux_roc_running = 0;
         sc->sc_ic.ic_awdl_listen_chan = 0;
-        return 0;
+        return sc->sc_listener_go ? iwx_awdl_discovery_cancel(sc) : 0;
     }
     if (iwx_p2p_listen_enabled()) {
         if (sc->sc_mld_roc_canceling)
@@ -16393,11 +16403,16 @@ iwx_auth(struct iwx_softc *sc)
     if (sc->sc_use_mld_api)
         return iwx_mld_auth(sc);
     XYLog("%s\n", __FUNCTION__);
+    const int generation = sc->sc_generation;
+    int err = iwx_awdl_listen_abort(sc);
+    if (generation != sc->sc_generation)
+        return ENXIO;
+    if (err)
+        return err;
     iwx_awdl_listener_refit(sc);
     struct ieee80211com *ic = &sc->sc_ic;
     struct iwx_node *in = (struct iwx_node *)ic->ic_bss;
     uint32_t duration;
-    int generation = sc->sc_generation, err = 0;
     
     splassert(IPL_NET);
     

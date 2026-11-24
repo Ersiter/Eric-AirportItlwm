@@ -2872,7 +2872,7 @@ iwm_awdl_ba_task(void *arg)
     splx(s);
 }
 
-void ItlIwm::
+int ItlIwm::
 iwm_awdl_listener_reset(struct iwm_softc *sc)
 {
     struct ieee80211com *ic = &sc->sc_ic;
@@ -2943,11 +2943,11 @@ iwm_awdl_listener_reset(struct iwm_softc *sc)
             if (!isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_DYNAMIC_QUOTA)) {
                 err = iwm_power_update_device(sc);
                 if (generation != sc->sc_generation)
-                    return;
+                    return ENXIO;
                 if (!err && ic->ic_state == IEEE80211_S_RUN)
                     err = iwm_power_mac_update_mode(sc, (struct iwm_node *)ic->ic_bss);
                 if (generation != sc->sc_generation)
-                    return;
+                    return ENXIO;
                 if (err && !cleanup_err)
                     cleanup_err = err;
             }
@@ -2985,7 +2985,7 @@ iwm_awdl_listener_reset(struct iwm_softc *sc)
         sc->sc_awdl_mgmt_qid = -1;
         sc->sc_awdl_data_qid = -1;
         sc->sc_awdl_generation = 0;
-        return;
+        return 0;
     }
 
     const bool resources_remain = sc->sc_awdl_sta_up ||
@@ -2995,7 +2995,7 @@ iwm_awdl_listener_reset(struct iwm_softc *sc)
     if (resources_remain) {
         ic->ic_awdl_listener_stage = 6;
         ic->ic_awdl_listener_code = cleanup_err ? cleanup_err : EBUSY;
-        return;
+        return ic->ic_awdl_listener_code;
     }
 
     sc->sc_awdl_generation = 0;
@@ -3009,6 +3009,7 @@ iwm_awdl_listener_reset(struct iwm_softc *sc)
         ic->ic_awdl_listener_stage = 7;
         ic->ic_awdl_listener_code = cleanup_err;
     }
+    return generation == sc->sc_generation ? cleanup_err : ENXIO;
 }
 
 
@@ -3230,6 +3231,7 @@ iwm_awdl_tx(struct ieee80211com *ic, uint8_t chan, const uint8_t *frame, size_t 
     int err;
 
     if (ic->ic_state != IEEE80211_S_RUN || sc->ns_nstate != IEEE80211_S_RUN ||
+        (sc->sc_flags & (IWM_FLAG_SCANNING | IWM_FLAG_BGSCAN)) ||
         !sc->sc_awdl_listener_up || !sc->sc_awdl_listener_active || !in ||
         chan != sc->sc_awdl_listener_chan || !frame ||
         len < sizeof(struct ieee80211_frame) || len > MCLBYTES) {
@@ -3742,8 +3744,11 @@ iwm_run_stop(struct iwm_softc *sc)
 
     if (sc->sc_awdl_listener_up || sc->sc_awdl_context_up ||
         sc->sc_awdl_mac_up || sc->sc_awdl_binding_up || sc->sc_awdl_sta_up ||
-        sc->sc_awdl_mgmt_qid >= 0 || sc->sc_awdl_data_qid >= 0)
-        iwm_awdl_listener_reset(sc);
+        sc->sc_awdl_mgmt_qid >= 0 || sc->sc_awdl_data_qid >= 0) {
+        err = iwm_awdl_listener_reset(sc);
+        if (err)
+            return err;
+    }
     sc->sc_awdl_listener_tries = 0;
     
     /*
