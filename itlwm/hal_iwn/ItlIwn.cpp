@@ -1962,6 +1962,19 @@ iwn_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
     ItlIwn *that = container_of(sc, ItlIwn, com);
     int error;
 
+#ifdef AIRPORT_WCL
+    if (nstate == IEEE80211_S_INIT) {
+        sc->pan_infra_pending = false;
+    } else if (nstate != IEEE80211_S_RUN && ic->ic_awdl_stop &&
+        (sc->pan_configured || sc->pan_task_pending || sc->pan_infra_pending)) {
+        // RX notifications can enter here. Resume from the PAN worker after firmware deactivation.
+        sc->pan_infra_pending = true;
+        sc->pan_infra_state = nstate;
+        sc->pan_infra_arg = arg;
+        iwn_awdl_stop(ic);
+        return 0;
+    }
+#endif
     if (ic->ic_state == IEEE80211_S_RUN) {
 #ifdef AIRPORT_WCL
         if (nstate != IEEE80211_S_RUN && ic->ic_awdl_stop)
@@ -3325,7 +3338,7 @@ iwn_notif_intr(struct iwn_softc *sc)
             sc->sc_flags &= ~IWN_FLAG_SCANNING;
             sc->sc_flags &= ~IWN_FLAG_BGSCAN;
 #ifdef AIRPORT_WCL
-            if (sc->pan_configured && !sc->pan_requested)
+            if (sc->pan_infra_pending || (sc->pan_configured && !sc->pan_requested))
                 iwn_awdl_stop(ic);
 #endif
             ieee80211_end_scan(ifp);
@@ -4517,7 +4530,7 @@ iwn_awdl_listen(struct ieee80211com *ic, uint8_t chan, uint16_t)
         !ic->ic_awdl_addr_gen || chan != ic->ic_awdl_home_chan ||
         sc->rxon.chan != chan || !(ic->ic_if.if_flags & IFF_RUNNING) ||
         (sc->sc_flags & (IWN_FLAG_SCANNING | IWN_FLAG_BGSCAN)) ||
-        ic->ic_wcl_scan_requested)
+        ic->ic_wcl_scan_requested || sc->pan_infra_pending)
         return EBUSY;
     if (sc->pan_cleanup_failed ||
         (ic->ic_awdl_listener_code && sc->pan_addr_gen == ic->ic_awdl_addr_gen))
@@ -4605,8 +4618,8 @@ iwn_awdl_stop(struct ieee80211com *ic)
     ic->ic_awdl_listen_chan = 0;
     if (!sc->pan_cleanup_failed)
         ic->ic_awdl_listener_code = 0;
-    if (sc->pan_configured && !sc->pan_cleanup_failed && !sc->pan_task_pending &&
-        (ic->ic_if.if_flags & IFF_RUNNING) && !that->dmaDetaching) {
+    if ((sc->pan_infra_pending || (sc->pan_configured && !sc->pan_cleanup_failed)) &&
+        !sc->pan_task_pending && (ic->ic_if.if_flags & IFF_RUNNING) && !that->dmaDetaching) {
         sc->pan_task_pending = true;
         task_add(systq, &sc->pan_task);
     }
@@ -4620,8 +4633,23 @@ iwn_awdl_pan_task(void *arg)
     that->getMainCommandGate()->runAction(
         [](OSObject *, void *target, void *state, void *, void *) -> IOReturn {
             auto *sc = static_cast<iwn_softc *>(state);
-            static_cast<ItlIwn *>(target)->iwn_awdl_pan_update(sc);
+            auto *that = static_cast<ItlIwn *>(target);
+            const auto epoch = that->dmaEpoch;
+            that->iwn_awdl_pan_update(sc);
+            if (epoch != that->dmaEpoch)
+                return kIOReturnSuccess;
             sc->pan_task_pending = false;
+            if (!sc->pan_infra_pending ||
+                (sc->sc_flags & (IWN_FLAG_SCANNING | IWN_FLAG_BGSCAN)))
+                return kIOReturnSuccess;
+            auto *ic = &sc->sc_ic;
+            const auto next = static_cast<enum ieee80211_state>(sc->pan_infra_state);
+            const int nextArg = sc->pan_infra_arg;
+            sc->pan_infra_pending = false;
+            if (sc->pan_configured || sc->pan_cleanup_failed || iwn_newstate(ic, next, nextArg)) {
+                that->iwn_stop(&ic->ic_if);
+                task_add(systq, &sc->init_task);
+            }
             return kIOReturnSuccess;
         }, that, sc);
 }
@@ -7989,6 +8017,8 @@ iwn_hw_stop(struct iwn_softc *sc)
 #endif
 #ifdef AIRPORT_WCL
     sc->pan_requested = false;
+    sc->pan_task_pending = false;
+    sc->pan_infra_pending = false;
     sc->pan_configured = false;
     sc->pan_cleanup_failed = false;
     sc->pan_addr_gen = 0;

@@ -305,6 +305,9 @@ struct iwn_softc {
     bool               pan_requested;
     bool               pan_low_latency;
     bool               pan_task_pending;
+    bool               pan_infra_pending;
+    int                pan_infra_state;
+    int                pan_infra_arg;
     bool               pan_deactivation_pending;
     bool               pan_configured;
     bool               pan_cleanup_failed;
