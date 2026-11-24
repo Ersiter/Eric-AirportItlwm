@@ -9,6 +9,8 @@
 #ifdef AIRPORT_WCL
 #include "../AirportItlwmV2.hpp"
 #include "../AirportItlwmSkywalkInterface.hpp"
+#include <Airport/WPA2Transition.hpp>
+#include <pexpert/pexpert.h>
 #include <kern/thread_call.h>
 #include <kern/clock.h>
 #include <net80211/ieee80211_node.h>
@@ -924,6 +926,15 @@ void AirportItlwmSkywalkInterface::postWCLScanResult(const ieee80211_node *node,
     metadata->flags = AirportWCL::RSSIValid |
         (ssidBytes ? AirportWCL::SSIDPresent : 0U);
     memcpy(metadata + 1, ies, length);
+    static int preferTransitionPsk = -1;
+    if (preferTransitionPsk < 0) {
+        int value = 0;
+        preferTransitionPsk = PE_parse_boot_argn("-itlwpa2transition", &value, sizeof(value));
+    }
+    // Keep the AP's original IE for the supplicant and limit PSK to legacy bands and non-MLD peers.
+    if (preferTransitionPsk && !sixGHz && !node->ni_mld_valid)
+        metadata->ieLength = uint32_t(AirportWPA2Transition::selectWPA2TransitionMode(
+            reinterpret_cast<uint8_t *>(metadata + 1), length));
     size_t messageSize = sizeof(*metadata) + metadata->ieLength;
     auto ic = fHalService->get80211Controller();
     if (assocNotified && IEEE80211_ADDR_EQ(bssid, joinBSSID)) {
@@ -947,9 +958,9 @@ void AirportItlwmSkywalkInterface::postWCLScanResult(const ieee80211_node *node,
         memcmp(deferredScan.ssid, ssid, ssidBytes) == 0) {
         char target[112];
         snprintf(target, sizeof(target), "n=%u bssid=%s channel=%u ieLength=%zu",
-            wclScanCount, ether_sprintf(bssid), channel, length);
+            wclScanCount, ether_sprintf(bssid), channel, size_t(metadata->ieLength));
         setProperty("WCLScanTarget", target);
-        setProperty("WCLScanTargetIE", metadata + 1, (unsigned)length);
+        setProperty("WCLScanTargetIE", metadata + 1, metadata->ieLength);
     }
     IOReturn result = instance->postMessage(this, AirportWCL::ScanResult, metadata, messageSize, true);
     if (currentScan) {
