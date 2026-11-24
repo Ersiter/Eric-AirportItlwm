@@ -1620,6 +1620,7 @@ static const uint64_t kHuntWindowUs = 600000000;
 static const uint64_t kHuntStepUs = 3000000;
 static const uint32_t kHuntDwellTU = 100;
 static const int64_t kHuntGapUs = 60000;
+static const uint64_t kCoexHuntGapUs = 1000000;
 // After the window, a slower hunt goes on (about 6 % of the airtime) while no peer has been heard: with the window
 // over and the schedule unknown, the Mac used to stop listening altogether and an iPhone could not find it again
 // until Wi-Fi was restarted (tester report, 2026-11-20).
@@ -1994,11 +1995,12 @@ scheduleOwnListen(uint64_t afterUs)
     uint8_t huntChan = 0;
     uint64_t huntStart = 0;
     uint64_t huntGap = 0;
-    if (awHuntAllowed() && !fHuntStartUs) {
+    const bool huntAllowed = protectOwnSlots || awHuntAllowed();
+    if (huntAllowed && !fHuntStartUs) {
         fHuntStartUs = now;
         fHuntNextUs = now + kHuntGapUs;
     }
-    if (awHuntAllowed() && !peer) {
+    if (huntAllowed && !peer) {
         uint8_t observed = 0;
         for (const auto &request : fPendingUnicastMI) {
             if (request.expiresUs > now && (observed = observedPeerChannel(now, request.peer)))
@@ -2043,6 +2045,10 @@ scheduleOwnListen(uint64_t afterUs)
         ic->ic_awdl_want_data = 1;
         if (huntChan && !protectOwnSlots)
             return armListen(huntChan, kHuntDwellTU, huntStart, 0, huntGap);
+        // An advertised slot must not indefinitely suppress social-channel discovery.
+        if (huntChan && from >= fHuntNextUs)
+            return armListen(huntChan, kHuntDwellTU, huntStart, 0,
+                MAX(huntGap, kCoexHuntGapUs));
     }
     int64_t slot = (int64_t)slotUs();
     uint16_t pm = presenceMode();
