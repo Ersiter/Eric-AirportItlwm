@@ -992,6 +992,7 @@ struct iwx_softc {
 	uint8_t sc_awdl_peer_added;
 	uint8_t sc_awdl_peer_busy;
 	uint8_t sc_awdl_peer_tlc_configured;
+	bool sc_awdl_peer_rate_ready;
 	uint16_t sc_awdl_peer_tx_seq;
 	uint16_t sc_awdl_peer_llw_tx_seq;
 	uint8_t sc_awdl_ba_pending;

@@ -7270,8 +7270,10 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         iwx_ampdu_txq_advance(sc, ring, IWX_AGG_SSN_TO_TXQ_IDX(le16toh(ba_tfd->tfd_index), ring->ring_count));
         if (awdl && ring->queued < queued) {
             reclaimedAwdl = true;
-            if (done && (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid))
+            if (done && (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid)) {
+                sc->sc_awdl_peer_rate_ready = true;
                 sc->sc_listener_last_data_us = iwx_uptime_us();
+            }
         }
         iwx_clear_oactive(sc, ring);
     }
@@ -7524,6 +7526,7 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
             txd = &ring->data[first];
             const size_t txSize = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
                 sizeof(struct iwx_tx_cmd_gen3) : sizeof(struct iwx_tx_cmd_gen2);
+            const bool peerDataQueue = qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid;
             // iwl_mld_handle_tx_resp: the reported status belongs to the first
             // reclaimed frame. A later frame in the same batch was already ACKed.
             for (int slot = first; slot != idx; slot = (slot + 1) % ring->ring_count) {
@@ -7533,6 +7536,8 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                 if (slot == first && !iwx_tx_status_is_acked(txStatus)) {
                     sc->sc_ic.ic_awdl_tx_fail++;
                     sc->sc_ic.ic_awdl_tx_last_status = st;
+                    if (peerDataQueue && st == IWX_TX_STATUS_FAIL_LONG_LIMIT)
+                        sc->sc_awdl_peer_rate_ready = false;
                     continue;
                 }
                 sc->sc_ic.ic_awdl_tx_ok++;
@@ -7542,8 +7547,10 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                     const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(ring->cmd[slot].data + txSize);
                     ieee80211_awdl_report_umi_ack(&sc->sc_ic, wh, completed.m);
                 }
-                if (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid)
+                if (peerDataQueue) {
+                    sc->sc_awdl_peer_rate_ready = true;
                     sc->sc_listener_last_data_us = iwx_uptime_us();
+                }
             }
             if (!sc->sc_use_mld_api && qid != sc->sc_awdl_peer_qid &&
                 (le16toh(tx_resp->frame_ctrl) & 0x0c) == 0x08) {
@@ -11370,8 +11377,9 @@ iwx_awdl_dump(struct ieee80211com *ic, char *buf, size_t len)
         { "peer", sc->sc_awdl_peer_qid }, { "peerllw", sc->sc_awdl_peer_llw_qid },
         { "peermgmt", sc->sc_awdl_peer_mgmt_qid },
     };
-    size_t used = snprintf(buf, len, "up=%d chan=%u refit=%d retry=%d peer_added=%d roc_promisc=%d",
-        sc->sc_listener_up, sc->sc_listener_chan, sc->sc_listener_refitting, sc->sc_listener_retry_us != 0, sc->sc_awdl_peer_added, sc->sc_p2p_promisc);
+    size_t used = snprintf(buf, len, "up=%d chan=%u refit=%d retry=%d peer_added=%d roc_promisc=%d peer_rate_ready=%d",
+        sc->sc_listener_up, sc->sc_listener_chan, sc->sc_listener_refitting, sc->sc_listener_retry_us != 0,
+        sc->sc_awdl_peer_added, sc->sc_p2p_promisc, sc->sc_awdl_peer_rate_ready);
     for (unsigned i = 0; i < nitems(queues) && used < len; i++) {
         const int qid = queues[i].qid;
         if (qid <= 0 || qid >= (int)nitems(sc->txq)) {
@@ -12531,6 +12539,7 @@ iwx_awdl_peer_task(void *arg)
         iwx_awdl_record_peer(&sc->sc_ic, 4, sc->sc_awdl_peer_addr, 0);
         sc->sc_awdl_peer_added = 0;
         sc->sc_awdl_peer_tlc_configured = 0;
+        sc->sc_awdl_peer_rate_ready = false;
         sc->sc_awdl_peer_tx_seq = 0;
         sc->sc_awdl_peer_llw_tx_seq = 0;
         memset(sc->sc_awdl_peer_addr, 0, sizeof(sc->sc_awdl_peer_addr));
@@ -12566,11 +12575,13 @@ iwx_awdl_peer_task(void *arg)
         if (err)
             goto failed;
         sc->sc_awdl_peer_tlc_configured = 0;
+        sc->sc_awdl_peer_rate_ready = false;
         sc->sc_awdl_peer_tx_seq = 0;
         sc->sc_awdl_peer_llw_tx_seq = 0;
         const int tlc_version = that->iwx_lookup_cmd_ver(sc,
             IWX_DATA_PATH_GROUP, IWX_TLC_MNG_CONFIG_CMD);
-        if (tlc_version == 4 || tlc_version == 6) {
+        if ((tlc_version == 4 || tlc_version == 6) &&
+            IEEE80211_ADDR_EQ(sc->sc_awdl_peer_ampdu_addr, target)) {
             struct iwx_tlc_config_cmd_v4 tlc = {};
             tlc.sta_id = IWX_AWDL_PEER_STA_ID;
             const uint8_t tx_ant = that->iwx_fw_valid_tx_ant(sc);
@@ -12944,12 +12955,16 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
     const bool qosPeerData = dataFrame && sc->sc_awdl_peer_added &&
         (qid == sc->sc_awdl_peer_qid || qid == sc->sc_awdl_peer_llw_qid) &&
         IEEE80211_ADDR_EQ(frame + 4, sc->sc_awdl_peer_addr) &&
-        (subtype == IEEE80211_FC0_SUBTYPE_QOS ||
-         (subtype == IEEE80211_FC0_SUBTYPE_DATA && sc->sc_awdl_peer_tlc_configured));
+        (subtype == IEEE80211_FC0_SUBTYPE_QOS || subtype == IEEE80211_FC0_SUBTYPE_DATA);
     const bool legacyAggregate = dataFrame && !sc->sc_use_mld_api &&
         sc->sc_legacy_tx_ba == LegacyTxBa::Active && qid == sc->sc_awdl_peer_qid;
     const bool qosData = qosPeerData || legacyAggregate;
-    const bool usePeerRate = legacyAggregate || (qosPeerData && sc->sc_awdl_peer_tlc_configured);
+    // A foreign-channel GO must establish ACKs before using firmware rate scaling.
+    const bool offHome = sc->sc_listener_go &&
+        sc->sc_awdl_discovery_phy == sc->sc_listener_phy.id;
+    const bool usePeerRate = legacyAggregate || (qosPeerData && sc->sc_awdl_peer_tlc_configured &&
+        (!offHome || sc->sc_awdl_peer_rate_ready));
+    const bool basicPeerRate = qosPeerData && !usePeerRate;
     const size_t qosExtra = qosData && subtype == IEEE80211_FC0_SUBTYPE_DATA ? 2 : 0;
     if (len > MCLBYTES - qosExtra)
         return EINVAL;
@@ -13013,11 +13028,12 @@ iwx_awdl_tx_frame(struct iwx_softc *sc, const uint8_t *frame, size_t len, int qi
         IEEE80211_IS_CHAN_6GHZ(&ic->ic_channels[sc->sc_p2p_roc_chan])) {
         rate_n_flags |= IWX_RATE_MCS_HE_MSK | IWX_RATE_MCS_HE_TYPE_SU;
     } else if (cmdver > 8 && cmdver != IWX_FW_CMD_VER_UNKNOWN) {
-        const uint32_t legacy = rate_n_flags | IWX_RATE_MCS_LEGACY_OFDM_MSK | (dataFrame ? iwx_rate2idx(108) : 0);
-        rate_n_flags = dataFrame ? iwx_awdl_data_rate(sc, rate_n_flags, legacy,
+        const uint32_t legacy = rate_n_flags | IWX_RATE_MCS_LEGACY_OFDM_MSK |
+            (dataFrame && !basicPeerRate ? iwx_rate2idx(108) : 0);
+        rate_n_flags = dataFrame && !basicPeerRate ? iwx_awdl_data_rate(sc, rate_n_flags, legacy,
             iwx_num_of_ant(iwx_fw_valid_tx_ant(sc)) >= 2) : legacy;
     } else
-        rate_n_flags |= dataFrame ? IWX_RATE_54M_PLCP : IWX_RATE_6M_PLCP;
+        rate_n_flags |= dataFrame && !basicPeerRate ? IWX_RATE_54M_PLCP : IWX_RATE_6M_PLCP;
 
     // Gen3 derives ACK handling from the station/TID queue; the legacy ACK bit is not in this API.
     uint32_t flags = IWX_TX_FLAGS_ENCRYPT_DIS |
@@ -14589,6 +14605,7 @@ iwx_awdl_go_stop(struct iwx_softc *sc, bool restoreStation)
     sc->sc_listener_tries = 0;
     sc->sc_listener_restore_pending = false;
     sc->sc_awdl_peer_added = sc->sc_awdl_peer_tlc_configured = 0;
+    sc->sc_awdl_peer_rate_ready = false;
     sc->sc_awdl_peer_tx_seq = sc->sc_awdl_peer_llw_tx_seq = 0;
     sc->sc_awdl_peer_error = sc->sc_awdl_peer_llw_error = 0;
     sc->sc_awdl_peer_llw_requested = false;
@@ -18867,6 +18884,7 @@ iwx_stop(struct _ifnet *ifp)
     sc->sc_listener_retry_us = sc->sc_listener_last_data_us = 0;
     sc->sc_awdl_peer_added = sc->sc_awdl_peer_busy = 0;
     sc->sc_awdl_peer_tlc_configured = 0;
+    sc->sc_awdl_peer_rate_ready = false;
     sc->sc_awdl_peer_tx_seq = 0;
     sc->sc_awdl_peer_llw_tx_seq = 0;
     sc->sc_awdl_peer_qid = -1;
