@@ -7502,7 +7502,7 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                             value->release();
                         }
                     };
-                    const unsigned captureSize = dhcp ? MIN(packetSize, (unsigned)sizeof(payload)) : size;
+                    const unsigned captureSize = MIN(packetSize, (unsigned)sizeof(payload));
                     if (captureSize > size)
                         mbuf_copydata(status_frame.m, size, captureSize - size, payload + size);
                     bytes("PayloadPrefix", payload, captureSize);
