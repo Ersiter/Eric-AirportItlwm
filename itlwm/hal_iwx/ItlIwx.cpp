@@ -6687,6 +6687,10 @@ iwx_trace_hotspot_rx(struct iwx_softc *sc, struct iwx_rx_mpdu_desc *desc,
     if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) != IEEE80211_FC0_TYPE_MGT ||
         (subtype != IEEE80211_FC0_SUBTYPE_BEACON &&
          subtype != IEEE80211_FC0_SUBTYPE_PROBE_RESP &&
+#if defined(AIRPORT_WCL) && defined(DEBUG)
+         subtype != IEEE80211_FC0_SUBTYPE_ASSOC_RESP &&
+         subtype != IEEE80211_FC0_SUBTYPE_REASSOC_RESP &&
+#endif
          subtype != IEEE80211_FC0_SUBTYPE_DISASSOC &&
          subtype != IEEE80211_FC0_SUBTYPE_DEAUTH))
         return;
@@ -6733,7 +6737,9 @@ iwx_trace_hotspot_rx(struct iwx_softc *sc, struct iwx_rx_mpdu_desc *desc,
     auto request = sc->sc_pcitag->getProperty("AirportItlwm-HotspotScanState");
     if (request)
         record->setObject("ScanState", request);
-    size_t offset = sizeof(struct ieee80211_frame) + 12 +
+    const unsigned fixed = subtype == IEEE80211_FC0_SUBTYPE_ASSOC_RESP ||
+        subtype == IEEE80211_FC0_SUBTYPE_REASSOC_RESP ? 6 : 12;
+    size_t offset = sizeof(struct ieee80211_frame) + fixed +
         ((desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) ? 2 : 0);
     const unsigned trailer = (desc->mac_flags1 & IWX_RX_MPDU_MFLG1_MIC_CRC_LEN_MASK) >>
         IWX_RX_MPDU_MFLG1_MIC_CRC_LEN_SHIFT;
@@ -7334,6 +7340,62 @@ static const char *iwx_get_agg_tx_status(uint16_t status)
     return "UNKNOWN";
 }
 
+#if defined(AIRPORT_WCL) && defined(DEBUG)
+static void
+iwx_record_assoc_tx(struct iwx_softc *sc, const struct iwx_tx_ring *ring,
+    int slot, uint16_t status)
+{
+    const auto &frame = ring->data[slot];
+    if (!frame.m || frame.type != IEEE80211_FC0_TYPE_MGT)
+        return;
+
+    const auto *wh = reinterpret_cast<const struct ieee80211_frame *>(
+        ring->cmd[slot].data + sizeof(struct iwx_tx_cmd_gen3));
+    const uint8_t subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+    if (subtype != IEEE80211_FC0_SUBTYPE_ASSOC_REQ &&
+        subtype != IEEE80211_FC0_SUBTYPE_REASSOC_REQ)
+        return;
+
+    const unsigned body_len = mbuf_pkthdr_len(frame.m);
+    if (body_len > IEEE80211_MAX_LEN - sizeof(*wh))
+        return;
+    auto raw = OSData::withCapacity(sizeof(*wh) + body_len);
+    if (!raw)
+        return;
+    bool copied = raw->appendBytes(wh, sizeof(*wh));
+    uint8_t chunk[256];
+    for (unsigned offset = 0; copied && offset < body_len; offset += sizeof(chunk)) {
+        const unsigned size = MIN(unsigned(sizeof(chunk)), body_len - offset);
+        copied = mbuf_copydata(frame.m, offset, size, chunk) == 0 &&
+            raw->appendBytes(chunk, size);
+    }
+    if (copied) {
+        struct timeval now;
+        getmicrouptime(&now);
+        char state[144];
+        snprintf(state, sizeof(state), "uptime=%ld.%06d gen=%d qid=%d idx=%d status=0x%x acked=%u",
+            (long)now.tv_sec, (int)now.tv_usec, sc->sc_generation, ring->qid,
+            slot, status, iwx_tx_status_is_acked(status));
+        auto text = OSString::withCString(state);
+        auto record = OSDictionary::withCapacity(2);
+        auto records = OSDynamicCast(OSArray, sc->sc_pcitag->getProperty("AirportItlwm-AssocTx"));
+        auto updated = records ? OSArray::withArray(records) : OSArray::withCapacity(16);
+        if (text && record && updated) {
+            record->setObject("State", text);
+            record->setObject("Frame", raw);
+            if (updated->getCount() >= 16)
+                updated->removeObject(0);
+            updated->setObject(record);
+            sc->sc_pcitag->setProperty("AirportItlwm-AssocTx", updated);
+        }
+        if (updated) updated->release();
+        if (record) record->release();
+        if (text) text->release();
+    }
+    raw->release();
+}
+#endif
+
 void ItlIwx::
 iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
               struct iwx_rx_data *data)
@@ -7381,6 +7443,10 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
         const int status_slot = sc->sc_use_mld_api ? ring->tail :
             (idx + ring->ring_count - 1) % ring->ring_count;
         const auto &status_frame = ring->data[status_slot];
+#if defined(AIRPORT_WCL) && defined(DEBUG)
+        if (sc->sc_use_mld_api)
+            iwx_record_assoc_tx(sc, ring, status_slot, le16toh(tx_resp->status.status));
+#endif
         uint8_t snap[8];
         if (sc->sc_use_mld_api && status_frame.m &&
             mbuf_copydata(status_frame.m, 0, sizeof(snap), snap) == 0 &&

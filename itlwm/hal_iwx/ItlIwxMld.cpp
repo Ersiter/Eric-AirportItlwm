@@ -1580,8 +1580,13 @@ iwx_mld_add_link(struct iwx_softc *sc, struct iwx_node *in, int link_slot)
     err = iwx_send_cmd_pdu(sc,
         IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_LINK_CONFIG_CMD),
         0, sizeof(link_cmd), &link_cmd);
-    if (!err)
+    if (!err) {
         sc->sc_mld_link_active |= 1U << link_slot;
+#if defined(AIRPORT_WCL) && defined(DEBUG)
+        XYLog("IWX link address gen=%d link=%d local=%s\n", sc->sc_generation,
+            link_slot, ether_sprintf(link_cmd.local_link_addr));
+#endif
+    }
     return err;
 }
 
@@ -1825,8 +1830,13 @@ iwx_mld_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in,
     err = iwx_send_cmd_pdu(sc,
         IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_MLD_MAC_CONFIG_CMD),
         0, sizeof(cmd), &cmd);
-    if (!err)
+    if (!err) {
         sc->sc_mld_mac_associated = cmd.client.is_assoc;
+#if defined(AIRPORT_WCL) && defined(DEBUG)
+        XYLog("IWX station address gen=%d action=%u assoc=%d local=%s\n",
+            sc->sc_generation, action, assoc, ether_sprintf(cmd.local_mld_addr));
+#endif
+    }
     return err;
 }
 

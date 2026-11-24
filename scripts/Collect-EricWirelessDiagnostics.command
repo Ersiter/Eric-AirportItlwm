@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# R17 - Eric wireless diagnostics for Wi-Fi, AirDrop, Instant Hotspot and Bluetooth.
+# R18 - Eric wireless diagnostics for Wi-Fi, AirDrop, Instant Hotspot and Bluetooth.
 export LC_ALL=C COPYFILE_DISABLE=1
 umask 077
 wireless_log_level=debug
@@ -310,7 +310,7 @@ if [ "$focus" = wireless ]; then
     } > "$work/capture-status.txt" 2>&1
     # ioreg renders each firmware trace as one long line.
     /usr/sbin/ioreg -p IOService -l -w 0 2>/dev/null |
-        /usr/bin/grep -aE '"AirportItlwm-Hotspot(Tx|Rx149)"[[:space:]]*=' > "$work/hotspot-frames.txt"
+        /usr/bin/grep -aE '"AirportItlwm-(Hotspot(Tx|Rx149)|AssocTx)"[[:space:]]*=' > "$work/hotspot-frames.txt"
 fi
 
 patch_predicate='eventMessage CONTAINS[c] "[advsets]" OR eventMessage CONTAINS[c] "[rpa]" OR eventMessage CONTAINS[c] "[pagein]" OR eventMessage CONTAINS[c] "BlueToolFixup" OR eventMessage CONTAINS[c] "enableExtendedAdvertising" OR eventMessage CONTAINS[c] "support for extended scans"'
